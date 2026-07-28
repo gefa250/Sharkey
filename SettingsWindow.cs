@@ -57,7 +57,15 @@ namespace GlobalTranslator
         private TextBlock _settingsHeaderShortcut;
         private bool _loadingValues;
         private string _pendingProvider = "GoogleFree";
-        private TextBlock _currentProviderSummary;
+        private string _activeConfigSection = "Free";
+        private Grid _providerPickerGrid;
+        private ContentControl _providerConfigHost;
+        private Button _freeConfigButton;
+        private Button _officialConfigButton;
+        private Button _modelConfigButton;
+        private UIElement _freeConfigView;
+        private UIElement _officialConfigView;
+        private UIElement _modelConfigView;
         private readonly Dictionary<string, ModelConnectionSettings>
             _modelDrafts =
                 new Dictionary<string, ModelConnectionSettings>(
@@ -141,6 +149,7 @@ namespace GlobalTranslator
         public void ShowModelSettings()
         {
             _tabs.SelectedIndex = 0;
+            SelectConfigSection("Model");
             if (_modelVendor != null) _modelVendor.Focus();
         }
 
@@ -267,77 +276,218 @@ namespace GlobalTranslator
 
         private UIElement BuildTranslationTab()
         {
-            var root = TabBody();
-            root.Children.Add(Intro(
-                "翻译服务",
-                "配置可以独立编辑；只有点击“设为当前”才会改变保存后使用的翻译线路。"));
-
-            var current = Card();
-            current.Padding = new Thickness(16, 12, 16, 12);
-            current.Margin = new Thickness(0, 14, 0, 12);
-            var currentPanel = new StackPanel();
-            currentPanel.Children.Add(new TextBlock
+            var root = new Grid
             {
-                Text = "当前翻译服务",
-                Foreground = Muted,
-                FontSize = 10.5
-            });
-            _currentProviderSummary = new TextBlock
-            {
-                Foreground = Navy,
-                FontWeight = FontWeights.Bold,
-                FontSize = 15,
-                Margin = new Thickness(0, 3, 0, 0)
+                Margin = new Thickness(18),
+                Background = Brushes.White
             };
-            currentPanel.Children.Add(_currentProviderSummary);
-            current.Child = currentPanel;
-            root.Children.Add(current);
+            root.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            root.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            root.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            root.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
 
+            StackPanel intro = Intro(
+                "翻译服务",
+                "顶部选择保存后使用的线路；下方配置切换不会改变当前服务。");
+            Grid.SetRow(intro, 0);
+            root.Children.Add(intro);
             Border common = BuildCommonSettings();
-            common.Margin = new Thickness(0, 0, 0, 14);
+            common.Margin = new Thickness(0, 12, 0, 10);
+            Grid.SetRow(common, 1);
             root.Children.Add(common);
-            root.Children.Add(BuildFreeTab());
-            root.Children.Add(BuildOfficialTab());
-            root.Children.Add(BuildModelTab());
-            return Scroll(root);
+
+            Border picker = BuildProviderPicker();
+            Grid.SetRow(picker, 2);
+            root.Children.Add(picker);
+
+            Border configuration = BuildProviderConfiguration();
+            configuration.Margin = new Thickness(0, 10, 0, 0);
+            Grid.SetRow(configuration, 3);
+            root.Children.Add(configuration);
+            return root;
         }
 
-        private UIElement BuildFreeTab()
+        private Border BuildProviderPicker()
         {
-            var root = TabBody();
+            var card = Card();
+            card.Padding = new Thickness(12, 9, 12, 11);
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock
+            {
+                Text = "选择当前翻译服务",
+                Foreground = Navy,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(2, 0, 0, 7)
+            });
+
+            _providerPickerGrid = new Grid();
+            for (int i = 0; i < 5; i++)
+                _providerPickerGrid.ColumnDefinitions.Add(
+                    new ColumnDefinition
+                    {
+                        Width = new GridLength(
+                            1, GridUnitType.Star)
+                    });
+            _googleFree = ProviderChoice(
+                "Google 免费", "免账号", "GoogleFree");
+            _microsoftFree = ProviderChoice(
+                "Microsoft 免费", "免账号", "MicrosoftFree");
+            _microsoftOfficial = ProviderChoice(
+                "Microsoft 官方", "官方 API", "Microsoft");
+            _googleOfficial = ProviderChoice(
+                "Google API", "官方 API", "Google");
+            _modelApi = ProviderChoice(
+                "AI 大模型", "自定义模型", "ModelApi");
+            Button[] buttons =
+            {
+                _googleFree, _microsoftFree, _microsoftOfficial,
+                _googleOfficial, _modelApi
+            };
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                buttons[i].Margin = new Thickness(
+                    i == 0 ? 0 : 3,
+                    0,
+                    i == buttons.Length - 1 ? 0 : 3,
+                    0);
+                Grid.SetColumn(buttons[i], i);
+                _providerPickerGrid.Children.Add(buttons[i]);
+            }
+            content.Children.Add(_providerPickerGrid);
+            card.Child = content;
+            return card;
+        }
+
+        private Border BuildProviderConfiguration()
+        {
+            _freeConfigView = BuildFreeConfiguration();
+            _officialConfigView = BuildOfficialConfiguration();
+            _modelConfigView = BuildModelConfiguration();
+
+            var card = Card();
+            var layout = new Grid();
+            layout.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            layout.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
+
+            var segmentHost = new Border
+            {
+                Background = Brush("#EDF5F8"),
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(4),
+                Margin = new Thickness(12, 10, 12, 4)
+            };
+            var segments = new Grid();
+            for (int i = 0; i < 3; i++)
+                segments.ColumnDefinitions.Add(new ColumnDefinition
+                {
+                    Width = new GridLength(
+                        1, GridUnitType.Star)
+                });
+            _freeConfigButton =
+                ConfigSectionButton("免费翻译", "Free");
+            _officialConfigButton =
+                ConfigSectionButton("官方 API", "Official");
+            _modelConfigButton =
+                ConfigSectionButton("AI 大模型", "Model");
+            Button[] sectionButtons =
+            {
+                _freeConfigButton,
+                _officialConfigButton,
+                _modelConfigButton
+            };
+            for (int i = 0; i < sectionButtons.Length; i++)
+            {
+                Grid.SetColumn(sectionButtons[i], i);
+                segments.Children.Add(sectionButtons[i]);
+            }
+            segmentHost.Child = segments;
+            layout.Children.Add(segmentHost);
+
+            _providerConfigHost = new ContentControl
+            {
+                HorizontalContentAlignment =
+                    HorizontalAlignment.Stretch,
+                VerticalContentAlignment =
+                    VerticalAlignment.Stretch,
+                Content = _freeConfigView
+            };
+            Grid.SetRow(_providerConfigHost, 1);
+            layout.Children.Add(_providerConfigHost);
+            card.Child = layout;
+            SelectConfigSection("Free");
+            return card;
+        }
+
+        private UIElement BuildFreeConfiguration()
+        {
+            var root = new StackPanel
+            {
+                Margin = new Thickness(14, 8, 14, 14)
+            };
             root.Children.Add(Intro(
                 "免账号调用",
-                "开箱即用，适合日常轻量翻译。它们依赖网页接口，可能因服务方调整而暂时失效。"));
-
-            var grid = new Grid { Margin = new Thickness(0, 14, 0, 0) };
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            _googleFree = ProviderChoice(
-                "Google 免费", "免账号 · 响应快", "GoogleFree");
-            _microsoftFree = ProviderChoice(
-                "Microsoft 免费", "免账号 · Bing 网页翻译", "MicrosoftFree");
-            Border google = ProviderCard(_googleFree, "适合常见语言的快速互译。");
-            Border microsoft = ProviderCard(_microsoftFree, "作为另一条免费线路，便于随时切换。");
+                "开箱即用；网页接口可能随服务方调整而暂时失效。"));
+            var grid = new Grid
+            {
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            grid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(1, GridUnitType.Star)
+            });
+            grid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(10)
+            });
+            grid.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(1, GridUnitType.Star)
+            });
+            Border google = ConfigurationCard(
+                "Google 免费",
+                "免账号 · 响应快",
+                "适合常见语言的快速互译。");
+            Border microsoft = ConfigurationCard(
+                "Microsoft 免费",
+                "免账号 · Bing 网页翻译",
+                "可作为另一条免费线路。");
             grid.Children.Add(google);
             Grid.SetColumn(microsoft, 2);
             grid.Children.Add(microsoft);
             root.Children.Add(grid);
-
             root.Children.Add(InfoBox(
-                "提示：免费方式无需填写密钥。若接口不稳定，可切换到官方 API 或 AI 大模型。"));
-            return root;
+                "免费方式无需填写密钥。选择当前线路请使用上方服务选择器。"));
+            return Scroll(root);
         }
 
-        private UIElement BuildOfficialTab()
+        private UIElement BuildOfficialConfiguration()
         {
-            var root = TabBody();
+            var root = new StackPanel
+            {
+                Margin = new Thickness(14, 8, 14, 14)
+            };
             root.Children.Add(Intro(
                 "官方翻译 API",
-                "适合需要稳定性、配额管理和正式服务保障的场景。"));
-
-            _microsoftOfficial = ProviderChoice(
-                "Microsoft Translator", "官方接口 · 需要订阅密钥", "Microsoft");
+                "适合需要配额管理和正式服务保障的场景。"));
             var microsoftContent = new StackPanel();
             _microsoftKey = AddPassword(microsoftContent, "API Key", "粘贴 Microsoft Translator 密钥");
             _microsoftKey.PasswordChanged += delegate
@@ -345,32 +495,37 @@ namespace GlobalTranslator
                 UpdateProviderSelection();
             };
             _region = AddText(microsoftContent, "Region", "例如 eastasia");
-            Border microsoft = ProviderCard(
-                _microsoftOfficial, "Azure AI Translator 官方服务。", microsoftContent);
-            microsoft.Margin = new Thickness(0, 14, 0, 12);
+            Border microsoft = ConfigurationCard(
+                "Microsoft Translator",
+                "官方接口 · 需要订阅密钥",
+                "Azure AI Translator 官方服务。",
+                microsoftContent);
+            microsoft.Margin = new Thickness(0, 10, 0, 10);
             root.Children.Add(microsoft);
 
-            _googleOfficial = ProviderChoice(
-                "Google Cloud Translation", "官方接口 · 需要 API Key", "Google");
             var googleContent = new StackPanel();
             _googleKey = AddPassword(googleContent, "API Key", "粘贴 Google Cloud Translation 密钥");
             _googleKey.PasswordChanged += delegate
             {
                 UpdateProviderSelection();
             };
-            root.Children.Add(ProviderCard(
-                _googleOfficial, "Google Cloud Translation 官方服务。", googleContent));
-            return root;
+            root.Children.Add(ConfigurationCard(
+                "Google Cloud Translation",
+                "官方接口 · 需要 API Key",
+                "Google Cloud Translation 官方服务。",
+                googleContent));
+            return Scroll(root);
         }
 
-        private UIElement BuildModelTab()
+        private UIElement BuildModelConfiguration()
         {
-            var root = TabBody();
+            var root = new StackPanel
+            {
+                Margin = new Thickness(14, 8, 14, 14)
+            };
             root.Children.Add(Intro(
                 "AI 大模型翻译",
                 "连接 OpenAI 兼容的 Chat Completions 接口，可使用云端模型或本地 Ollama。"));
-            _modelApi = ProviderChoice(
-                "OpenAI 兼容接口", "供应商预设 · 仍可自定义", "ModelApi");
             var content = new StackPanel();
             AddFieldLabel(content, "供应商");
             _modelVendor = new ComboBox
@@ -400,15 +555,16 @@ namespace GlobalTranslator
             {
                 UpdateProviderSelection();
             };
-            Border model = ProviderCard(
-                _modelApi,
+            Border model = ConfigurationCard(
+                "OpenAI 兼容接口",
+                "供应商预设 · 仍可自定义",
                 "适合上下文理解、语气保持和长文本翻译。",
                 content);
-            model.Margin = new Thickness(0, 14, 0, 0);
+            model.Margin = new Thickness(0, 10, 0, 0);
             root.Children.Add(model);
             root.Children.Add(InfoBox(
                 "兼容规则：API 地址会自动补全 /chat/completions。使用本地服务时请确认它允许本机访问。"));
-            return root;
+            return Scroll(root);
         }
 
         private UIElement BuildShortcutTab()
@@ -1121,6 +1277,8 @@ namespace GlobalTranslator
                     IsKnownProvider(_settings.Provider)
                         ? _settings.Provider
                         : "GoogleFree";
+                SelectConfigSection(
+                    ConfigSectionForProvider(_pendingProvider));
                 UpdateProviderSelection();
                 _tabs.SelectedIndex = 0;
             }
@@ -1166,6 +1324,8 @@ namespace GlobalTranslator
             if (!IsProviderReady(_pendingProvider))
             {
                 _tabs.SelectedIndex = 0;
+                SelectConfigSection(
+                    ConfigSectionForProvider(_pendingProvider));
                 MessageBox.Show(
                     ProviderDisplayName(_pendingProvider) +
                     " 的必要配置尚未填写完整。请补充配置，或选择其他可用服务。",
@@ -1313,6 +1473,7 @@ namespace GlobalTranslator
             _activeModelVendor = vendor.Code;
             EnsureModelDraft(vendor);
             LoadModelDraft(vendor.Code);
+            UpdateProviderSelection();
         }
 
         private void LoadModelDrafts()
@@ -1466,7 +1627,11 @@ namespace GlobalTranslator
                 Content = content,
                 Padding = new Thickness(22, 10, 22, 10),
                 FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
+                Foreground = Navy,
+                HorizontalContentAlignment =
+                    HorizontalAlignment.Stretch,
+                VerticalContentAlignment =
+                    VerticalAlignment.Stretch
             };
         }
 
@@ -1518,61 +1683,88 @@ namespace GlobalTranslator
         }
 
         private Button ProviderChoice(
-            string name, string badge, string code)
+            string name, string category, string code)
         {
-            var text = new StackPanel();
+            var text = new StackPanel
+            {
+                VerticalAlignment = VerticalAlignment.Center
+            };
             text.Children.Add(new TextBlock
             {
                 Text = name,
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
+                TextAlignment = TextAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
                 Foreground = Navy
             });
             text.Children.Add(new TextBlock
+            {
+                Text = category,
+                TextAlignment = TextAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontSize = 9.5,
+                Foreground = Muted,
+                Margin = new Thickness(0, 1, 0, 0)
+            });
+            text.Children.Add(new TextBlock
+            {
+                Text = "● 可直接使用",
+                TextAlignment = TextAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontSize = 9.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Brush("#137A57"),
+                Margin = new Thickness(0, 5, 0, 0)
+            });
+            var button = new Button
+            {
+                Content = text,
+                Tag = code,
+                Height = 72,
+                Cursor = Cursors.Hand,
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Background = Brush("#F7FAFC"),
+                BorderBrush = Line,
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(5, 6, 5, 6)
+            };
+            button.Click += ProviderActivationClick;
+            return button;
+        }
+
+        private static Border ConfigurationCard(
+            string name,
+            string badge,
+            string description,
+            UIElement fields = null)
+        {
+            var card = Card();
+            card.Padding = new Thickness(15);
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock
+            {
+                Text = name,
+                FontSize = 13.5,
+                FontWeight = FontWeights.Bold,
+                Foreground = Navy
+            });
+            content.Children.Add(new TextBlock
             {
                 Text = badge,
                 FontSize = 10.5,
                 Foreground = Ocean,
                 Margin = new Thickness(0, 2, 0, 0)
             });
-            text.Children.Add(new TextBlock
-            {
-                Text = "设为当前",
-                FontSize = 10.5,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brush("#137A57"),
-                Margin = new Thickness(0, 6, 0, 0)
-            });
-            var button = new Button
-            {
-                Content = text,
-                Tag = code,
-                Cursor = Cursors.Hand,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(0)
-            };
-            button.Click += ProviderActivationClick;
-            return button;
-        }
-
-        private static Border ProviderCard(
-            Button choice, string description, UIElement fields = null)
-        {
-            var card = Card();
-            card.Padding = new Thickness(15);
-            card.Cursor = Cursors.Hand;
-            var content = new StackPanel();
-            content.Children.Add(choice);
             content.Children.Add(new TextBlock
             {
                 Text = description,
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Muted,
                 FontSize = 11,
-                Margin = new Thickness(24, 7, 0, fields == null ? 0 : 8)
+                Margin = new Thickness(
+                    0, 7, 0, fields == null ? 0 : 8)
             });
             if (fields != null)
             {
@@ -1580,12 +1772,95 @@ namespace GlobalTranslator
                 {
                     Height = 1,
                     Background = Line,
-                    Margin = new Thickness(24, 5, 0, 11)
+                    Margin = new Thickness(0, 5, 0, 11)
                 });
                 content.Children.Add(fields);
             }
             card.Child = content;
             return card;
+        }
+
+        private Button ConfigSectionButton(
+            string text, string section)
+        {
+            var button = new Button
+            {
+                Content = text,
+                Tag = section,
+                Height = 34,
+                Background = Brushes.Transparent,
+                Foreground = Muted,
+                BorderThickness = new Thickness(0),
+                FontSize = 11.5,
+                FontWeight = FontWeights.SemiBold,
+                Cursor = Cursors.Hand
+            };
+            button.Click += ConfigSectionClick;
+            return button;
+        }
+
+        private void ConfigSectionClick(
+            object sender, RoutedEventArgs e)
+        {
+            var button = sender as Button;
+            if (button == null) return;
+            SelectConfigSection(
+                button.Tag as string ?? "Free");
+            e.Handled = true;
+        }
+
+        private void SelectConfigSection(string section)
+        {
+            if (section != "Official" &&
+                section != "Model")
+                section = "Free";
+            _activeConfigSection = section;
+            if (_providerConfigHost != null)
+            {
+                _providerConfigHost.Content =
+                    section == "Official"
+                        ? _officialConfigView
+                        : section == "Model"
+                            ? _modelConfigView
+                            : _freeConfigView;
+            }
+            Button[] buttons =
+            {
+                _freeConfigButton,
+                _officialConfigButton,
+                _modelConfigButton
+            };
+            foreach (Button button in buttons)
+            {
+                if (button == null) continue;
+                bool selected = string.Equals(
+                    button.Tag as string,
+                    section,
+                    StringComparison.Ordinal);
+                button.Background = selected
+                    ? Brushes.White
+                    : Brushes.Transparent;
+                button.Foreground = selected
+                    ? Navy
+                    : Muted;
+                button.BorderBrush = selected
+                    ? Brush("#C8DDE5")
+                    : Brushes.Transparent;
+                button.BorderThickness = selected
+                    ? new Thickness(1)
+                    : new Thickness(0);
+            }
+        }
+
+        private static string ConfigSectionForProvider(
+            string provider)
+        {
+            if (provider == "Microsoft" ||
+                provider == "Google")
+                return "Official";
+            if (provider == "ModelApi")
+                return "Model";
+            return "Free";
         }
 
         private void ProviderActivationClick(
@@ -1594,6 +1869,8 @@ namespace GlobalTranslator
             var button = sender as Button;
             if (button == null) return;
             _pendingProvider = button.Tag as string ?? "GoogleFree";
+            SelectConfigSection(
+                ConfigSectionForProvider(_pendingProvider));
             UpdateProviderSelection();
             e.Handled = true;
         }
@@ -1608,34 +1885,76 @@ namespace GlobalTranslator
             foreach (Button button in buttons)
             {
                 if (button == null) continue;
+                string code =
+                    button.Tag as string ?? "GoogleFree";
                 bool current = string.Equals(
-                    button.Tag as string,
+                    code,
                     _pendingProvider,
                     StringComparison.OrdinalIgnoreCase);
+                bool ready = IsProviderReady(code);
                 var panel = button.Content as StackPanel;
                 if (panel != null && panel.Children.Count >= 3)
                 {
+                    var title = panel.Children[0] as TextBlock;
+                    var category = panel.Children[1] as TextBlock;
                     var state = panel.Children[2] as TextBlock;
+                    if (category != null &&
+                        code == "ModelApi")
+                    {
+                        var vendor =
+                            _modelVendor == null
+                                ? null
+                                : _modelVendor.SelectedItem
+                                  as ModelVendorChoice;
+                        category.Text = vendor == null
+                            ? "自定义模型"
+                            : vendor.Display;
+                    }
                     if (state != null)
                     {
                         state.Text = current
-                            ? "✓ 当前使用"
-                            : "设为当前";
+                            ? ready
+                                ? "✓ 当前使用"
+                                : "⚠ 已选择 · 待配置"
+                            : ready
+                                ? code == "GoogleFree" ||
+                                  code == "MicrosoftFree"
+                                    ? "● 可直接使用"
+                                    : "● 已配置"
+                                : "● 待配置";
                         state.Foreground = current
-                            ? Brush("#137A57")
-                            : Ocean;
+                            ? Brushes.White
+                            : ready
+                                ? Brush("#137A57")
+                                : Brush("#A45B00");
                     }
+                    if (title != null)
+                        title.Foreground = current
+                            ? Brushes.White
+                            : Navy;
+                    if (category != null)
+                        category.Foreground = current
+                            ? Brush("#D6F1F5")
+                            : Muted;
                 }
+                button.Background = current
+                    ? Ocean
+                    : ready
+                        ? Brush("#F7FAFC")
+                        : Brush("#FFF8EB");
+                button.BorderBrush = current
+                    ? Ocean
+                    : ready
+                        ? Line
+                        : Brush("#E9C98E");
                 button.ToolTip = current
-                    ? "保存后继续使用此服务"
-                    : "点击设为当前翻译服务";
+                    ? ready
+                        ? "保存后使用此服务"
+                        : "请在下方补充配置后保存"
+                    : ready
+                        ? "点击设为当前翻译服务"
+                        : "点击选择并打开配置";
             }
-            if (_currentProviderSummary != null)
-                _currentProviderSummary.Text =
-                    ProviderDisplayName(_pendingProvider) +
-                    (IsProviderReady(_pendingProvider)
-                        ? " · 已就绪"
-                        : " · 配置未完成");
         }
 
         private bool IsProviderReady(string provider)

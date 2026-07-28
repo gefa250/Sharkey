@@ -12,7 +12,7 @@ internal static class PopupInteractionProbe
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length < 1 || args.Length > 3) return 2;
+        if (args.Length < 1 || args.Length > 4) return 2;
         Window popup = null;
         Window settingsWindow = null;
         try
@@ -203,8 +203,25 @@ internal static class PopupInteractionProbe
                 .GetValue(settingsWindow);
             Require(tabs.Items.Count == 4,
                 "Translation, OCR, shortcut or general settings tab is missing.");
+            TabItem translationTab =
+                (TabItem)tabs.Items[0];
+            Require(
+                translationTab.Content is Grid,
+                "Translation page still uses one long page-level scroll view.");
+            Grid providerPicker = (Grid)settingsWindowType
+                .GetField(
+                    "_providerPickerGrid",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(
+                providerPicker.ColumnDefinitions.Count == 5 &&
+                providerPicker.Children.Count == 5,
+                "All five translation providers are not visible in the quick selector.");
             FieldInfo pendingProviderField = settingsWindowType.GetField(
                 "_pendingProvider",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo activeConfigField = settingsWindowType.GetField(
+                "_activeConfigSection",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             Require(
                 (string)pendingProviderField.GetValue(settingsWindow) ==
@@ -221,10 +238,31 @@ internal static class PopupInteractionProbe
                 (string)pendingProviderField.GetValue(settingsWindow) ==
                     "GoogleFree",
                 "Set-current action did not update the pending provider.");
+            Require(
+                (string)activeConfigField.GetValue(settingsWindow) ==
+                    "Free",
+                "Provider selection did not open its configuration section.");
+            Button officialConfigButton = (Button)settingsWindowType
+                .GetField(
+                    "_officialConfigButton",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            officialConfigButton.RaiseEvent(
+                new RoutedEventArgs(Button.ClickEvent));
+            Require(
+                (string)pendingProviderField.GetValue(settingsWindow) ==
+                    "GoogleFree" &&
+                (string)activeConfigField.GetValue(settingsWindow) ==
+                    "Official",
+                "Browsing a configuration section changed the pending provider.");
             settingsWindowType.GetMethod("ShowModelSettings")
                 .Invoke(settingsWindow, null);
             Require(tabs.SelectedIndex == 0,
                 "Model settings shortcut did not select the translation tab.");
+            Require(
+                (string)activeConfigField.GetValue(settingsWindow) ==
+                    "Model",
+                "Model settings shortcut did not open the AI configuration section.");
             TextBox translateHotkey = (TextBox)settingsWindowType
                 .GetField(
                     "_translateHotkey",
@@ -442,7 +480,7 @@ internal static class PopupInteractionProbe
                     System.IO.File.Create(args[1]))
                     encoder.Save(output);
             }
-            if (args.Length == 3)
+            if (args.Length >= 3)
             {
                 popupModelMenu.IsOpen = true;
                 popupModelMenu.Child.Dispatcher.Invoke(
@@ -474,6 +512,37 @@ internal static class PopupInteractionProbe
                     System.IO.File.Create(args[2]))
                     menuEncoder.Save(output);
                 popupModelMenu.IsOpen = false;
+            }
+            if (args.Length >= 4)
+            {
+                settingsWindow.Show();
+                tabs.SelectedIndex = 0;
+                settingsWindow.Width = 760;
+                settingsWindow.Height = 820;
+                settingsWindow.UpdateLayout();
+                int settingsWidth = Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        settingsWindow.ActualWidth));
+                int settingsHeight = Math.Max(
+                    1,
+                    (int)Math.Ceiling(
+                        settingsWindow.ActualHeight));
+                var settingsBitmap = new RenderTargetBitmap(
+                    settingsWidth,
+                    settingsHeight,
+                    96,
+                    96,
+                    PixelFormats.Pbgra32);
+                settingsBitmap.Render(settingsWindow);
+                var settingsEncoder =
+                    new PngBitmapEncoder();
+                settingsEncoder.Frames.Add(
+                    BitmapFrame.Create(settingsBitmap));
+                using (var output =
+                    System.IO.File.Create(args[3]))
+                    settingsEncoder.Save(output);
+                settingsWindow.Hide();
             }
 
             Console.WriteLine(
