@@ -520,28 +520,25 @@ internal static class PopupInteractionProbe
                 settingsWindow.Width = 760;
                 settingsWindow.Height = 820;
                 settingsWindow.UpdateLayout();
-                int settingsWidth = Math.Max(
-                    1,
-                    (int)Math.Ceiling(
-                        settingsWindow.ActualWidth));
-                int settingsHeight = Math.Max(
-                    1,
-                    (int)Math.Ceiling(
-                        settingsWindow.ActualHeight));
-                var settingsBitmap = new RenderTargetBitmap(
-                    settingsWidth,
-                    settingsHeight,
-                    96,
-                    96,
-                    PixelFormats.Pbgra32);
-                settingsBitmap.Render(settingsWindow);
-                var settingsEncoder =
-                    new PngBitmapEncoder();
-                settingsEncoder.Frames.Add(
-                    BitmapFrame.Create(settingsBitmap));
-                using (var output =
-                    System.IO.File.Create(args[3]))
-                    settingsEncoder.Save(output);
+                SaveWindowPreview(
+                    settingsWindow, args[3], 96);
+                string previewFolder =
+                    System.IO.Path.GetDirectoryName(args[3]);
+                string previewName =
+                    System.IO.Path.GetFileNameWithoutExtension(
+                        args[3]);
+                SaveWindowPreview(
+                    settingsWindow,
+                    System.IO.Path.Combine(
+                        previewFolder,
+                        previewName + "-150.png"),
+                    144);
+                SaveWindowPreview(
+                    settingsWindow,
+                    System.IO.Path.Combine(
+                        previewFolder,
+                        previewName + "-200.png"),
+                    192);
                 settingsWindow.Hide();
             }
 
@@ -567,6 +564,32 @@ internal static class PopupInteractionProbe
             if (settingsWindow != null) settingsWindow.Hide();
             if (popup != null) popup.Close();
         }
+    }
+
+    private static void SaveWindowPreview(
+        Window window, string path, double dpi)
+    {
+        double scale = dpi / 96.0;
+        int width = Math.Max(
+            1,
+            (int)Math.Ceiling(
+                window.ActualWidth * scale));
+        int height = Math.Max(
+            1,
+            (int)Math.Ceiling(
+                window.ActualHeight * scale));
+        var bitmap = new RenderTargetBitmap(
+            width,
+            height,
+            dpi,
+            dpi,
+            PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var output =
+            System.IO.File.Create(path))
+            encoder.Save(output);
     }
 
     private static void Require(bool condition, string message)
