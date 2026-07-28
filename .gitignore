@@ -1,0 +1,35 @@
+# Build outputs
+bin/
+obj/
+dist/
+tmp/
+
+# Test and diagnostic artifacts
+*.log
+*.trace
+*.dmp
+TestResults/
+tests/bin/
+tests/obj/
+tests/*.exe
+tests/*.pdb
+
+# Local IDE state
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# Local configuration and secrets
+settings.dat
+*.local
+*.secret
+*.secrets
+.env
+.env.*
+
+# Windows/editor noise
+Thumbs.db
+Desktop.ini
+*.bak
+*.tmp
