@@ -16,6 +16,7 @@ internal static class FeatureProbe
         try
         {
             TestHotkeysAndStartup(app);
+            TestSmartTargetResolver(app);
             TestModelApi(app);
             TestVisionApi(app);
             TestMicrosoftFree(app);
@@ -34,6 +35,76 @@ internal static class FeatureProbe
             }
             return 1;
         }
+    }
+
+    private static void TestSmartTargetResolver(Assembly app)
+    {
+        Type resolver = app.GetType(
+            "GlobalTranslator.SmartTargetResolver", true);
+        MethodInfo resolve = resolver.GetMethod(
+            "Resolve",
+            BindingFlags.Static | BindingFlags.Public);
+        AssertTarget(resolve, "这是简体中文。", "Smart", "ja", "en");
+        AssertTarget(resolve, "這是繁體中文。", "Smart", "ja", "en");
+        AssertTarget(resolve, "This is English.", "Smart", "en", "zh-Hans");
+        AssertTarget(resolve, "日本語の文章です。", "Smart", "en", "zh-Hans");
+        AssertTarget(resolve, "한국어 문장입니다.", "Smart", "en", "zh-Hans");
+        AssertTarget(resolve, "APB协议验证", "Smart", "en", "en");
+        AssertTarget(resolve, "https://example.com/123", "Smart", "en", "zh-Hans");
+        AssertTarget(resolve, "if (count > 0) return;", "Smart", "en", "zh-Hans");
+        AssertTarget(resolve, "任意文本", "Fixed", "ko", "ko");
+        MethodInfo preserve = resolver.GetMethod(
+            "ShouldPreserveContent",
+            BindingFlags.Static | BindingFlags.Public);
+        if (!(bool)preserve.Invoke(
+                null,
+                new object[]
+                {
+                    "https://example.com/123", "Smart"
+                }) ||
+            !(bool)preserve.Invoke(
+                null,
+                new object[]
+                {
+                    "if (count > 0) return;", "Smart"
+                }) ||
+            !(bool)preserve.Invoke(
+                null,
+                new object[] { "2026-07-29", "Smart" }) ||
+            (bool)preserve.Invoke(
+                null,
+                new object[] { "Hello world", "Smart" }))
+            throw new InvalidOperationException(
+                "Smart target content-preservation rules are incorrect.");
+
+        Type settingsType = app.GetType(
+            "GlobalTranslator.AppSettings", true);
+        object defaults = Activator.CreateInstance(
+            settingsType, true);
+        string mode = (string)settingsType.GetField(
+            "TargetLanguageMode").GetValue(defaults);
+        if (mode != "Smart")
+            throw new InvalidOperationException(
+                "Old/default settings must use Smart target mode.");
+        Console.WriteLine(
+            "SMART_TARGET zh=>en other=>zh-Hans fixed=True");
+    }
+
+    private static void AssertTarget(
+        MethodInfo resolve,
+        string text,
+        string mode,
+        string fixedTarget,
+        string expected)
+    {
+        string actual = (string)resolve.Invoke(
+            null,
+            new object[] { text, mode, fixedTarget });
+        if (actual != expected)
+            throw new InvalidOperationException(
+                "Smart target mismatch for '" + text +
+                "': expected " + expected +
+                ", actual " + actual + ".");
     }
 
     private static void TestHotkeysAndStartup(Assembly app)
@@ -223,8 +294,14 @@ internal static class FeatureProbe
                 ((Task)task).Wait();
                 object result = task.GetType().GetProperty("Result").GetValue(task, null);
                 string translated = (string)result.GetType().GetField("Text").GetValue(result);
+                string effectiveTarget = (string)result.GetType()
+                    .GetField("EffectiveTargetLanguage")
+                    .GetValue(result);
                 if (translated != "模型接口翻译成功。")
                     throw new InvalidOperationException("Model response was not parsed.");
+                if (effectiveTarget != "zh-Hans")
+                    throw new InvalidOperationException(
+                        "Model API did not receive the smart target.");
                 if (serverError != null) throw serverError;
                 Console.WriteLine("MODEL_API text=" + translated);
             }

@@ -203,6 +203,8 @@ internal static class PopupInteractionProbe
                 .GetValue(settingsWindow);
             Require(tabs.Items.Count == 4,
                 "Translation, OCR, shortcut or general settings tab is missing.");
+            Require(tabs.TabStripPlacement == Dock.Left,
+                "Settings navigation is not placed on the left.");
             TabItem translationTab =
                 (TabItem)tabs.Items[0];
             Require(
@@ -214,9 +216,9 @@ internal static class PopupInteractionProbe
                     BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
             Require(
-                providerPicker.ColumnDefinitions.Count == 5 &&
-                providerPicker.Children.Count == 5,
-                "All five translation providers are not visible in the quick selector.");
+                providerPicker.ColumnDefinitions.Count == 3 &&
+                providerPicker.Children.Count == 3,
+                "Translation engine types are not presented as three top-level choices.");
             FieldInfo pendingProviderField = settingsWindowType.GetField(
                 "_pendingProvider",
                 BindingFlags.Instance | BindingFlags.NonPublic);
@@ -227,21 +229,14 @@ internal static class PopupInteractionProbe
                 (string)pendingProviderField.GetValue(settingsWindow) ==
                     "ModelApi",
                 "Saved provider was not loaded as the single pending provider.");
-            Button googleFreeButton = (Button)settingsWindowType
+            ComboBox targetLanguage = (ComboBox)settingsWindowType
                 .GetField(
-                    "_googleFree",
+                    "_language",
                     BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            googleFreeButton.RaiseEvent(
-                new RoutedEventArgs(Button.ClickEvent));
             Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "GoogleFree",
-                "Set-current action did not update the pending provider.");
-            Require(
-                (string)activeConfigField.GetValue(settingsWindow) ==
-                    "Free",
-                "Provider selection did not open its configuration section.");
+                targetLanguage.SelectedIndex == 0,
+                "Smart target is not the default target mode.");
             Button officialConfigButton = (Button)settingsWindowType
                 .GetField(
                     "_officialConfigButton",
@@ -251,10 +246,40 @@ internal static class PopupInteractionProbe
                 new RoutedEventArgs(Button.ClickEvent));
             Require(
                 (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "GoogleFree" &&
+                    "ModelApi" &&
                 (string)activeConfigField.GetValue(settingsWindow) ==
                     "Official",
                 "Browsing a configuration section changed the pending provider.");
+            Button googleOfficial = (Button)settingsWindowType
+                .GetField(
+                    "_googleOfficial",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            googleOfficial.RaiseEvent(
+                new RoutedEventArgs(Button.ClickEvent));
+            Require(
+                (string)pendingProviderField.GetValue(settingsWindow) ==
+                    "ModelApi",
+                "Browsing Google Cloud changed the pending provider.");
+            PasswordBox googleKey = (PasswordBox)
+                settingsWindowType.GetField(
+                    "_googleKey",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            googleKey.Password = "probe-google-key";
+            Button activateProvider = (Button)settingsWindowType
+                .GetField(
+                    "_activateProviderButton",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(activateProvider.IsEnabled,
+                "Configured Google Cloud service cannot be activated.");
+            activateProvider.RaiseEvent(
+                new RoutedEventArgs(Button.ClickEvent));
+            Require(
+                (string)pendingProviderField.GetValue(settingsWindow) ==
+                    "Google",
+                "Explicit set-current action did not update the pending provider.");
             settingsWindowType.GetMethod("ShowModelSettings")
                 .Invoke(settingsWindow, null);
             Require(tabs.SelectedIndex == 0,
@@ -263,6 +288,25 @@ internal static class PopupInteractionProbe
                 (string)activeConfigField.GetValue(settingsWindow) ==
                     "Model",
                 "Model settings shortcut did not open the AI configuration section.");
+            Require(
+                (string)pendingProviderField.GetValue(settingsWindow) ==
+                    "Google",
+                "Model settings shortcut changed the pending provider.");
+            var browseButtons =
+                (System.Collections.IDictionary)
+                settingsWindowType.GetField(
+                    "_providerBrowseButtons",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(browseButtons.Count == 4,
+                "AI model category does not expose four provider choices.");
+            TextBlock headerEngine = (TextBlock)
+                settingsWindowType.GetField(
+                    "_headerCurrentEngine",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(!string.IsNullOrWhiteSpace(headerEngine.Text),
+                "Current engine summary is empty.");
             TextBox translateHotkey = (TextBox)settingsWindowType
                 .GetField(
                     "_translateHotkey",

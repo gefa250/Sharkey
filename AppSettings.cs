@@ -9,6 +9,7 @@ namespace GlobalTranslator
     internal sealed class AppSettings
     {
         public string Provider = "GoogleFree";
+        public string TargetLanguageMode = "Smart";
         public string TargetLanguage = "zh-Hans";
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
@@ -70,6 +71,7 @@ namespace GlobalTranslator
                     switch (name)
                     {
                         case "Provider": settings.Provider = value; break;
+                        case "TargetLanguageMode": settings.TargetLanguageMode = value; break;
                         case "TargetLanguage": settings.TargetLanguage = value; break;
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
@@ -125,6 +127,7 @@ namespace GlobalTranslator
             Directory.CreateDirectory(Folder);
             string data =
                 "Provider=" + Encode(Provider) + "\n" +
+                "TargetLanguageMode=" + Encode(TargetLanguageMode) + "\n" +
                 "TargetLanguage=" + Encode(TargetLanguage) + "\n" +
                 "GoogleApiKey=" + Encode(GoogleApiKey) + "\n" +
                 "MicrosoftApiKey=" + Encode(MicrosoftApiKey) + "\n" +

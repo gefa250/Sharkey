@@ -90,6 +90,7 @@
     <Compile Include="Program.cs" />
     <Compile Include="HotkeyGesture.cs" />
     <Compile Include="StartupManager.cs" />
+    <Compile Include="SmartTargetResolver.cs" />
     <Compile Include="DiagnosticLog.cs" />
     <Compile Include="OcrService.cs" />
     <Compile Include="OcrLanguagePackManager.cs" />
