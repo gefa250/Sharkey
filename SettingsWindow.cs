@@ -36,18 +36,9 @@ namespace GlobalTranslator
         private PasswordBox _modelApiKey;
         private TextBox _modelName;
         private ComboBox _modelVendor;
-        private ComboBox _ocrLanguage;
-        private CheckBox _ocrAutoEnhance;
         private CheckBox _ocrAiFallback;
+        private CheckBox _ocrLocalFallback;
         private TextBox _ocrVisionModel;
-        private TextBlock _englishOcrStatus;
-        private TextBlock _englishBasicStatus;
-        private TextBlock _ocrTaskStatus;
-        private ProgressBar _ocrTaskProgress;
-        private Button _installEnglishOcr;
-        private Button _removeEnglishOcr;
-        private Button _removeEnglishAll;
-        private Button _copyEnglishOcrCommand;
         private Button _cancelSettings;
         private TextBox _translateHotkey;
         private TextBox _ocrHotkey;
@@ -114,7 +105,6 @@ namespace GlobalTranslator
             Grid.SetRow(footer, 2);
             layout.Children.Add(footer);
 
-            OcrLanguagePackManager.ProgressChanged += OcrProgressChanged;
             LoadValues();
         }
 
@@ -128,8 +118,6 @@ namespace GlobalTranslator
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
-            if (_englishOcrStatus != null)
-                UpdateEnglishOcrStatus();
             if (_startWithWindows != null && !_loadingValues)
                 _startWithWindows.IsChecked =
                     StartupManager.IsEnabled();
@@ -142,17 +130,9 @@ namespace GlobalTranslator
                     StartupManager.IsEnabled();
         }
 
-        public void HandleEnglishOcrUnavailable()
-        {
-            if (_ocrLanguage != null)
-                SelectOcrLanguage("auto");
-            UpdateEnglishOcrStatus();
-        }
-
         public void ShowOcrSettings()
         {
             _tabs.SelectedIndex = 1;
-            UpdateEnglishOcrStatus();
         }
 
         public void ShowModelSettings()
@@ -787,53 +767,21 @@ namespace GlobalTranslator
             var root = TabBody();
             root.Children.Add(Intro(
                 "截图 OCR",
-                "默认在本机增强和识别截图；只有明确开启后，低质量结果才会使用 AI 视觉兜底。"));
-            root.Children.Add(BuildEnglishOcrCard());
-
-            var localCard = Card();
-            localCard.Padding = new Thickness(16);
-            localCard.Margin = new Thickness(0, 12, 0, 12);
-            var local = new StackPanel();
-            local.Children.Add(new TextBlock
-            {
-                Text = "本地识别",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
-            });
-            AddFieldLabel(local, "识别语言");
-            _ocrLanguage = new ComboBox
-            {
-                Height = 36,
-                Margin = new Thickness(24, 5, 0, 10),
-                Padding = new Thickness(9, 6, 9, 6),
-                ItemsSource = AvailableOcrLanguages()
-            };
-            local.Children.Add(_ocrLanguage);
-            _ocrAutoEnhance = new CheckBox
-            {
-                Content = "自动放大、对比度增强和深色模式反转",
-                Margin = new Thickness(24, 3, 0, 4),
-                Foreground = Navy,
-                FontSize = 12
-            };
-            local.Children.Add(_ocrAutoEnhance);
-            localCard.Child = local;
-            root.Children.Add(localCard);
+                "默认使用 DeepSeek Vision 读取截图；无需下载 Windows 多语言 OCR 包。"));
 
             var aiCard = Card();
             aiCard.Padding = new Thickness(16);
             var ai = new StackPanel();
             ai.Children.Add(new TextBlock
             {
-                Text = "AI 视觉兜底",
+                Text = "DeepSeek Vision",
                 FontSize = 14,
-                FontWeight = FontWeights.Bold,
+                FontWeight = FontWeights.SemiBold,
                 Foreground = Navy
             });
             ai.Children.Add(new TextBlock
             {
-                Text = "仅当本地多路识别结果为空、乱码较多或差异明显时调用。",
+                Text = "识别结果只要求转录，不翻译、不纠错；原文仍可编辑后重新翻译。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Muted,
                 FontSize = 11,
@@ -841,29 +789,69 @@ namespace GlobalTranslator
             });
             _ocrAiFallback = new CheckBox
             {
-                Content = "允许低质量时把截图发送给视觉模型",
+                Content = "使用 DeepSeek Vision 作为默认截图识别引擎",
                 Margin = new Thickness(0, 0, 0, 7),
                 Foreground = Navy,
                 FontSize = 12
             };
             ai.Children.Add(_ocrAiFallback);
             _ocrVisionModel = AddText(
-                ai, "视觉模型名称", "例如 gpt-4.1-mini / qwen-vl-max");
+                ai, "视觉模型名称", "deepseek-v4-flash-vision-exp");
             ai.Children.Add(new TextBlock
             {
-                Text = "API 地址和 Key 复用“AI 大模型”页；截图只在内存中编码，不写入历史记录。",
+                Text = "API 地址和 Key 复用“AI 模型”页的 DeepSeek 配置；截图只在内存中编码。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brush("#397080"),
                 FontSize = 10.5,
                 Margin = new Thickness(24, 0, 0, 0)
             });
+            var configureDeepSeek = SecondaryButton("配置 DeepSeek API");
+            configureDeepSeek.Width = 142;
+            configureDeepSeek.Height = 34;
+            configureDeepSeek.Margin = new Thickness(24, 10, 0, 0);
+            configureDeepSeek.Click += delegate
+            {
+                _tabs.SelectedIndex = 0;
+                SelectConfigSection("Model");
+                BrowseProvider("ModelApi:DeepSeek");
+                if (_modelApiKey != null) _modelApiKey.Focus();
+            };
+            ai.Children.Add(configureDeepSeek);
             aiCard.Child = ai;
             root.Children.Add(aiCard);
-            root.Children.Add(InfoBox(
-                "若手动选择的语言包未安装，鲨译会回退到多语言自动识别并给出提示。"));
+
+            var fallbackCard = Card();
+            fallbackCard.Padding = new Thickness(16);
+            fallbackCard.Margin = new Thickness(0, 12, 0, 12);
+            var fallback = new StackPanel();
+            fallback.Children.Add(new TextBlock
+            {
+                Text = "离线回退（可选）",
+                FontSize = 13.5,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = Navy
+            });
+            _ocrLocalFallback = new CheckBox
+            {
+                Content = "AI 请求失败时尝试 Windows 本地 OCR（使用已安装语言）",
+                Margin = new Thickness(0, 9, 0, 4),
+                Foreground = Navy,
+                FontSize = 12
+            };
+            fallback.Children.Add(_ocrLocalFallback);
+            fallback.Children.Add(new TextBlock
+            {
+                Text = "本地识别不会自动下载或安装语言包；未安装可用识别器时，将提示配置视觉 API。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Muted,
+                FontSize = 10.5
+            });
+            fallbackCard.Child = fallback;
+            root.Children.Add(fallbackCard);
             return Scroll(root);
         }
 
+ #if LEGACY_OCR_COMPONENT_UI
         private Border BuildEnglishOcrCard()
         {
             var card = Card();
@@ -1180,6 +1168,7 @@ namespace GlobalTranslator
             SelectOcrLanguage("en");
         }
 
+ #endif
         private Border BuildFooter()
         {
             var footer = new Border
@@ -1275,10 +1264,12 @@ namespace GlobalTranslator
                 LoadModelDraft(_activeModelVendor);
                 _pendingModelVendor =
                     NormalizeModelVendor(_settings.ModelVendor);
-                SelectOcrLanguage(_settings.OcrLanguage);
-                _ocrAutoEnhance.IsChecked = _settings.OcrAutoEnhance;
-                _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
-                _ocrVisionModel.Text = _settings.OcrVisionModel;
+                if (_ocrLocalFallback != null)
+                    _ocrLocalFallback.IsChecked = _settings.OcrLocalFallback;
+                if (_ocrAiFallback != null)
+                    _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
+                if (_ocrVisionModel != null)
+                    _ocrVisionModel.Text = _settings.OcrVisionModel;
                 _translateHotkey.Text =
                     NormalizeHotkey(_settings.TranslateHotkey, "F8");
                 _ocrHotkey.Text =
@@ -1318,26 +1309,31 @@ namespace GlobalTranslator
                 out settingsGesture))
                 return;
 
-            bool enableAiOcr = _ocrAiFallback.IsChecked == true;
+            bool enableAiOcr = _ocrAiFallback != null &&
+                _ocrAiFallback.IsChecked == true;
+            bool grantOcrConsent = false;
             if (enableAiOcr &&
-                (string.IsNullOrWhiteSpace(_modelBaseUrl.Text) ||
-                 string.IsNullOrWhiteSpace(_ocrVisionModel.Text)))
+                string.IsNullOrWhiteSpace(
+                    _ocrVisionModel == null
+                        ? ""
+                        : _ocrVisionModel.Text))
             {
                 _tabs.SelectedIndex = 1;
                 MessageBox.Show(
-                    "开启 AI 视觉兜底前，请填写模型 API 地址和视觉模型名称。",
+                    "请填写视觉模型名称；DeepSeek API 地址和 Key 在“AI 模型 → DeepSeek”中配置。",
                     "鲨译", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            if (enableAiOcr && !_settings.OcrAiFallback)
+            if (enableAiOcr && !_settings.OcrAiConsentGranted)
             {
                 MessageBoxResult consent = MessageBox.Show(
-                    "开启后，当本地 OCR 质量较差时，所选截图会发送到你配置的视觉模型服务。\n\n" +
+                    "开启后，所选截图会发送到你配置的 DeepSeek Vision 服务。\n\n" +
                     "截图可能包含隐私信息。确定允许上传吗？",
                     "启用 AI 视觉 OCR",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
                 if (consent != MessageBoxResult.Yes) return;
+                grantOcrConsent = true;
             }
 
             SaveActiveModelDraft();
@@ -1380,12 +1376,12 @@ namespace GlobalTranslator
             _settings.ModelBaseUrl = activeConnection.BaseUrl;
             _settings.ModelName = activeConnection.Model;
             _settings.ModelApiKey = activeConnection.ApiKey;
-            var ocrLanguage = _ocrLanguage.SelectedItem as OcrLanguageChoice;
-            _settings.OcrLanguage =
-                ocrLanguage == null ? "auto" : ocrLanguage.Tag;
-            _settings.OcrAutoEnhance = _ocrAutoEnhance.IsChecked == true;
             _settings.OcrAiFallback = enableAiOcr;
-            _settings.OcrVisionModel = _ocrVisionModel.Text.Trim();
+            _settings.OcrLocalFallback = _ocrLocalFallback == null ||
+                _ocrLocalFallback.IsChecked == true;
+            _settings.OcrVisionModel = _ocrVisionModel == null
+                ? "deepseek-v4-flash-vision-exp"
+                : _ocrVisionModel.Text.Trim();
             _settings.AutoTranslate = false;
             _settings.TranslateHotkey = translateGesture.Display;
             _settings.OcrHotkey = ocrGesture.Display;
@@ -1396,6 +1392,8 @@ namespace GlobalTranslator
             {
                 StartupManager.SetEnabled(
                     _settings.StartWithWindows);
+                if (grantOcrConsent)
+                    _settings.OcrAiConsentGranted = true;
                 _settings.Save();
                 var handler = SettingsSaved;
                 if (handler != null) handler(this, EventArgs.Empty);
@@ -2575,6 +2573,7 @@ namespace GlobalTranslator
             };
         }
 
+ #if LEGACY_OCR_COMPONENT_UI
         private static List<OcrLanguageChoice> AvailableOcrLanguages()
         {
             var result = new List<OcrLanguageChoice>
@@ -2629,6 +2628,7 @@ namespace GlobalTranslator
                 StringComparison.OrdinalIgnoreCase);
         }
 
+ #endif
         private void UpdateTargetRule()
         {
             if (_targetRule == null || _language == null)

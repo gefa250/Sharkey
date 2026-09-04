@@ -382,31 +382,22 @@ internal static class PopupInteractionProbe
                 "LoadValues",
                 BindingFlags.Instance | BindingFlags.NonPublic)
                 .Invoke(settingsWindow, null);
-            ComboBox ocrLanguage = (ComboBox)settingsWindowType
-                .GetField("_ocrLanguage", BindingFlags.Instance | BindingFlags.NonPublic)
+            CheckBox aiOcr = (CheckBox)settingsWindowType
+                .GetField("_ocrAiFallback", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            Require(ocrLanguage.Items.Count >= 1,
-                "OCR language choices are empty.");
-            TextBlock englishStatus = (TextBlock)settingsWindowType
-                .GetField(
-                    "_englishOcrStatus",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
+            TextBox visionModel = (TextBox)settingsWindowType
+                .GetField("_ocrVisionModel", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            Button installEnglish = (Button)settingsWindowType
-                .GetField(
-                    "_installEnglishOcr",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
+            Require(aiOcr != null && aiOcr.IsChecked == true,
+                "DeepSeek Vision is not enabled by default.");
+            Require(visionModel != null &&
+                    visionModel.Text == "deepseek-v4-flash-vision-exp",
+                "Default DeepSeek Vision model is missing.");
+            CheckBox localFallback = (CheckBox)settingsWindowType
+                .GetField("_ocrLocalFallback", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            Button copyEnglishCommand = (Button)settingsWindowType
-                .GetField(
-                    "_copyEnglishOcrCommand",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(!string.IsNullOrWhiteSpace(englishStatus.Text),
-                "English OCR status is empty.");
-            Require(
-                installEnglish.Visibility == copyEnglishCommand.Visibility,
-                "English OCR install actions have inconsistent visibility.");
+            Require(localFallback != null && localFallback.IsChecked == true,
+                "Optional Windows OCR fallback is not enabled by default.");
             Button cancelSettings = (Button)settingsWindowType
                 .GetField(
                     "_cancelSettings",

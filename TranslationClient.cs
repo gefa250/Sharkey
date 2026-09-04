@@ -86,8 +86,16 @@ namespace GlobalTranslator
             Bitmap image, AppSettings settings, CancellationToken token)
         {
             if (image == null) throw new ArgumentNullException("image");
-            string baseUrl = (settings.ModelBaseUrl ?? "").Trim();
+            ModelConnectionSettings visionConnection = null;
             string model = (settings.OcrVisionModel ?? "").Trim();
+            if (string.Equals(
+                model,
+                "deepseek-v4-flash-vision-exp",
+                StringComparison.OrdinalIgnoreCase))
+                visionConnection = settings.GetModelConnection("DeepSeek");
+            string baseUrl = (visionConnection == null
+                ? settings.ModelBaseUrl
+                : visionConnection.BaseUrl ?? "").Trim();
             if (string.IsNullOrWhiteSpace(baseUrl))
                 throw new InvalidOperationException(
                     "请先在“AI 大模型”设置中填写 API 地址。");
@@ -130,7 +138,9 @@ namespace GlobalTranslator
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
-                string apiKey = (settings.ModelApiKey ?? "").Trim();
+                string apiKey = (visionConnection == null
+                    ? settings.ModelApiKey
+                    : visionConnection.ApiKey ?? "").Trim();
                 if (!string.IsNullOrEmpty(apiKey))
                     request.Headers.Authorization =
                         new System.Net.Http.Headers.AuthenticationHeaderValue(

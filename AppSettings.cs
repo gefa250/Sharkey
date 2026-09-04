@@ -33,8 +33,13 @@ namespace GlobalTranslator
         public string QwenModelName = "qwen-plus";
         public string OcrLanguage = "auto";
         public bool OcrAutoEnhance = true;
-        public bool OcrAiFallback = false;
-        public string OcrVisionModel = "";
+        // Kept under the old field name for settings-file compatibility. It now
+        // means that AI Vision is the preferred OCR engine, with Windows OCR as
+        // an optional offline fallback.
+        public bool OcrAiFallback = true;
+        public string OcrVisionModel = "deepseek-v4-flash-vision-exp";
+        public bool OcrLocalFallback = true;
+        public bool OcrAiConsentGranted = false;
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
         public string OcrHotkey = "F9";
@@ -59,6 +64,8 @@ namespace GlobalTranslator
             try
             {
                 bool hasVendorProfiles = false;
+                bool hasOcrVisionModel = false;
+                bool hasOcrAiSetting = false;
                 byte[] encrypted = File.ReadAllBytes(FilePath);
                 byte[] clear = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser);
                 string[] lines = Encoding.UTF8.GetString(clear).Split(new[] { '\n' }, StringSplitOptions.None);
@@ -94,8 +101,10 @@ namespace GlobalTranslator
                         case "QwenModelName": settings.QwenModelName = value; hasVendorProfiles = true; break;
                         case "OcrLanguage": settings.OcrLanguage = value; break;
                         case "OcrAutoEnhance": settings.OcrAutoEnhance = value != "false"; break;
-                        case "OcrAiFallback": settings.OcrAiFallback = value == "true"; break;
-                        case "OcrVisionModel": settings.OcrVisionModel = value; break;
+                        case "OcrAiFallback": settings.OcrAiFallback = value == "true"; hasOcrAiSetting = true; break;
+                        case "OcrVisionModel": settings.OcrVisionModel = value; hasOcrVisionModel = true; break;
+                        case "OcrLocalFallback": settings.OcrLocalFallback = value != "false"; break;
+                        case "OcrAiConsentGranted": settings.OcrAiConsentGranted = value == "true"; break;
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
                         case "OcrHotkey": settings.OcrHotkey = value; break;
@@ -117,6 +126,12 @@ namespace GlobalTranslator
                             Model = settings.ModelName
                         });
                 }
+                if (!hasOcrVisionModel ||
+                    string.IsNullOrWhiteSpace(settings.OcrVisionModel))
+                    settings.OcrVisionModel =
+                        "deepseek-v4-flash-vision-exp";
+                if (!hasOcrAiSetting || !hasOcrVisionModel)
+                    settings.OcrAiFallback = true;
             }
             catch { return new AppSettings(); }
             return settings;
@@ -152,6 +167,8 @@ namespace GlobalTranslator
                 "OcrAutoEnhance=" + Encode(OcrAutoEnhance ? "true" : "false") + "\n" +
                 "OcrAiFallback=" + Encode(OcrAiFallback ? "true" : "false") + "\n" +
                 "OcrVisionModel=" + Encode(OcrVisionModel) + "\n" +
+                "OcrLocalFallback=" + Encode(OcrLocalFallback ? "true" : "false") + "\n" +
+                "OcrAiConsentGranted=" + Encode(OcrAiConsentGranted ? "true" : "false") + "\n" +
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +

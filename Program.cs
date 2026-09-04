@@ -78,9 +78,6 @@ namespace GlobalTranslator
             };
 
             CreateTray();
-            OcrLanguagePackManager.OperationCompleted +=
-                OcrComponentOperationCompleted;
-            OcrLanguagePackManager.TryReconnect();
             CreateMessageWindow();
             if (_settings.StartWithWindows)
             {
@@ -92,17 +89,11 @@ namespace GlobalTranslator
                         startupError.GetType().Name);
                 }
             }
-            bool englishOcrInstalled =
-                OcrLanguagePackManager.IsEnglishInstalled();
-            DiagnosticLog.Write(
-                "English OCR installed=" + englishOcrInstalled);
             bool settingsRequested = Array.IndexOf(e.Args, "--settings") >= 0;
             if (settingsRequested ||
                 !AppSettings.HasSavedSettings ||
                 !HasConfiguredProvider())
             {
-                if (!englishOcrInstalled)
-                    _settingsWindow.ShowOcrSettings();
                 _settingsWindow.Show();
             }
         }
@@ -327,36 +318,6 @@ namespace GlobalTranslator
             }
         }
 
-        private void OcrComponentOperationCompleted(
-            object sender, OcrComponentProgressEventArgs e)
-        {
-            Dispatcher.BeginInvoke(new Action(delegate
-            {
-                OcrComponentProgress progress = e.Progress;
-                if (progress.OcrState !=
-                        OcrCapabilityState.Installed &&
-                    (_settings.OcrLanguage ?? "").StartsWith(
-                        "en",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    _settings.OcrLanguage = "auto";
-                    _settings.Save();
-                    if (_settingsWindow != null)
-                        _settingsWindow.HandleEnglishOcrUnavailable();
-                }
-                if (_tray != null)
-                    _tray.ShowBalloonTip(
-                        5500,
-                        progress.Success
-                            ? "Windows OCR 组件任务完成"
-                            : "Windows OCR 组件任务未完成",
-                        progress.Message,
-                        progress.Success
-                            ? ToolTipIcon.Info
-                            : ToolTipIcon.Warning);
-            }));
-        }
-
         private async void CaptureCurrentSelection()
         {
             await Task.Delay(60);
@@ -379,15 +340,9 @@ namespace GlobalTranslator
                 }
                 if (image == null) return;
 
-                var options = new OcrOptions
-                {
-                    LanguageTag = _settings.OcrLanguage,
-                    AutoEnhance = _settings.OcrAutoEnhance
-                };
-                OcrRecognitionResult result =
-                    await _ocr.RecognizeAsync(image, options);
-
-                if (result.IsLowQuality && _settings.OcrAiFallback)
+                OcrRecognitionResult result = null;
+                string aiFailure = "";
+                if (_settings.OcrAiFallback)
                 {
                     try
                     {
@@ -395,24 +350,58 @@ namespace GlobalTranslator
                             image, _settings, CancellationToken.None);
                         if (!string.IsNullOrWhiteSpace(aiText))
                         {
-                            result.Text = aiText;
-                            result.Engine = "AI 视觉 OCR · " +
-                                _settings.OcrVisionModel;
-                            result.QualityScore = 1;
-                            result.IsLowQuality = false;
-                            result.UsedAi = true;
+                            result = new OcrRecognitionResult
+                            {
+                                Text = aiText,
+                                Engine = "DeepSeek Vision · " +
+                                    _settings.OcrVisionModel,
+                                QualityScore = 1,
+                                IsLowQuality = false,
+                                UsedAi = true
+                            };
                         }
                     }
                     catch (Exception aiError)
                     {
                         DiagnosticLog.Write(
-                            "AI vision OCR fallback failed; type=" +
+                            "AI vision OCR failed; type=" +
                             aiError.GetType().Name);
-                        result.Warning = AppendWarning(
-                            result.Warning,
-                            "AI 视觉识别不可用，已保留本地结果：" +
-                            aiError.Message);
+                        aiFailure = "DeepSeek Vision 不可用，已尝试本地 OCR：" +
+                            aiError.Message;
                     }
+                }
+
+                if (result == null && _settings.OcrLocalFallback)
+                {
+                    try
+                    {
+                        var options = new OcrOptions
+                        {
+                            // Local OCR is an explicit offline fallback. Do not
+                            // require or select a language pack from settings.
+                            LanguageTag = "auto",
+                            AutoEnhance = _settings.OcrAutoEnhance
+                        };
+                        result = await _ocr.RecognizeAsync(image, options);
+                        if (!string.IsNullOrWhiteSpace(aiFailure))
+                            result.Warning = AppendWarning(
+                                result.Warning, aiFailure);
+                    }
+                    catch (Exception localError)
+                    {
+                        if (!string.IsNullOrWhiteSpace(aiFailure))
+                            throw new InvalidOperationException(
+                                aiFailure + "；本地 OCR 回退也不可用：" +
+                                localError.Message);
+                        throw;
+                    }
+                }
+                if (result == null)
+                {
+                    throw new InvalidOperationException(
+                        string.IsNullOrWhiteSpace(aiFailure)
+                            ? "DeepSeek Vision 未返回识别文字。"
+                            : aiFailure + " 请检查 OCR 设置中的模型与 API Key。" );
                 }
 
                 DiagnosticLog.Write(
@@ -508,8 +497,6 @@ namespace GlobalTranslator
 
         protected override void OnExit(ExitEventArgs e)
         {
-            OcrLanguagePackManager.OperationCompleted -=
-                OcrComponentOperationCompleted;
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             if (_messageWindow != null)
             {

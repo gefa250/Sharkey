@@ -86,8 +86,15 @@ internal static class FeatureProbe
         if (mode != "Smart")
             throw new InvalidOperationException(
                 "Old/default settings must use Smart target mode.");
+        bool aiOcr = (bool)settingsType.GetField(
+            "OcrAiFallback").GetValue(defaults);
+        string visionModel = (string)settingsType.GetField(
+            "OcrVisionModel").GetValue(defaults);
+        if (!aiOcr || visionModel != "deepseek-v4-flash-vision-exp")
+            throw new InvalidOperationException(
+                "DeepSeek Vision is not the default OCR engine.");
         Console.WriteLine(
-            "SMART_TARGET zh=>en other=>zh-Hans fixed=True");
+            "SMART_TARGET zh=>en other=>zh-Hans fixed=True vision=DeepSeek");
     }
 
     private static void AssertTarget(
