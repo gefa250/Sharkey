@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +27,7 @@ namespace GlobalTranslator
         private HwndSource _messageWindow;
         private Mutex _mutex;
         private bool _ocrBusy;
+        private int _ocrRequestId;
 
         [STAThread]
         public static void Main()
@@ -60,10 +62,19 @@ namespace GlobalTranslator
             {
                 ShowModelSettings();
             };
+            _popup.SettingsRequested += delegate
+            {
+                ShowSettings();
+            };
+            _popup.VisibilityChanged += delegate
+            {
+                RefreshDismissHotkey();
+            };
             _settingsWindow = new SettingsWindow(_settings);
             _settingsWindow.SettingsSaved += delegate
             {
                 RegisterConfiguredHotkeys();
+                RefreshDismissHotkey();
                 UpdateTrayLabels();
                 RefreshStartupMenu();
             };
@@ -75,6 +86,13 @@ namespace GlobalTranslator
             {
                 DiagnosticLog.Write("Selection captured; characters=" + args.Text.Length);
                 _popup.Translate(args.Text, args.X, args.Y, _settings, _client);
+            };
+            _monitor.CaptureFailed += delegate(
+                object sender, SelectionCaptureFailedEventArgs args)
+            {
+                DiagnosticLog.Write(
+                    "Selection capture failed; reason=" + args.Reason);
+                _popup.ShowTransientNotice(args.Message, args.X, args.Y);
             };
 
             CreateTray();
@@ -125,6 +143,21 @@ namespace GlobalTranslator
             RegisterConfiguredHotkeys();
         }
 
+        private void RefreshDismissHotkey()
+        {
+            if (_messageWindow == null || _popup == null) return;
+            IntPtr handle = _messageWindow.Handle;
+            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_DISMISS);
+            if (!_popup.IsVisible) return;
+            bool registered = NativeHotKey.Register(
+                handle,
+                NativeMethods.HOTKEY_DISMISS,
+                NativeMethods.MOD_NOREPEAT,
+                NativeMethods.VK_ESCAPE);
+            DiagnosticLog.Write(
+                "Popup dismiss hotkey " + (registered ? "registered" : "unavailable"));
+        }
+
         private void RegisterConfiguredHotkeys()
         {
             if (_messageWindow == null) return;
@@ -135,6 +168,8 @@ namespace GlobalTranslator
                 handle, NativeMethods.HOTKEY_SCREENSHOT);
             NativeHotKey.Unregister(
                 handle, NativeMethods.HOTKEY_SETTINGS);
+            NativeHotKey.Unregister(
+                handle, NativeMethods.HOTKEY_DISMISS);
 
             HotkeyGesture translate = ParsedHotkey(
                 _settings.TranslateHotkey, "F8");
@@ -219,6 +254,13 @@ namespace GlobalTranslator
             {
                 DiagnosticLog.Write("Settings hotkey received");
                 ShowSettings();
+                handled = true;
+            }
+            else if (message == NativeMethods.WM_HOTKEY &&
+                     wParam.ToInt32() == NativeMethods.HOTKEY_DISMISS)
+            {
+                DiagnosticLog.Write("Popup dismiss hotkey received");
+                if (_popup != null) _popup.HandleEscape();
                 handled = true;
             }
             return IntPtr.Zero;
@@ -320,6 +362,10 @@ namespace GlobalTranslator
 
         private async void CaptureCurrentSelection()
         {
+            // Invalidate any OCR result that is still being prepared so an
+            // older F9 request cannot replace a newer F8 card.
+            _ocrRequestId++;
+            if (_popup != null) _popup.DismissImmediately();
             await Task.Delay(60);
             await _monitor.CaptureAtCursorAsync();
         }
@@ -328,15 +374,28 @@ namespace GlobalTranslator
         {
             if (_ocrBusy) return;
             _ocrBusy = true;
+            int requestId = ++_ocrRequestId;
             await Task.Delay(60);
-            _popup.Hide();
+            _popup.DismissImmediately();
             Bitmap image = null;
+            NativeMethods.RECT screenshotBounds = new NativeMethods.RECT();
             try
             {
                 using (var selector = new ScreenshotSelector())
                 {
                     if (selector.ShowDialog() != DialogResult.OK) return;
                     image = selector.SelectedBitmap;
+                    System.Drawing.Rectangle selectedBounds =
+                        ReadSelectionBounds(selector);
+                    System.Drawing.Rectangle virtualScreen =
+                        SystemInformation.VirtualScreen;
+                    screenshotBounds = new NativeMethods.RECT
+                    {
+                        Left = selectedBounds.Left + virtualScreen.Left,
+                        Top = selectedBounds.Top + virtualScreen.Top,
+                        Right = selectedBounds.Right + virtualScreen.Left,
+                        Bottom = selectedBounds.Bottom + virtualScreen.Top
+                    };
                 }
                 if (image == null) return;
 
@@ -404,36 +463,50 @@ namespace GlobalTranslator
                             : aiFailure + " 请检查 OCR 设置中的模型与 API Key。" );
                 }
 
+                if (requestId != _ocrRequestId) return;
+
                 DiagnosticLog.Write(
                     "OCR completed; engine=" + result.Engine +
                     "; quality=" + result.QualityScore.ToString("0.00") +
                     "; characters=" + result.Text.Length);
                 if (string.IsNullOrWhiteSpace(result.Text))
                 {
-                    System.Windows.MessageBox.Show(
-                        "选定区域中没有识别到文字。" +
-                        (string.IsNullOrEmpty(result.Warning)
-                            ? ""
-                            : "\n\n" + result.Warning),
-                        "鲨译",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    NativeMethods.POINT emptyPoint;
+                    NativeMethods.GetCursorPos(out emptyPoint);
+                    _popup.ShowTransientNotice(
+                        "选定区域中没有识别到文字。",
+                        emptyPoint.X,
+                        emptyPoint.Y);
                     return;
                 }
                 NativeMethods.POINT point;
                 NativeMethods.GetCursorPos(out point);
-                _popup.TranslateOcr(
-                    result, point.X, point.Y, _settings, _client);
+                _popup.TranslateOcrAtBounds(
+                    result,
+                    screenshotBounds.Right > screenshotBounds.Left
+                        ? screenshotBounds
+                        : new NativeMethods.RECT
+                        {
+                            Left = point.X,
+                            Top = point.Y,
+                            Right = point.X,
+                            Bottom = point.Y
+                        },
+                    _settings,
+                    _client);
                 if (!string.IsNullOrEmpty(result.Warning))
-                    _tray.ShowBalloonTip(
-                        4000, "鲨译 OCR 提示", result.Warning,
-                        ToolTipIcon.Warning);
+                    DiagnosticLog.Write("OCR warning: " + result.Warning);
             }
             catch (Exception ex)
             {
+                if (requestId != _ocrRequestId) return;
                 DiagnosticLog.Write("OCR failed; type=" + ex.GetType().Name);
-                System.Windows.MessageBox.Show(
-                    "截图识别失败：" + ex.Message, "鲨译",
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                NativeMethods.POINT errorPoint;
+                NativeMethods.GetCursorPos(out errorPoint);
+                _popup.ShowTransientNotice(
+                    "截图识别失败：" + CompactError(ex.Message),
+                    errorPoint.X,
+                    errorPoint.Y);
             }
             finally
             {
@@ -448,8 +521,39 @@ namespace GlobalTranslator
             return current + "\n" + addition;
         }
 
+        private static string CompactError(string message)
+        {
+            string value = message ?? "未知错误。";
+            return value.Length > 120 ? value.Substring(0, 120) + "…" : value;
+        }
+
+        private static System.Drawing.Rectangle ReadSelectionBounds(
+            ScreenshotSelector selector)
+        {
+            if (selector == null) return System.Drawing.Rectangle.Empty;
+            FieldInfo field = typeof(ScreenshotSelector).GetField(
+                "_selection",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field == null) return System.Drawing.Rectangle.Empty;
+            try
+            {
+                object value = field.GetValue(selector);
+                return value is System.Drawing.Rectangle
+                    ? (System.Drawing.Rectangle)value
+                    : System.Drawing.Rectangle.Empty;
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Write(
+                    "Screenshot selection bounds unavailable; type=" +
+                    ex.GetType().Name);
+                return System.Drawing.Rectangle.Empty;
+            }
+        }
+
         private void ShowSettings()
         {
+            if (_popup != null) _popup.Dismiss();
             if (!_settingsWindow.IsVisible) _settingsWindow.Show();
             if (_settingsWindow.WindowState == WindowState.Minimized) _settingsWindow.WindowState = WindowState.Normal;
             _settingsWindow.Activate();
@@ -498,11 +602,13 @@ namespace GlobalTranslator
         protected override void OnExit(ExitEventArgs e)
         {
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
+            if (_popup != null) _popup.Close();
             if (_messageWindow != null)
             {
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_TRANSLATE);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SCREENSHOT);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SETTINGS);
+                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_DISMISS);
                 _messageWindow.Dispose();
             }
             if (_monitor != null) _monitor.Dispose();

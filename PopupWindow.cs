@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Net;
 using System.Threading;
 using System.Windows;
@@ -15,6 +16,12 @@ using System.Windows.Threading;
 
 namespace GlobalTranslator
 {
+    internal enum TranslationPopupMode
+    {
+        Selection,
+        Ocr
+    }
+
     internal sealed class PopupWindow : Window
     {
         private const int WmNcHitTest = 0x0084;
@@ -38,8 +45,42 @@ namespace GlobalTranslator
         private TextBlock _meta;
         private readonly ProgressBar _progress;
         private readonly DispatcherTimer _hideTimer;
+        private readonly DispatcherTimer _loadingTimer;
+        private readonly DispatcherTimer _noticeTimer;
+        private readonly PopupDismissMonitor _outsideMonitor;
         private CancellationTokenSource _cancellation;
         private string _translatedText = "";
+        private string _currentText = "";
+        private int _anchorX;
+        private int _anchorY;
+        private NativeMethods.RECT _anchorRect;
+        private bool _hasAnchorRect;
+        private bool _sourceExpanded;
+        private bool _suppressSourceChanges;
+        private bool _ocrDirty;
+        private bool _isPinned;
+        private bool _isDismissing;
+        private bool _isConfiguringSize;
+        private double _lastOcrWidth = 560;
+        private double _lastOcrHeight = 480;
+        private double _ocrSourceShare = 45;
+        private bool _hasOcrSize;
+        private TranslationPopupMode _popupMode;
+        private Grid _body;
+        private Grid _contentGrid;
+        private Grid _sourcePanel;
+        private Grid _translationPanel;
+        private Border _sourceCard;
+        private Border _translationCard;
+        private TextBlock _sourceSummary;
+        private TextBlock _sourceState;
+        private StackPanel _errorPanel;
+        private TextBlock _errorText;
+        private Button _retryButton;
+        private Button _openSettingsButton;
+        private Button _pinButton;
+        private System.Windows.Shapes.Path _pinGlyph;
+        private TextBlock _loadingText;
         private Button _copySource;
         private Button _retranslate;
         private Button _recapture;
@@ -64,14 +105,17 @@ namespace GlobalTranslator
 
         public event EventHandler OcrRecaptureRequested;
         public event EventHandler ModelSettingsRequested;
+        public event EventHandler SettingsRequested;
+        public event EventHandler VisibilityChanged;
+        public event EventHandler Dismissed;
 
         public PopupWindow()
         {
             Title = "鲨译 Sharkey";
             Width = 480;
-            Height = 520;
-            MinWidth = 370;
-            MinHeight = 330;
+            Height = 230;
+            MinWidth = 360;
+            MinHeight = 160;
             SizeToContent = SizeToContent.Manual;
             WindowStyle = WindowStyle.None;
             AllowsTransparency = true;
@@ -87,31 +131,85 @@ namespace GlobalTranslator
                 if (source != null) source.AddHook(WindowProc);
             };
 
-            _hideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _hideTimer.Tick += delegate { _hideTimer.Stop(); Hide(); };
-            MouseEnter += delegate { _hideTimer.Stop(); };
-            MouseLeave += delegate
+            _hideTimer = new DispatcherTimer();
+            _loadingTimer = new DispatcherTimer
             {
-                if (IsVisible && !IsKeyboardFocusWithin) _hideTimer.Start();
+                Interval = TimeSpan.FromMilliseconds(150)
             };
-            GotKeyboardFocus += delegate { _hideTimer.Stop(); };
-            LostKeyboardFocus += delegate
+            _loadingTimer.Tick += delegate
             {
-                if (IsVisible && !IsMouseOver) _hideTimer.Start();
+                _loadingTimer.Stop();
+                if (!_isDismissing)
+                {
+                    _progress.Visibility = Visibility.Visible;
+                    _loadingText.Visibility = Visibility.Visible;
+                    _loadingText.Text = "正在翻译…";
+                }
             };
-            StateChanged += delegate { UpdateExpandGlyph(); };
+            _noticeTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(2)
+            };
+            _noticeTimer.Tick += delegate
+            {
+                _noticeTimer.Stop();
+                Dismiss();
+            };
+            _outsideMonitor = new PopupDismissMonitor(Dispatcher);
+            _outsideMonitor.MouseDown += delegate(object sender, PopupMouseEventArgs args)
+            {
+                if (!IsVisible || _isPinned || _modelPopup == null ||
+                    _modelPopup.IsOpen || IsPointInsideWindow(args.X, args.Y))
+                    return;
+                Dismiss();
+            };
+            IsVisibleChanged += delegate
+            {
+                if (IsVisible)
+                {
+                    _outsideMonitor.Start();
+                    RaiseVisibilityChanged();
+                }
+                else
+                {
+                    _outsideMonitor.Stop();
+                    RaiseVisibilityChanged();
+                }
+            };
+            StateChanged += delegate
+            {
+                UpdateExpandGlyph();
+                UpdateContentLayout();
+            };
+            SizeChanged += delegate
+            {
+                if (!_isConfiguringSize && _ocrMode &&
+                    WindowState == WindowState.Normal && ActualWidth >= 420)
+                {
+                    _lastOcrWidth = ActualWidth;
+                    _lastOcrHeight = ActualHeight;
+                    _hasOcrSize = true;
+                }
+                UpdateContentLayout();
+            };
+            Closed += delegate { _outsideMonitor.Stop(); };
+            PreviewKeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key != Key.Escape) return;
+                if (HandleEscape()) e.Handled = true;
+            };
 
             var card = new Border
             {
-                Background = Brush("#F7FFFFFF"),
-                CornerRadius = new CornerRadius(20),
-                BorderBrush = Brush("#D9FFFFFF"),
+                Background = Brush("#F7FCFD"),
+                CornerRadius = new CornerRadius(18),
+                BorderBrush = Brush("#D2DDE7EA"),
                 BorderThickness = new Thickness(1),
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    BlurRadius = 32,
-                    ShadowDepth = 7,
-                    Opacity = .19,
+                    BlurRadius = 26,
+                    ShadowDepth = 5,
+                    Opacity = .16,
                     Color = Color.FromRgb(11, 57, 72)
                 }
             };
@@ -127,65 +225,128 @@ namespace GlobalTranslator
             Grid.SetRow(header, 0);
             root.Children.Add(header);
 
-            var body = new Grid { Margin = new Thickness(18, 14, 18, 15) };
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            body.RowDefinitions.Add(new RowDefinition
+            _body = new Grid { Margin = new Thickness(16, 12, 16, 13) };
+            _body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _body.RowDefinitions.Add(new RowDefinition
             {
                 Height = new GridLength(1, GridUnitType.Star),
-                MinHeight = 64
+                MinHeight = 90
             });
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            body.RowDefinitions.Add(new RowDefinition
-            {
-                Height = new GridLength(2, GridUnitType.Star),
-                MinHeight = 105
-            });
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            _body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             _modelChipHost = BuildModelChip();
             Grid.SetRow(_modelChipHost, 0);
-            body.Children.Add(_modelChipHost);
+            _body.Children.Add(_modelChipHost);
 
+            _sourcePanel = new Grid();
+            _sourcePanel.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            _sourcePanel.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
+            _sourcePanel.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
             TextBlock sourceLabel = SectionLabel("原文");
-            Grid.SetRow(sourceLabel, 1);
-            body.Children.Add(sourceLabel);
-            var sourceCard = new Border
+            Grid.SetRow(sourceLabel, 0);
+            _sourcePanel.Children.Add(sourceLabel);
+            _sourceCard = new Border
             {
                 Background = Paper,
-                BorderBrush = Brush("#E0EDF2"),
+                BorderBrush = Brush("#D7E6EA"),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(10),
+                CornerRadius = new CornerRadius(11),
                 Padding = new Thickness(3),
                 Margin = new Thickness(0, 6, 0, 12)
             };
+            var sourceContent = new Grid();
+            _sourceSummary = new TextBlock
+            {
+                Foreground = Muted,
+                FontSize = 12.5,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 6, 8, 6),
+                Cursor = Cursors.Hand
+            };
             _source = MakeSelectableTextBox(13, Muted, 20);
             _source.Background = Paper;
-            _source.Padding = new Thickness(8, 5, 8, 5);
-            sourceCard.Child = _source;
-            Grid.SetRow(sourceCard, 2);
-            body.Children.Add(sourceCard);
-
-            TextBlock translationLabel = SectionLabel("译文");
-            Grid.SetRow(translationLabel, 3);
-            body.Children.Add(translationLabel);
-
-            var translationCard = new Border
+            _source.Padding = new Thickness(8, 5, 10, 9);
+            _source.Visibility = Visibility.Collapsed;
+            _source.TextChanged += delegate
             {
-                Background = Brush("#F9FFFFFF"),
-                BorderBrush = Brush("#D9EAF0"),
+                _sourceSummary.Text = CompactSourceText(_source.Text);
+                if (_ocrMode && !_suppressSourceChanges && _source.IsFocused)
+                    SetOcrDirty(true);
+            };
+            sourceContent.Children.Add(_sourceSummary);
+            sourceContent.Children.Add(_source);
+            _sourceCard.Child = sourceContent;
+            _sourceCard.MouseLeftButtonUp += delegate
+            {
+                if (!_ocrMode) ToggleSourceExpanded();
+            };
+            Grid.SetRow(_sourceCard, 1);
+            _sourcePanel.Children.Add(_sourceCard);
+            _sourceState = new TextBlock
+            {
+                FontSize = 10.5,
+                Foreground = Brush("#A46717"),
+                Margin = new Thickness(6, -8, 0, 5),
+                Visibility = Visibility.Collapsed
+            };
+            Grid.SetRow(_sourceState, 2);
+            _sourcePanel.Children.Add(_sourceState);
+
+            _translationPanel = new Grid();
+            _translationPanel.RowDefinitions.Add(new RowDefinition
+            {
+                Height = GridLength.Auto
+            });
+            _translationPanel.RowDefinitions.Add(new RowDefinition
+            {
+                Height = new GridLength(1, GridUnitType.Star)
+            });
+            TextBlock translationLabel = SectionLabel("译文");
+            Grid.SetRow(translationLabel, 0);
+            _translationPanel.Children.Add(translationLabel);
+            _translationCard = new Border
+            {
+                Background = Brush("#FCFEFE"),
+                BorderBrush = Brush("#D5E5E9"),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(8, 5, 3, 5),
                 Margin = new Thickness(0, 6, 0, 0)
             };
-            _translation = MakeSelectableTextBox(17, Navy, 27);
+            var translationContent = new Grid();
+            _translation = MakeSelectableTextBox(17, Navy, 29);
             _translation.FontWeight = FontWeights.Medium;
             _translation.Background = Brushes.Transparent;
-            translationCard.Child = _translation;
-            Grid.SetRow(translationCard, 4);
-            body.Children.Add(translationCard);
+            // Leave enough space below the last baseline for Latin
+            // descenders such as g, j, p, q and y.  The bottom padding is
+            // part of the scroll extent, so the final line remains visible
+            // even when the text box is scrolled all the way down.
+            _translation.Padding = new Thickness(1, 4, 10, 10);
+            _translation.MinHeight = 54;
+            translationContent.Children.Add(_translation);
+            _errorPanel = BuildErrorPanel();
+            _errorPanel.Visibility = Visibility.Collapsed;
+            translationContent.Children.Add(_errorPanel);
+            _translationCard.Child = translationContent;
+            Grid.SetRow(_translationCard, 1);
+            _translationPanel.Children.Add(_translationCard);
+
+            _contentGrid = new Grid();
+            _contentGrid.Children.Add(_sourcePanel);
+            _contentGrid.Children.Add(_translationPanel);
+            Grid.SetRow(_contentGrid, 1);
+            _body.Children.Add(_contentGrid);
 
             _progress = new ProgressBar
             {
@@ -193,74 +354,181 @@ namespace GlobalTranslator
                 Height = 3,
                 Margin = new Thickness(0, 9, 0, 0),
                 Foreground = Cyan,
-                Background = Brush("#E1F2F5")
+                Background = Brush("#E3F1F3")
             };
-            Grid.SetRow(_progress, 5);
-            body.Children.Add(_progress);
+            _loadingText = new TextBlock
+            {
+                Text = "正在翻译…",
+                FontSize = 11,
+                Foreground = Muted,
+                Margin = new Thickness(0, 6, 0, 0),
+                Visibility = Visibility.Collapsed
+            };
+            var progressPanel = new StackPanel();
+            progressPanel.Children.Add(_progress);
+            progressPanel.Children.Add(_loadingText);
+            Grid.SetRow(progressPanel, 2);
+            _body.Children.Add(progressPanel);
 
             DockPanel actions = BuildActions();
-            Grid.SetRow(actions, 6);
-            body.Children.Add(actions);
+            Grid.SetRow(actions, 3);
+            _body.Children.Add(actions);
 
-            Grid.SetRow(body, 1);
-            root.Children.Add(body);
+            Grid.SetRow(_body, 1);
+            root.Children.Add(_body);
             _resizeGrip = BuildResizeGrip();
             Grid.SetRowSpan(_resizeGrip, 2);
             root.Children.Add(_resizeGrip);
             Content = card;
+            UpdateContentLayout();
         }
 
         public void Translate(
             string text, int x, int y, AppSettings settings, TranslationClient client)
         {
             BeginTranslation(
-                text, x, y, settings, client, false, "", true);
+                text,
+                x,
+                y,
+                new NativeMethods.RECT(),
+                settings,
+                client,
+                false,
+                "",
+                true);
         }
 
         public void TranslateOcr(
             OcrRecognitionResult result, int x, int y,
             AppSettings settings, TranslationClient client)
         {
+            TranslateOcrAtBounds(
+                result,
+                new NativeMethods.RECT
+                {
+                    Left = x,
+                    Top = y,
+                    Right = x,
+                    Bottom = y
+                },
+                settings,
+                client);
+        }
+
+        public void TranslateOcrAtBounds(
+            OcrRecognitionResult result,
+            NativeMethods.RECT screenBounds,
+            AppSettings settings,
+            TranslationClient client)
+        {
             string suffix = "  ·  " + result.Engine;
             if (!string.IsNullOrEmpty(result.Language))
                 suffix += " (" + result.Language + ")";
+            if (result.UsedAi && !string.IsNullOrWhiteSpace(result.Warning))
+                suffix += "  ·  AI 提示";
+            else if (!result.UsedAi && !string.IsNullOrWhiteSpace(result.Warning))
+                suffix += "  ·  本地回退";
+            else if (!result.UsedAi && result.IsLowQuality)
+                suffix += "  ·  可能需要重新框选";
             BeginTranslation(
-                result.Text, x, y, settings, client, true, suffix, true);
+                result.Text,
+                screenBounds.Left,
+                screenBounds.Bottom,
+                screenBounds,
+                settings,
+                client,
+                true,
+                suffix,
+                true);
         }
 
         private async void BeginTranslation(
-            string text, int x, int y, AppSettings settings,
-            TranslationClient client, bool ocrMode, string ocrMetaSuffix,
-            bool reposition)
+            string text, int x, int y, NativeMethods.RECT screenBounds,
+            AppSettings settings, TranslationClient client,
+            bool ocrMode, string ocrMetaSuffix, bool reposition)
         {
             if (_cancellation != null) _cancellation.Cancel();
             _cancellation = new CancellationTokenSource();
             CancellationTokenSource activeCancellation = _cancellation;
+            _isDismissing = false;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
             _activeSettings = settings;
             _activeClient = client;
             _ocrMode = ocrMode;
+            _popupMode = ocrMode
+                ? TranslationPopupMode.Ocr
+                : TranslationPopupMode.Selection;
+            if (ocrMode) _ocrSourceShare = 45;
+            // F8 is a quick-reading card: keep the source out of the visual
+            // layout entirely.  OCR (F9) remains the detailed workspace and
+            // is the only mode that shows the editable source panel.
+            _sourcePanel.Visibility = ocrMode
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            _translationPanel.Visibility = Visibility.Visible;
+            _copyTranslation.Visibility = Visibility.Visible;
+            if (!ocrMode && WindowState == WindowState.Maximized)
+                WindowState = WindowState.Normal;
             _ocrMetaSuffix = ocrMetaSuffix ?? "";
+            _currentText = text ?? "";
+            _anchorX = x;
+            _anchorY = y;
+            _anchorRect = screenBounds;
+            _hasAnchorRect = screenBounds.Right > screenBounds.Left &&
+                             screenBounds.Bottom > screenBounds.Top;
+            _sourceExpanded = ocrMode;
+            _noticeTimer.Stop();
             RefreshModelSelector(settings);
             _hideTimer.Stop();
-            _source.Text = text;
+            _loadingTimer.Stop();
+            SetOcrDirty(false);
+            _suppressSourceChanges = true;
+            _source.Text = _currentText;
+            _suppressSourceChanges = false;
             _source.IsReadOnly = !ocrMode;
+            _source.Visibility = ocrMode
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            _sourceSummary.Visibility = ocrMode
+                ? Visibility.Collapsed
+                : Visibility.Visible;
             _source.ScrollToHome();
             SetOcrActionsVisible(ocrMode);
             _translation.Text = "";
             _translation.Foreground = Navy;
             _translatedText = "";
-            _meta.Text = ProviderName(settings.Provider) + "  ·  " +
-                         LanguageName(settings.TargetLanguage) +
+            _copyTranslation.Content = "复制译文";
+            _errorPanel.Visibility = Visibility.Collapsed;
+            _translation.Visibility = Visibility.Visible;
+            _loadingText.Visibility = Visibility.Collapsed;
+            _meta.Text = ProviderName(settings.Provider) + "  ·  → " +
+                         LanguageName(SmartTargetResolver.Resolve(
+                             _currentText,
+                             settings.TargetLanguageMode,
+                             settings.TargetLanguage)) +
                          _ocrMetaSuffix;
-            _progress.Visibility = Visibility.Visible;
-            if (reposition) PositionNear(x, y);
+            ConfigureModeSize(_currentText);
+            // Keep fast requests visually quiet. The timer reveals the
+            // progress line only after a request takes noticeable time.
+            _progress.Visibility = Visibility.Collapsed;
             if (!IsVisible)
             {
                 Opacity = 0;
+                BeginAnimation(OpacityProperty, null);
                 Show();
-                BeginAnimation(OpacityProperty,
-                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150)));
+                // Create the HWND before calculating the physical placement so
+                // GetDpiForWindow can use the monitor that owns the popup.
+                if (reposition) PositionNear(x, y, screenBounds);
+                AnimateOpacity(0, 1, 140);
             }
+            else
+            {
+                if (reposition) PositionNear(x, y, screenBounds);
+                Opacity = 1;
+            }
+            UpdateContentLayout();
+            _loadingTimer.Start();
 
             try
             {
@@ -279,34 +547,725 @@ namespace GlobalTranslator
                         _translatedText = cleanPartial;
                         _translation.Text = cleanPartial;
                     });
+                if (activeCancellation.IsCancellationRequested ||
+                    !ReferenceEquals(_cancellation, activeCancellation))
+                    return;
                 DiagnosticLog.Write(
                     "Translation succeeded; provider=" + result.Provider +
                     "; characters=" + result.Text.Length);
                 _translatedText = result.Text;
                 _translation.Text = result.Text;
                 _translation.ScrollToHome();
-                _meta.Text = result.Provider +
-                    (string.IsNullOrEmpty(result.DetectedLanguage)
-                        ? ""
-                        : "  ·  " + result.DetectedLanguage) +
-                    " → " + LanguageName(settings.TargetLanguage) +
-                    _ocrMetaSuffix;
+                _translation.Visibility = Visibility.Visible;
+                _errorPanel.Visibility = Visibility.Collapsed;
+                _meta.Text = FormatResultMeta(result, settings) +
+                             (result.FromCache ? "  ·  本次缓存" : "") +
+                             _ocrMetaSuffix;
+                UpdateResultHeight(result.Text);
+                ScheduleRenderedContentFit();
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
+                if (activeCancellation.IsCancellationRequested ||
+                    !ReferenceEquals(_cancellation, activeCancellation))
+                    return;
                 DiagnosticLog.Write("Translation failed; type=" + ex.GetType().Name);
-                _translation.Text = ex.Message;
-                _translation.Foreground = Brush("#C23D4B");
+                ShowTranslationError(ex);
             }
             finally
             {
-                _progress.Visibility = Visibility.Collapsed;
-                if (!string.IsNullOrEmpty(_translatedText))
-                    _translation.Foreground = Navy;
-                _hideTimer.Stop();
-                if (!IsMouseOver && !IsKeyboardFocusWithin) _hideTimer.Start();
+                if (ReferenceEquals(_cancellation, activeCancellation))
+                {
+                    _loadingTimer.Stop();
+                    _progress.Visibility = Visibility.Collapsed;
+                    if (!string.IsNullOrEmpty(_translatedText))
+                        _translation.Foreground = Navy;
+                    _loadingText.Visibility = Visibility.Collapsed;
+                }
             }
+        }
+
+        private void ConfigureModeSize(string content)
+        {
+            if (WindowState == WindowState.Maximized) return;
+            _isConfiguringSize = true;
+            try
+            {
+                if (_popupMode == TranslationPopupMode.Ocr)
+                {
+                    MinWidth = 420;
+                    MinHeight = 340;
+                    Width = _hasOcrSize ? _lastOcrWidth : 560;
+                    Height = _hasOcrSize ? _lastOcrHeight : 480;
+                    _hasOcrSize = true;
+                }
+                else
+                {
+                    MinWidth = 360;
+                    MinHeight = 160;
+                    Width = 440;
+                    Height = EstimateCompactHeight(content);
+                }
+            }
+            finally
+            {
+                _isConfiguringSize = false;
+            }
+        }
+
+        private double EstimateCompactHeight(string content)
+        {
+            double textWidth = Math.Max(
+                220,
+                (Width > 0 ? Width : 440) - 70);
+            double textHeight = MeasureTextHeight(
+                _translation,
+                content,
+                textWidth,
+                29);
+
+            // Header, body padding, section label, actions and (when used)
+            // the model chip.  The translated text itself is measured using
+            // its real font and wrapping width instead of a character-count
+            // approximation.
+            double chromeHeight = _modelChipHost != null &&
+                                  _modelChipHost.Visibility == Visibility.Visible
+                ? 178
+                : 137;
+            double desired = chromeHeight + Math.Max(54, textHeight);
+            return Math.Max(190, Math.Min(GetCompactHeightLimit(), desired));
+        }
+
+        private static double MeasureTextHeight(
+            TextBox box, string content, double textWidth, double lineHeight)
+        {
+            string value = string.IsNullOrEmpty(content) ? " " : content;
+            try
+            {
+                var formatted = new FormattedText(
+                    value,
+                    CultureInfo.CurrentUICulture,
+                    FlowDirection.LeftToRight,
+                    new Typeface(
+                        box.FontFamily,
+                        box.FontStyle,
+                        box.FontWeight,
+                        box.FontStretch),
+                    box.FontSize,
+                    box.Foreground ?? Navy,
+                    1.0);
+                formatted.MaxTextWidth = Math.Max(80, textWidth);
+                formatted.LineHeight = lineHeight;
+                return formatted.Height + box.Padding.Top +
+                       box.Padding.Bottom + 4;
+            }
+            catch
+            {
+                int charactersPerLine = Math.Max(
+                    8,
+                    (int)(Math.Max(80, textWidth) /
+                          Math.Max(6, box.FontSize * .65)));
+                int lines = Math.Max(
+                    1,
+                    (value.Length + charactersPerLine - 1) /
+                    charactersPerLine);
+                return lines * lineHeight + box.Padding.Top +
+                       box.Padding.Bottom + 4;
+            }
+        }
+
+        private double GetCompactHeightLimit()
+        {
+            return GetWorkingHeightLimit(240, 620);
+        }
+
+        private double GetOcrHeightLimit()
+        {
+            return GetWorkingHeightLimit(360, 820);
+        }
+
+        private double GetWorkingHeightLimit(double minimum, double hardLimit)
+        {
+            try
+            {
+                int x = _anchorX;
+                int y = _anchorY;
+                var screen = System.Windows.Forms.Screen.FromPoint(
+                    new System.Drawing.Point(x, y)).WorkingArea;
+                uint dpi = NativeMethods.GetMonitorDpi(x, y);
+                if (dpi < 96) dpi = 96;
+                double workingHeight = screen.Height / (dpi / 96.0);
+                return Math.Max(
+                    minimum,
+                    Math.Min(hardLimit, workingHeight - 20));
+            }
+            catch
+            {
+                return hardLimit;
+            }
+        }
+
+        private void UpdateResultHeight(string translatedText)
+        {
+            if (_popupMode == TranslationPopupMode.Ocr)
+                UpdateOcrHeight(translatedText);
+            else
+                UpdateCompactHeight(translatedText);
+        }
+
+        private void UpdateCompactHeight(string content)
+        {
+            if (_popupMode != TranslationPopupMode.Selection ||
+                WindowState == WindowState.Maximized)
+                return;
+            _isConfiguringSize = true;
+            try
+            {
+                Height = EstimateCompactHeight(content);
+                if (IsVisible)
+                {
+                    PositionNear(
+                        _anchorX,
+                        _anchorY,
+                        _hasAnchorRect
+                            ? _anchorRect
+                            : new NativeMethods.RECT());
+                }
+            }
+            finally { _isConfiguringSize = false; }
+        }
+
+        private void UpdateOcrHeight(string translatedText)
+        {
+            if (_popupMode != TranslationPopupMode.Ocr ||
+                WindowState == WindowState.Maximized)
+                return;
+
+            double windowWidth = Width > 0 ? Width : 560;
+            bool split = windowWidth >= 760;
+            double contentWidth = Math.Max(320, windowWidth - 64);
+            double sourceWidth = split
+                ? Math.Max(180, contentWidth * .45 - 24)
+                : Math.Max(260, contentWidth - 24);
+            double translationWidth = split
+                ? Math.Max(220, contentWidth * .55 - 24)
+                : Math.Max(260, contentWidth - 24);
+            double sourceHeight = MeasureTextHeight(
+                _source,
+                _source.Text,
+                sourceWidth,
+                20);
+            double translationHeight = MeasureTextHeight(
+                _translation,
+                translatedText,
+                translationWidth,
+                29);
+
+            if (!split)
+            {
+                double combined = sourceHeight + translationHeight;
+                if (combined > 0)
+                {
+                    _ocrSourceShare = Math.Max(
+                        30,
+                        Math.Min(50, sourceHeight / combined * 100));
+                }
+            }
+
+            bool hasModelChip = _modelChipHost != null &&
+                                _modelChipHost.Visibility == Visibility.Visible;
+            double chromeHeight = split
+                ? (hasModelChip ? 180 : 139)
+                : (hasModelChip ? 206 : 165);
+            double desired = split
+                ? chromeHeight + Math.Max(sourceHeight, translationHeight)
+                : chromeHeight + sourceHeight + translationHeight;
+            double target = Math.Max(
+                Height,
+                Math.Min(GetOcrHeightLimit(), desired));
+
+            _isConfiguringSize = true;
+            try
+            {
+                Height = Math.Min(GetOcrHeightLimit(), target);
+                UpdateContentLayout();
+                if (IsVisible)
+                {
+                    PositionNear(
+                        _anchorX,
+                        _anchorY,
+                        _hasAnchorRect
+                            ? _anchorRect
+                            : new NativeMethods.RECT());
+                }
+            }
+            finally { _isConfiguringSize = false; }
+        }
+
+        private void ScheduleRenderedContentFit()
+        {
+            Dispatcher.BeginInvoke(
+                DispatcherPriority.Loaded,
+                new Action(delegate { EnsureRenderedContentFit(0); }));
+        }
+
+        private void EnsureRenderedContentFit(int pass)
+        {
+            if (!IsVisible || WindowState == WindowState.Maximized ||
+                string.IsNullOrEmpty(_translatedText))
+                return;
+
+            UpdateLayout();
+            ScrollViewer translationScroll = GetTextScrollViewer(_translation);
+            if (translationScroll == null) return;
+            double translationOverflow = Math.Max(
+                0,
+                translationScroll.ExtentHeight -
+                translationScroll.ViewportHeight);
+            double growth;
+            double limit;
+
+            if (_popupMode == TranslationPopupMode.Ocr)
+            {
+                ScrollViewer sourceScroll = GetTextScrollViewer(_source);
+                double sourceOverflow = sourceScroll == null
+                    ? 0
+                    : Math.Max(
+                        0,
+                        sourceScroll.ExtentHeight -
+                        sourceScroll.ViewportHeight);
+                bool split = WindowState == WindowState.Maximized ||
+                             ActualWidth >= 760;
+                if (split)
+                {
+                    growth = Math.Max(
+                        sourceOverflow,
+                        translationOverflow);
+                }
+                else
+                {
+                    double sourceFraction = Math.Max(
+                        .01,
+                        _ocrSourceShare / 100.0);
+                    double translationFraction = Math.Max(
+                        .01,
+                        1 - sourceFraction);
+                    growth = Math.Max(
+                        sourceOverflow / sourceFraction,
+                        translationOverflow / translationFraction);
+                }
+                limit = GetOcrHeightLimit();
+            }
+            else
+            {
+                growth = translationOverflow;
+                limit = GetCompactHeightLimit();
+            }
+
+            // A small reserve protects the final baseline and scrollbar from
+            // fractional-DPI rounding.  It is only added when the rendered
+            // control reports real overflow.
+            if (growth <= 1 || Height >= limit - 1) return;
+            double nextHeight = Math.Min(limit, Height + growth + 14);
+            if (nextHeight <= Height + .5) return;
+
+            _isConfiguringSize = true;
+            try
+            {
+                Height = nextHeight;
+                UpdateContentLayout();
+                UpdateLayout();
+                PositionNear(
+                    _anchorX,
+                    _anchorY,
+                    _hasAnchorRect
+                        ? _anchorRect
+                        : new NativeMethods.RECT());
+            }
+            finally { _isConfiguringSize = false; }
+
+            if (pass < 2 && nextHeight < limit - 1)
+            {
+                Dispatcher.BeginInvoke(
+                    DispatcherPriority.Loaded,
+                    new Action(delegate
+                    {
+                        EnsureRenderedContentFit(pass + 1);
+                    }));
+            }
+        }
+
+        private static ScrollViewer GetTextScrollViewer(TextBox box)
+        {
+            if (box == null) return null;
+            box.ApplyTemplate();
+            return box.Template == null
+                ? null
+                : box.Template.FindName("PART_ContentHost", box)
+                    as ScrollViewer;
+        }
+
+        private void UpdateContentLayout()
+        {
+            if (_contentGrid == null || _sourcePanel == null ||
+                _translationPanel == null)
+                return;
+            bool showSource = _popupMode == TranslationPopupMode.Ocr;
+            // Keep the visual tree consistent even when a resize/state change
+            // occurs between translation requests (or while the popup is
+            // being constructed).
+            _sourcePanel.Visibility = showSource
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            bool split = showSource &&
+                         (WindowState == WindowState.Maximized ||
+                          ActualWidth >= 760);
+            _contentGrid.RowDefinitions.Clear();
+            _contentGrid.ColumnDefinitions.Clear();
+            if (split)
+            {
+                _contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+                {
+                    Width = new GridLength(45, GridUnitType.Star)
+                });
+                _contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+                {
+                    Width = new GridLength(55, GridUnitType.Star)
+                });
+                _contentGrid.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = new GridLength(1, GridUnitType.Star)
+                });
+                _sourcePanel.Margin = new Thickness(0, 0, 7, 0);
+                _translationPanel.Margin = new Thickness(7, 0, 0, 0);
+                Grid.SetRow(_sourcePanel, 0);
+                Grid.SetColumn(_sourcePanel, 0);
+                Grid.SetRow(_translationPanel, 0);
+                Grid.SetColumn(_translationPanel, 1);
+            }
+            else if (!showSource)
+            {
+                // Selection mode presents only the translated result.  Use a
+                // single star-sized row so there is no empty source row or
+                // residual spacing above the translation card.
+                _contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+                {
+                    Width = new GridLength(1, GridUnitType.Star)
+                });
+                _contentGrid.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = new GridLength(1, GridUnitType.Star)
+                });
+                _sourcePanel.Margin = new Thickness(0);
+                _translationPanel.Margin = new Thickness(0);
+                Grid.SetRow(_translationPanel, 0);
+                Grid.SetColumn(_translationPanel, 0);
+            }
+            else
+            {
+                _contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+                {
+                    Width = new GridLength(1, GridUnitType.Star)
+                });
+                _contentGrid.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = new GridLength(
+                        _ocrSourceShare,
+                        GridUnitType.Star)
+                });
+                _contentGrid.RowDefinitions.Add(new RowDefinition
+                {
+                    Height = new GridLength(
+                        100 - _ocrSourceShare,
+                        GridUnitType.Star)
+                });
+                _sourcePanel.Margin = new Thickness(0);
+                _translationPanel.Margin = new Thickness(0);
+                Grid.SetRow(_sourcePanel, 0);
+                Grid.SetColumn(_sourcePanel, 0);
+                Grid.SetRow(_translationPanel, 1);
+                Grid.SetColumn(_translationPanel, 0);
+            }
+        }
+
+        private void ToggleSourceExpanded()
+        {
+            if (_ocrMode) return;
+            _sourceExpanded = !_sourceExpanded;
+            _sourceSummary.Visibility = _sourceExpanded
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            _source.Visibility = _sourceExpanded
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            _sourceCard.ToolTip = _sourceExpanded
+                ? "点击收起原文"
+                : "点击展开完整原文";
+            UpdateCompactHeight(_currentText);
+        }
+
+        private void SetOcrDirty(bool dirty)
+        {
+            _ocrDirty = dirty;
+            if (_sourceState != null)
+            {
+                _sourceState.Text = dirty ? "已修改 · 已自动固定" : "";
+                _sourceState.Visibility = dirty
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
+            if (_sourceCard != null)
+                _sourceCard.BorderBrush = dirty
+                    ? Brush("#E8C98E")
+                    : Brush("#D7E6EA");
+            if (dirty && !_isPinned) SetPinned(true);
+        }
+
+        private StackPanel BuildErrorPanel()
+        {
+            var panel = new StackPanel
+            {
+                Margin = new Thickness(5, 7, 8, 7),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _errorText = new TextBlock
+            {
+                Foreground = Brush("#A23D4A"),
+                FontSize = 12.5,
+                TextWrapping = TextWrapping.Wrap
+            };
+            panel.Children.Add(_errorText);
+            var buttons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            _retryButton = MakeSecondaryButton("重试");
+            _retryButton.Click += delegate { RetryCurrentTranslation(); };
+            _openSettingsButton = MakeSecondaryButton("打开设置");
+            _openSettingsButton.Click += delegate
+            {
+                DismissImmediately();
+                var handler = SettingsRequested;
+                if (handler != null) handler(this, EventArgs.Empty);
+            };
+            buttons.Children.Add(_retryButton);
+            buttons.Children.Add(_openSettingsButton);
+            panel.Children.Add(buttons);
+            return panel;
+        }
+
+        private void ShowTranslationError(Exception error)
+        {
+            _translation.Text = "";
+            _translation.Visibility = Visibility.Collapsed;
+            _copyTranslation.Visibility = Visibility.Collapsed;
+            _errorText.Text = FriendlyError(error);
+            _errorPanel.Visibility = Visibility.Visible;
+            _meta.Text = "翻译失败  ·  " + ProviderName(
+                _activeSettings == null ? "" : _activeSettings.Provider);
+        }
+
+        private static string FriendlyError(Exception error)
+        {
+            string message = error == null ? "未知错误。" : error.Message;
+            if (message.IndexOf("密钥", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("API 地址", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("配置", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "当前翻译服务尚未配置，请检查 API 地址和密钥。";
+            if (message.IndexOf("超时", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                error is TimeoutException)
+                return "连接翻译服务超时，请稍后重试。";
+            if (message.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("429", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("额度", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "翻译服务拒绝了请求，请检查密钥、权限或额度。";
+            if (message.Length > 150) message = message.Substring(0, 150) + "…";
+            return "翻译失败：" + message;
+        }
+
+        private void RetryCurrentTranslation()
+        {
+            string text = _ocrMode ? (_source.Text ?? "") : _currentText;
+            if (string.IsNullOrWhiteSpace(text) ||
+                _activeSettings == null || _activeClient == null)
+                return;
+            BeginTranslation(
+                text,
+                _anchorX,
+                _anchorY,
+                _anchorRect,
+                _activeSettings,
+                _activeClient,
+                _ocrMode,
+                _ocrMetaSuffix,
+                false);
+        }
+
+        public bool IsPinned { get { return _isPinned; } }
+
+        public void SetPinned(bool pinned)
+        {
+            _isPinned = pinned;
+            UpdatePinGlyph();
+        }
+
+        private void TogglePinned()
+        {
+            SetPinned(!_isPinned);
+        }
+
+        public void Dismiss()
+        {
+            if (_isDismissing) return;
+            bool wasVisible = IsVisible;
+            _hideTimer.Stop();
+            _loadingTimer.Stop();
+            _noticeTimer.Stop();
+            if (_cancellation != null) _cancellation.Cancel();
+            if (_modelPopup != null) _modelPopup.IsOpen = false;
+            if (!wasVisible) return;
+            _isDismissing = true;
+            if (ShouldAnimate())
+            {
+                var animation = new DoubleAnimation
+                {
+                    From = Opacity,
+                    To = 0,
+                    Duration = TimeSpan.FromMilliseconds(120),
+                    FillBehavior = FillBehavior.Stop
+                };
+                animation.Completed += delegate { FinishDismiss(); };
+                BeginAnimation(OpacityProperty, animation);
+            }
+            else FinishDismiss();
+        }
+
+        public void DismissImmediately()
+        {
+            bool wasVisible = IsVisible;
+            _hideTimer.Stop();
+            _loadingTimer.Stop();
+            _noticeTimer.Stop();
+            if (_cancellation != null) _cancellation.Cancel();
+            if (_modelPopup != null) _modelPopup.IsOpen = false;
+            BeginAnimation(OpacityProperty, null);
+            _isDismissing = false;
+            Opacity = 1;
+            if (wasVisible)
+            {
+                Hide();
+                var handler = Dismissed;
+                if (handler != null) handler(this, EventArgs.Empty);
+            }
+        }
+
+        public bool HandleEscape()
+        {
+            if (_modelPopup != null && _modelPopup.IsOpen)
+            {
+                _modelPopup.IsOpen = false;
+                return true;
+            }
+            Dismiss();
+            return true;
+        }
+
+        public void ShowTransientNotice(string message, int x, int y)
+        {
+            if (_cancellation != null) _cancellation.Cancel();
+            _noticeTimer.Stop();
+            _loadingTimer.Stop();
+            _isDismissing = false;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            _ocrMode = false;
+            _popupMode = TranslationPopupMode.Selection;
+            _currentText = "";
+            _translatedText = "";
+            _ocrMetaSuffix = "";
+            _modelChipHost.Visibility = Visibility.Collapsed;
+            _sourcePanel.Visibility = Visibility.Collapsed;
+            _translationPanel.Visibility = Visibility.Visible;
+            _sourceState.Visibility = Visibility.Collapsed;
+            _translation.Visibility = Visibility.Visible;
+            _translation.Foreground = Brush("#7A5B1A");
+            _translation.Text = message ?? "操作未完成。";
+            _errorPanel.Visibility = Visibility.Collapsed;
+            _progress.Visibility = Visibility.Collapsed;
+            _loadingText.Visibility = Visibility.Collapsed;
+            _meta.Text = "提示";
+            SetOcrActionsVisible(false);
+            _copyTranslation.Visibility = Visibility.Collapsed;
+            if (WindowState == WindowState.Maximized)
+                WindowState = WindowState.Normal;
+            MinWidth = 300;
+            MinHeight = 120;
+            Width = 360;
+            Height = 150;
+            UpdateContentLayout();
+            if (!IsVisible)
+            {
+                Opacity = 0;
+                BeginAnimation(OpacityProperty, null);
+                Show();
+                PositionNear(x, y, new NativeMethods.RECT());
+                AnimateOpacity(0, 1, 120);
+            }
+            else
+            {
+                PositionNear(x, y, new NativeMethods.RECT());
+                Opacity = 1;
+            }
+            _noticeTimer.Start();
+        }
+
+        private void FinishDismiss()
+        {
+            _isDismissing = false;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 1;
+            if (IsVisible) Hide();
+            var handler = Dismissed;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
+        private bool ShouldAnimate()
+        {
+            try { return SystemParameters.ClientAreaAnimation; }
+            catch { return true; }
+        }
+
+        private void AnimateOpacity(double from, double to, int milliseconds)
+        {
+            if (!ShouldAnimate())
+            {
+                Opacity = to;
+                return;
+            }
+            BeginAnimation(OpacityProperty,
+                new DoubleAnimation(
+                    from,
+                    to,
+                    TimeSpan.FromMilliseconds(milliseconds)));
+        }
+
+        private void RaiseVisibilityChanged()
+        {
+            var handler = VisibilityChanged;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
+
+        private bool IsPointInsideWindow(int x, int y)
+        {
+            NativeMethods.RECT rect;
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            if (handle != IntPtr.Zero && NativeMethods.GetWindowRect(handle, out rect))
+                return x >= rect.Left && x < rect.Right &&
+                       y >= rect.Top && y < rect.Bottom;
+            return IsMouseOver;
         }
 
         private FrameworkElement BuildModelChip()
@@ -768,8 +1727,9 @@ namespace GlobalTranslator
             if (string.IsNullOrWhiteSpace(text)) return;
             BeginTranslation(
                 text,
-                0,
-                0,
+                _anchorX,
+                _anchorY,
+                _anchorRect,
                 _activeSettings,
                 _activeClient,
                 _ocrMode,
@@ -779,8 +1739,7 @@ namespace GlobalTranslator
 
         private void RequestModelSettings()
         {
-            _hideTimer.Stop();
-            Hide();
+            DismissImmediately();
             var handler = ModelSettingsRequested;
             if (handler != null) handler(this, EventArgs.Empty);
         }
@@ -789,18 +1748,17 @@ namespace GlobalTranslator
         {
             var header = new Border
             {
-                Background = new LinearGradientBrush(
-                    Color.FromArgb(244, 15, 89, 116),
-                    Color.FromArgb(226, 34, 163, 179),
-                    16),
-                CornerRadius = new CornerRadius(19, 19, 0, 0),
-                Padding = new Thickness(15, 9, 11, 9),
+                Background = Brush("#F0FAFB"),
+                BorderBrush = Brush("#D5E8EB"),
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                CornerRadius = new CornerRadius(18, 18, 0, 0),
+                Padding = new Thickness(12, 7, 10, 7),
                 Cursor = Cursors.SizeAll
             };
             header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
             {
                 Point point = e.GetPosition(header);
-                if (point.X >= header.ActualWidth - 76) return;
+                if (point.X >= header.ActualWidth - 145) return;
                 if (e.ClickCount == 2)
                 {
                     ToggleMaximize();
@@ -816,13 +1774,8 @@ namespace GlobalTranslator
 
             _collapseButton = MakeGhostHeaderButton(
                 "M 2,4 L 7,9 L 12,4",
-                "收起");
-            _collapseButton.Click += delegate
-            {
-                _hideTimer.Stop();
-                _modelPopup.IsOpen = false;
-                Hide();
-            };
+                "收起 (Esc)");
+            _collapseButton.Click += delegate { Dismiss(); };
             DockPanel.SetDock(_collapseButton, Dock.Right);
             panel.Children.Add(_collapseButton);
 
@@ -835,11 +1788,18 @@ namespace GlobalTranslator
             DockPanel.SetDock(_expandButton, Dock.Right);
             panel.Children.Add(_expandButton);
 
+            _pinButton = MakeGhostHeaderButton(PinGeometry(), "固定");
+            _pinGlyph = _pinButton.Content as System.Windows.Shapes.Path;
+            _pinButton.Click += delegate { TogglePinned(); };
+            _pinButton.MouseLeave += delegate { UpdatePinGlyph(); };
+            DockPanel.SetDock(_pinButton, Dock.Right);
+            panel.Children.Add(_pinButton);
+
             var logo = new Image
             {
-                Width = 36,
-                Height = 36,
-                Margin = new Thickness(0, 0, 9, 0),
+                Width = 28,
+                Height = 28,
+                Margin = new Thickness(0, 0, 8, 0),
                 Stretch = Stretch.Uniform,
                 Source = new BitmapImage(new Uri(
                     "pack://application:,,,/Sharkey;component/assets/shark-logo.png"))
@@ -851,14 +1811,14 @@ namespace GlobalTranslator
             identity.Children.Add(new TextBlock
             {
                 Text = "鲨译",
-                Foreground = Brushes.White,
-                FontSize = 17,
-                FontWeight = FontWeights.Bold
+                Foreground = Navy,
+                FontSize = 15.5,
+                FontWeight = FontWeights.SemiBold
             });
             _meta = new TextBlock
             {
                 Text = "正在翻译…",
-                Foreground = Brush("#BFEAF1"),
+                Foreground = Muted,
                 FontSize = 11,
                 Margin = new Thickness(0, 2, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
@@ -870,7 +1830,7 @@ namespace GlobalTranslator
 
         private DockPanel BuildActions()
         {
-            var actions = new DockPanel { Margin = new Thickness(0, 11, 0, 0) };
+            var actions = new DockPanel { Margin = new Thickness(0, 9, 0, 0) };
             _copyTranslation = MakePrimaryButton("复制译文");
             _copyTranslation.Click += delegate
             {
@@ -910,14 +1870,20 @@ namespace GlobalTranslator
                 string edited = (_source.Text ?? "").Trim();
                 if (edited.Length == 0) return;
                 BeginTranslation(
-                    edited, 0, 0, _activeSettings, _activeClient,
-                    true, _ocrMetaSuffix, false);
+                    edited,
+                    _anchorX,
+                    _anchorY,
+                    _anchorRect,
+                    _activeSettings,
+                    _activeClient,
+                    true,
+                    _ocrMetaSuffix,
+                    false);
             };
             _recapture = MakeSecondaryButton("重新框选");
             _recapture.Click += delegate
             {
-                _hideTimer.Stop();
-                Hide();
+                DismissImmediately();
                 var handler = OcrRecaptureRequested;
                 if (handler != null) handler(this, EventArgs.Empty);
             };
@@ -945,12 +1911,16 @@ namespace GlobalTranslator
             long packed = lParam.ToInt64();
             int screenX = unchecked((short)(packed & 0xFFFF));
             int screenY = unchecked((short)((packed >> 16) & 0xFFFF));
-            Point point = PointFromScreen(new Point(screenX, screenY));
-            const double edge = 8;
-            bool left = point.X <= edge;
-            bool right = point.X >= ActualWidth - edge;
-            bool top = point.Y <= edge;
-            bool bottom = point.Y >= ActualHeight - edge;
+            NativeMethods.RECT windowRect;
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            if (!NativeMethods.GetWindowRect(handle, out windowRect))
+                return IntPtr.Zero;
+            double scale = NativeMethods.GetWindowDpi(handle) / 96.0;
+            int edge = Math.Max(8, (int)Math.Round(8 * scale));
+            bool left = screenX - windowRect.Left <= edge;
+            bool right = windowRect.Right - screenX <= edge;
+            bool top = screenY - windowRect.Top <= edge;
+            bool bottom = windowRect.Bottom - screenY <= edge;
 
             int hit = 0;
             if (left && top) hit = HtTopLeft;
@@ -987,19 +1957,102 @@ namespace GlobalTranslator
                 : ExpandGeometry();
             _expandButton.ToolTip =
                 maximized ? "还原" : "放大";
+            UpdatePinGlyph();
         }
 
-        private void PositionNear(int x, int y)
+        private void UpdatePinGlyph()
         {
+            if (_pinGlyph == null || _pinButton == null) return;
+            _pinGlyph.Stroke = _isPinned ? Ocean : Muted;
+            _pinButton.ToolTip = _isPinned ? "取消固定" : "固定";
+        }
+
+        private void PositionNear(
+            int x, int y, NativeMethods.RECT screenBounds)
+        {
+            if (WindowState == WindowState.Maximized) return;
             var screen = System.Windows.Forms.Screen.FromPoint(
                 new System.Drawing.Point(x, y)).WorkingArea;
-            double currentWidth = ActualWidth > 0 ? ActualWidth : Width;
-            double currentHeight = ActualHeight > 0 ? ActualHeight : Height;
-            Left = Math.Max(
-                screen.Left + 10, Math.Min(x + 16, screen.Right - currentWidth - 10));
-            Top = y + 20;
-            if (Top + currentHeight > screen.Bottom)
-                Top = Math.Max(screen.Top + 10, y - currentHeight - 15);
+            uint targetDpi = NativeMethods.GetMonitorDpi(x, y);
+            if (targetDpi == 0)
+                targetDpi = NativeMethods.GetWindowDpi(
+                    new WindowInteropHelper(this).Handle);
+            double dpi = targetDpi;
+            if (dpi < 96) dpi = 96;
+            double scale = dpi / 96.0;
+            int width = (int)Math.Ceiling(
+                (Width > 0 ? Width : ActualWidth) * scale);
+            int height = (int)Math.Ceiling(
+                (Height > 0 ? Height : ActualHeight) * scale);
+            // A compact card should never be placed beyond a very small
+            // work area (remote desktop sessions and taskbar-heavy layouts
+            // can be shorter than the normal 360 DIP maximum).
+            width = Math.Min(width, Math.Max(1, screen.Width - 20));
+            height = Math.Min(height, Math.Max(1, screen.Height - 20));
+            int left;
+            int top;
+            bool hasBounds = screenBounds.Right > screenBounds.Left &&
+                             screenBounds.Bottom > screenBounds.Top;
+            if (hasBounds)
+            {
+                left = screenBounds.Right + 14;
+                top = screenBounds.Top;
+                if (left + width > screen.Right - 10)
+                    left = screenBounds.Left - width - 14;
+                if (top + height > screen.Bottom - 10)
+                    top = screenBounds.Bottom - height;
+            }
+            else
+            {
+                left = x + 16;
+                top = y + 16;
+                if (top + height > screen.Bottom - 10)
+                    top = y - height - 16;
+            }
+            left = Math.Max(screen.Left + 10,
+                Math.Min(left, screen.Right - width - 10));
+            top = Math.Max(screen.Top + 10,
+                Math.Min(top, screen.Bottom - height - 10));
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            if (handle != IntPtr.Zero &&
+                NativeMethods.SetWindowPos(
+                    handle,
+                    IntPtr.Zero,
+                    left,
+                    top,
+                    width,
+                    height,
+                    NativeMethods.SWP_NOACTIVATE |
+                    NativeMethods.SWP_NOZORDER))
+                return;
+            // The native path above keeps negative and mixed-DPI monitor
+            // coordinates in physical pixels.  The WPF fallback is useful
+            // before an HWND exists or when a restricted desktop rejects the
+            // positioning call.
+            Left = left / scale;
+            Top = top / scale;
+        }
+
+        private static string CompactSourceText(string text)
+        {
+            string value = (text ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (value.Length > 180) value = value.Substring(0, 180) + "…";
+            return value;
+        }
+
+        private static string FormatResultMeta(
+            TranslationResult result, AppSettings settings)
+        {
+            string target = result == null ||
+                            string.IsNullOrEmpty(result.EffectiveTargetLanguage)
+                ? (settings == null ? "" : settings.TargetLanguage)
+                : result.EffectiveTargetLanguage;
+            string source = result == null ? "" : result.DetectedLanguage;
+            string direction = string.IsNullOrWhiteSpace(source)
+                ? "→ " + LanguageName(target)
+                : LanguageName(source) + " → " + LanguageName(target);
+            return (result == null ? "鲨译" : result.Provider) +
+                   "  ·  " + direction;
         }
 
         private static TextBox MakeSelectableTextBox(
@@ -1076,8 +2129,8 @@ namespace GlobalTranslator
             var glyph = new System.Windows.Shapes.Path
             {
                 Data = geometry,
-                Stroke = Brushes.White,
-                StrokeThickness = 1.55,
+                Stroke = Muted,
+                StrokeThickness = 1.45,
                 StrokeStartLineCap = PenLineCap.Round,
                 StrokeEndLineCap = PenLineCap.Round,
                 StrokeLineJoin = PenLineJoin.Round,
@@ -1093,7 +2146,7 @@ namespace GlobalTranslator
                 Width = 30,
                 Height = 30,
                 Margin = new Thickness(4, 0, 0, 0),
-                Foreground = Brushes.White,
+                Foreground = Muted,
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 Cursor = Cursors.Hand,
@@ -1102,15 +2155,17 @@ namespace GlobalTranslator
             };
             button.MouseEnter += delegate
             {
-                button.Background = Brush("#2AFFFFFF");
+                button.Background = Brush("#DCEEF1");
+                glyph.Stroke = Ocean;
             };
             button.MouseLeave += delegate
             {
                 button.Background = Brushes.Transparent;
+                glyph.Stroke = Muted;
             };
             button.PreviewMouseLeftButtonDown += delegate
             {
-                button.Background = Brush("#3DFFFFFF");
+                button.Background = Brush("#C9E6EA");
             };
             return button;
         }
@@ -1131,19 +2186,28 @@ namespace GlobalTranslator
                 "M 1,4 L 10,4 L 10,13 L 1,13 Z");
         }
 
+        private static Geometry PinGeometry()
+        {
+            return Geometry.Parse(
+                "M 5,2 L 11,2 L 10,7 L 13,10 L 9,10 L 9,14 " +
+                "L 7,14 L 7,10 L 3,10 L 6,7 Z");
+        }
+
         private static Button MakePrimaryButton(string text)
         {
             return new Button
             {
                 Content = text,
-                MinWidth = 104,
-                Height = 34,
-                Padding = new Thickness(14, 5, 14, 5),
+                MinWidth = 96,
+                Height = 32,
+                Padding = new Thickness(12, 5, 12, 5),
                 Background = Ocean,
                 Foreground = Brushes.White,
                 BorderThickness = new Thickness(0),
                 FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                Template = RoundedButtonTemplate(10)
             };
         }
 
@@ -1153,7 +2217,7 @@ namespace GlobalTranslator
             {
                 Content = text,
                 MinWidth = 70,
-                Height = 34,
+                Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
                 Padding = new Thickness(9, 5, 9, 5),
                 Background = Brush("#EFF7FA"),
@@ -1161,7 +2225,9 @@ namespace GlobalTranslator
                 BorderBrush = Brush("#C9E1E8"),
                 BorderThickness = new Thickness(1),
                 FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                Template = RoundedButtonTemplate(9)
             };
         }
 
@@ -1236,11 +2302,19 @@ namespace GlobalTranslator
         {
             switch (code)
             {
-                case "zh-Hans": return "简体中文";
-                case "zh-Hant": return "繁體中文";
-                case "en": return "English";
-                case "ja": return "日本語";
-                case "ko": return "한국어";
+                case "zh-Hans":
+                case "zh-CN":
+                case "zh-SG": return "简体中文";
+                case "zh-Hant":
+                case "zh-TW":
+                case "zh-HK": return "繁體中文";
+                case "en":
+                case "en-US":
+                case "en-GB": return "English";
+                case "ja":
+                case "ja-JP": return "日本語";
+                case "ko":
+                case "ko-KR": return "한국어";
                 case "fr": return "Français";
                 case "de": return "Deutsch";
                 case "es": return "Español";

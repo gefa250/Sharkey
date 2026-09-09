@@ -21,6 +21,7 @@ namespace GlobalTranslator
         public string DetectedLanguage;
         public string Provider;
         public string EffectiveTargetLanguage;
+        public bool FromCache;
     }
 
     internal sealed class TranslationClient : IDisposable
@@ -31,6 +32,14 @@ namespace GlobalTranslator
         private string _bingToken;
         private string _bingIg;
         private DateTime _bingSessionExpiresUtc;
+        private readonly object _cacheGate = new object();
+        private readonly Dictionary<string, TranslationCacheEntry> _translationCache =
+            new Dictionary<string, TranslationCacheEntry>(StringComparer.Ordinal);
+        private readonly LinkedList<string> _translationCacheOrder =
+            new LinkedList<string>();
+        private const int TranslationCacheCapacity = 20;
+        private static readonly TimeSpan TranslationCacheLifetime =
+            TimeSpan.FromMinutes(15);
 
         public TranslationClient()
         {
@@ -47,20 +56,34 @@ namespace GlobalTranslator
         public async Task<TranslationResult> TranslateAsync(
             string text, AppSettings settings, CancellationToken token, Action<string> progress)
         {
+            token.ThrowIfCancellationRequested();
             string targetLanguage = SmartTargetResolver.Resolve(
                 text,
                 settings.TargetLanguageMode,
                 settings.TargetLanguage);
+            string cacheKey = BuildTranslationCacheKey(
+                text, targetLanguage, settings);
+            TranslationResult cached = GetCachedTranslation(cacheKey);
+            if (cached != null)
+            {
+                cached.EffectiveTargetLanguage = targetLanguage;
+                cached.FromCache = true;
+                return cached;
+            }
             if (SmartTargetResolver.ShouldPreserveContent(
                 text, settings.TargetLanguageMode))
             {
-                return new TranslationResult
+                token.ThrowIfCancellationRequested();
+                TranslationResult preserved = new TranslationResult
                 {
                     Text = text ?? "",
                     DetectedLanguage = "",
                     Provider = "鲨译",
-                    EffectiveTargetLanguage = targetLanguage
+                    EffectiveTargetLanguage = targetLanguage,
+                    FromCache = false
                 };
+                PutCachedTranslation(cacheKey, preserved);
+                return preserved;
             }
             TranslationResult result;
             if (string.Equals(settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
@@ -78,8 +101,102 @@ namespace GlobalTranslator
             else
                 result = await TranslateMicrosoftAsync(
                     text, targetLanguage, settings, token);
+            token.ThrowIfCancellationRequested();
             result.EffectiveTargetLanguage = targetLanguage;
+            result.FromCache = false;
+            PutCachedTranslation(cacheKey, result);
             return result;
+        }
+
+        private static string BuildTranslationCacheKey(
+            string text, string targetLanguage, AppSettings settings)
+        {
+            var builder = new StringBuilder();
+            builder.Append(settings == null ? "" : settings.Provider ?? "");
+            builder.Append('\u001f').Append(targetLanguage ?? "");
+            // Smart mode can intentionally preserve URLs, numbers, or code,
+            // while Fixed mode translates the same text. Keep those outcomes
+            // isolated even when their effective target happens to match.
+            builder.Append('\u001f').Append(
+                settings == null ? "" : settings.TargetLanguageMode ?? "");
+            if (settings != null && string.Equals(
+                    settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
+            {
+                builder.Append('\u001f').Append(settings.ModelVendor ?? "");
+                builder.Append('\u001f').Append(settings.ModelName ?? "");
+                builder.Append('\u001f').Append(settings.ModelBaseUrl ?? "");
+            }
+            else if (settings != null && string.Equals(
+                         settings.Provider, "Microsoft", StringComparison.OrdinalIgnoreCase))
+            {
+                // Region changes the official Microsoft endpoint context but
+                // is not itself a secret, so it belongs in the cache scope.
+                builder.Append('\u001f').Append(settings.MicrosoftRegion ?? "");
+            }
+            builder.Append('\u001f').Append(text ?? "");
+            return builder.ToString();
+        }
+
+        private TranslationResult GetCachedTranslation(string key)
+        {
+            lock (_cacheGate)
+            {
+                TranslationCacheEntry entry;
+                if (!_translationCache.TryGetValue(key, out entry)) return null;
+                if (DateTime.UtcNow >= entry.ExpiresUtc)
+                {
+                    _translationCache.Remove(key);
+                    if (entry.Node != null) _translationCacheOrder.Remove(entry.Node);
+                    return null;
+                }
+                if (entry.Node != null)
+                {
+                    _translationCacheOrder.Remove(entry.Node);
+                    _translationCacheOrder.AddLast(entry.Node);
+                }
+                return CloneTranslation(entry.Result);
+            }
+        }
+
+        private void PutCachedTranslation(string key, TranslationResult value)
+        {
+            if (value == null || string.IsNullOrWhiteSpace(value.Text)) return;
+            lock (_cacheGate)
+            {
+                TranslationCacheEntry old;
+                if (_translationCache.TryGetValue(key, out old))
+                {
+                    if (old.Node != null) _translationCacheOrder.Remove(old.Node);
+                    _translationCache.Remove(key);
+                }
+                LinkedListNode<string> node = _translationCacheOrder.AddLast(key);
+                _translationCache[key] = new TranslationCacheEntry
+                {
+                    Result = CloneTranslation(value),
+                    ExpiresUtc = DateTime.UtcNow.Add(TranslationCacheLifetime),
+                    Node = node
+                };
+                while (_translationCache.Count > TranslationCacheCapacity)
+                {
+                    LinkedListNode<string> first = _translationCacheOrder.First;
+                    if (first == null) break;
+                    _translationCacheOrder.RemoveFirst();
+                    _translationCache.Remove(first.Value);
+                }
+            }
+        }
+
+        private static TranslationResult CloneTranslation(TranslationResult value)
+        {
+            if (value == null) return null;
+            return new TranslationResult
+            {
+                Text = value.Text,
+                DetectedLanguage = value.DetectedLanguage,
+                Provider = value.Provider,
+                EffectiveTargetLanguage = value.EffectiveTargetLanguage,
+                FromCache = value.FromCache
+            };
         }
 
         public async Task<string> RecognizeImageAsync(
@@ -618,7 +735,22 @@ namespace GlobalTranslator
             }
         }
 
-        public void Dispose() { _http.Dispose(); }
+        public void Dispose()
+        {
+            lock (_cacheGate)
+            {
+                _translationCache.Clear();
+                _translationCacheOrder.Clear();
+            }
+            _http.Dispose();
+        }
+
+        private sealed class TranslationCacheEntry
+        {
+            public TranslationResult Result;
+            public DateTime ExpiresUtc;
+            public LinkedListNode<string> Node;
+        }
 
         [DataContract]
         private sealed class MicrosoftResponse
