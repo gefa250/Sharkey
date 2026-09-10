@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -38,6 +40,8 @@ namespace GlobalTranslator
         private ComboBox _modelVendor;
         private CheckBox _ocrAiFallback;
         private CheckBox _ocrLocalFallback;
+        private Button _copyDiagnostics;
+        private Button _openDiagnosticFolder;
         private TextBox _ocrVisionModel;
         private Button _cancelSettings;
         private TextBox _translateHotkey;
@@ -688,7 +692,82 @@ namespace GlobalTranslator
             });
             versionCard.Child = version;
             root.Children.Add(versionCard);
+
+            var diagnosticsCard = Card();
+            diagnosticsCard.Padding = new Thickness(16);
+            diagnosticsCard.Margin = new Thickness(0, 12, 0, 0);
+            var diagnostics = new StackPanel();
+            diagnostics.Children.Add(new TextBlock
+            {
+                Text = "诊断与支持",
+                FontSize = 14,
+                FontWeight = FontWeights.Bold,
+                Foreground = Navy
+            });
+            diagnostics.Children.Add(new TextBlock
+            {
+                Text = "若其他电脑无法启动或快捷键无响应，复制诊断信息并附上日志文件即可定位。诊断摘要不包含 API Key 或翻译原文。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Muted,
+                FontSize = 10.5,
+                Margin = new Thickness(0, 6, 0, 10)
+            });
+            var diagnosticActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal
+            };
+            _copyDiagnostics = SecondaryButton("复制诊断信息");
+            _copyDiagnostics.Margin = new Thickness(0, 0, 8, 0);
+            _copyDiagnostics.Click += CopyDiagnosticsClick;
+            diagnosticActions.Children.Add(_copyDiagnostics);
+            _openDiagnosticFolder = SecondaryButton("打开日志目录");
+            _openDiagnosticFolder.Click += OpenDiagnosticFolderClick;
+            diagnosticActions.Children.Add(_openDiagnosticFolder);
+            diagnostics.Children.Add(diagnosticActions);
+            diagnosticsCard.Child = diagnostics;
+            root.Children.Add(diagnosticsCard);
             return Scroll(root);
+        }
+
+        private void CopyDiagnosticsClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Clipboard.SetText(DiagnosticLog.BuildSupportSummary());
+                _copyDiagnostics.Content = "已复制";
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(
+                    "复制诊断信息失败：" + error.Message,
+                    "Sharkey",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
+        }
+
+        private void OpenDiagnosticFolderClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                DiagnosticLog.Write("Diagnostic folder requested");
+                Directory.CreateDirectory(DiagnosticLog.FolderPath);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "/select,\"" + DiagnosticLog.FilePath + "\"",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show(
+                    "无法打开日志目录：" + error.Message + "\n\n" +
+                    DiagnosticLog.FolderPath,
+                    "Sharkey",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+            }
         }
 
         private TextBox AddHotkeyRecorder(

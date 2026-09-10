@@ -26,26 +26,62 @@ namespace GlobalTranslator
         private ToolStripMenuItem _startupMenuItem;
         private HwndSource _messageWindow;
         private Mutex _mutex;
-        private bool _ocrBusy;
         private int _ocrRequestId;
+        private CancellationTokenSource _ocrCancellation;
+        private bool _screenshotSelecting;
 
         [STAThread]
         public static void Main()
         {
-            NativeMethods.EnablePerMonitorDpiAwareness();
-            bool created;
-            var mutex = new Mutex(
-                true, "Sharkey.SingleInstance.75C36309", out created);
-            if (!created)
+            Mutex mutex = null;
+            try
             {
-                System.Windows.MessageBox.Show(
-                    "鲨译 Sharkey 已在运行。", "Sharkey");
-                return;
-            }
+                DiagnosticLog.WriteStartup();
+                AppDomain.CurrentDomain.UnhandledException += delegate(
+                    object sender, UnhandledExceptionEventArgs args)
+                {
+                    DiagnosticLog.WriteException(
+                        "Unhandled AppDomain exception",
+                        args.ExceptionObject as Exception);
+                };
+                NativeMethods.EnablePerMonitorDpiAwareness();
+                bool created;
+                mutex = new Mutex(
+                    true, "Sharkey.SingleInstance.75C36309", out created);
+                if (!created)
+                {
+                    mutex.Dispose();
+                    System.Windows.MessageBox.Show(
+                        "鲨译 Sharkey 已在运行。", "Sharkey");
+                    return;
+                }
 
-            var app = new TranslatorApplication { _mutex = mutex };
-            app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            app.Run();
+                var app = new TranslatorApplication { _mutex = mutex };
+                mutex = null;
+                app.DispatcherUnhandledException += delegate(
+                    object sender,
+                    System.Windows.Threading.DispatcherUnhandledExceptionEventArgs args)
+                {
+                    DiagnosticLog.WriteException(
+                        "Unhandled dispatcher exception", args.Exception);
+                };
+                app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                app.Run();
+            }
+            catch (Exception error)
+            {
+                DiagnosticLog.WriteException("Fatal startup failure", error);
+                System.Windows.MessageBox.Show(
+                    "鲨译启动失败，诊断日志已保存到：\n" +
+                    DiagnosticLog.FilePath + "\n\n" + error.Message,
+                    "Sharkey 启动失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
+            finally
+            {
+                if (mutex != null) mutex.Dispose();
+            }
         }
 
         protected override void OnStartup(StartupEventArgs e)
@@ -365,6 +401,7 @@ namespace GlobalTranslator
             // Invalidate any OCR result that is still being prepared so an
             // older F9 request cannot replace a newer F8 card.
             _ocrRequestId++;
+            if (_ocrCancellation != null) _ocrCancellation.Cancel();
             if (_popup != null) _popup.DismissImmediately();
             await Task.Delay(60);
             await _monitor.CaptureAtCursorAsync();
@@ -372,30 +409,41 @@ namespace GlobalTranslator
 
         private async void CaptureScreenshotAndTranslate()
         {
-            if (_ocrBusy) return;
-            _ocrBusy = true;
+            if (_screenshotSelecting) return;
+            if (_ocrCancellation != null) _ocrCancellation.Cancel();
+            var activeCancellation = new CancellationTokenSource();
+            _ocrCancellation = activeCancellation;
             int requestId = ++_ocrRequestId;
-            await Task.Delay(60);
-            _popup.DismissImmediately();
             Bitmap image = null;
             NativeMethods.RECT screenshotBounds = new NativeMethods.RECT();
             try
             {
-                using (var selector = new ScreenshotSelector())
+                await Task.Delay(60, activeCancellation.Token);
+                _popup.DismissImmediately();
+                _screenshotSelecting = true;
+                try
                 {
-                    if (selector.ShowDialog() != DialogResult.OK) return;
-                    image = selector.SelectedBitmap;
-                    System.Drawing.Rectangle selectedBounds =
-                        ReadSelectionBounds(selector);
-                    System.Drawing.Rectangle virtualScreen =
-                        SystemInformation.VirtualScreen;
-                    screenshotBounds = new NativeMethods.RECT
+                    using (var selector = new ScreenshotSelector())
                     {
-                        Left = selectedBounds.Left + virtualScreen.Left,
-                        Top = selectedBounds.Top + virtualScreen.Top,
-                        Right = selectedBounds.Right + virtualScreen.Left,
-                        Bottom = selectedBounds.Bottom + virtualScreen.Top
-                    };
+                        if (selector.ShowDialog() != DialogResult.OK) return;
+                        activeCancellation.Token.ThrowIfCancellationRequested();
+                        image = selector.SelectedBitmap;
+                        System.Drawing.Rectangle selectedBounds =
+                            ReadSelectionBounds(selector);
+                        System.Drawing.Rectangle virtualScreen =
+                            SystemInformation.VirtualScreen;
+                        screenshotBounds = new NativeMethods.RECT
+                        {
+                            Left = selectedBounds.Left + virtualScreen.Left,
+                            Top = selectedBounds.Top + virtualScreen.Top,
+                            Right = selectedBounds.Right + virtualScreen.Left,
+                            Bottom = selectedBounds.Bottom + virtualScreen.Top
+                        };
+                    }
+                }
+                finally
+                {
+                    _screenshotSelecting = false;
                 }
                 if (image == null) return;
 
@@ -406,7 +454,7 @@ namespace GlobalTranslator
                     try
                     {
                         string aiText = await _client.RecognizeImageAsync(
-                            image, _settings, CancellationToken.None);
+                            image, _settings, activeCancellation.Token);
                         if (!string.IsNullOrWhiteSpace(aiText))
                         {
                             result = new OcrRecognitionResult
@@ -419,6 +467,10 @@ namespace GlobalTranslator
                                 UsedAi = true
                             };
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception aiError)
                     {
@@ -441,10 +493,15 @@ namespace GlobalTranslator
                             LanguageTag = "auto",
                             AutoEnhance = _settings.OcrAutoEnhance
                         };
-                        result = await _ocr.RecognizeAsync(image, options);
+                        result = await _ocr.RecognizeAsync(
+                            image, options, activeCancellation.Token);
                         if (!string.IsNullOrWhiteSpace(aiFailure))
                             result.Warning = AppendWarning(
                                 result.Warning, aiFailure);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception localError)
                     {
@@ -497,6 +554,10 @@ namespace GlobalTranslator
                 if (!string.IsNullOrEmpty(result.Warning))
                     DiagnosticLog.Write("OCR warning: " + result.Warning);
             }
+            catch (OperationCanceledException)
+            {
+                DiagnosticLog.Write("OCR request canceled");
+            }
             catch (Exception ex)
             {
                 if (requestId != _ocrRequestId) return;
@@ -511,7 +572,9 @@ namespace GlobalTranslator
             finally
             {
                 if (image != null) image.Dispose();
-                _ocrBusy = false;
+                if (ReferenceEquals(_ocrCancellation, activeCancellation))
+                    _ocrCancellation = null;
+                activeCancellation.Dispose();
             }
         }
 
@@ -612,6 +675,7 @@ namespace GlobalTranslator
                 _messageWindow.Dispose();
             }
             if (_monitor != null) _monitor.Dispose();
+            if (_ocrCancellation != null) _ocrCancellation.Cancel();
             if (_client != null) _client.Dispose();
             if (_mutex != null) _mutex.Dispose();
             DiagnosticLog.Write("Application stopped");

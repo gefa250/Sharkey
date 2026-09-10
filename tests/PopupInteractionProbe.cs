@@ -398,6 +398,63 @@ internal static class PopupInteractionProbe
                 .GetValue(settingsWindow);
             Require(localFallback != null && localFallback.IsChecked == true,
                 "Optional Windows OCR fallback is not enabled by default.");
+            Button copyDiagnostics = (Button)settingsWindowType
+                .GetField(
+                    "_copyDiagnostics",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Button openDiagnosticFolder = (Button)settingsWindowType
+                .GetField(
+                    "_openDiagnosticFolder",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Type diagnosticType = app.GetType(
+                "GlobalTranslator.DiagnosticLog", true);
+            string supportSummary = (string)diagnosticType
+                .GetMethod(
+                    "BuildSupportSummary",
+                    BindingFlags.Static | BindingFlags.NonPublic)
+                .Invoke(null, null);
+            Require(
+                copyDiagnostics != null &&
+                string.Equals(
+                    copyDiagnostics.Content as string,
+                    "复制诊断信息") &&
+                openDiagnosticFolder != null &&
+                string.Equals(
+                    openDiagnosticFolder.Content as string,
+                    "打开日志目录") &&
+                supportSummary.IndexOf(
+                    "0.2.2-dev", StringComparison.Ordinal) >= 0 &&
+                supportSummary.IndexOf(
+                    "CLR:", StringComparison.Ordinal) >= 0 &&
+                supportSummary.IndexOf(
+                    "deepseek-secret", StringComparison.Ordinal) < 0 &&
+                supportSummary.IndexOf(
+                    "mimo-secret", StringComparison.Ordinal) < 0,
+                "Support diagnostics are missing, incomplete, or expose a configured key.");
+            Type ocrServiceType = app.GetType(
+                "GlobalTranslator.OcrService", true);
+            Type ocrOptionsType = app.GetType(
+                "GlobalTranslator.OcrOptions", true);
+            Type applicationType = app.GetType(
+                "GlobalTranslator.TranslatorApplication", true);
+            Require(
+                ocrServiceType.GetMethod(
+                    "RecognizeAsync",
+                    BindingFlags.Instance | BindingFlags.Public,
+                    null,
+                    new[]
+                    {
+                        typeof(System.Drawing.Bitmap),
+                        ocrOptionsType,
+                        typeof(System.Threading.CancellationToken)
+                    },
+                    null) != null &&
+                applicationType.GetField(
+                    "_ocrCancellation",
+                    BindingFlags.Instance | BindingFlags.NonPublic) != null,
+                "OCR cancellation is not connected through the application and local OCR service.");
             Button cancelSettings = (Button)settingsWindowType
                 .GetField(
                     "_cancelSettings",

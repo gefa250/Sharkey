@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Windows.Foundation;
 using Windows.Globalization;
@@ -38,8 +39,16 @@ namespace GlobalTranslator
         public async Task<OcrRecognitionResult> RecognizeAsync(
             Bitmap bitmap, OcrOptions options)
         {
+            return await RecognizeAsync(
+                bitmap, options, CancellationToken.None);
+        }
+
+        public async Task<OcrRecognitionResult> RecognizeAsync(
+            Bitmap bitmap, OcrOptions options, CancellationToken token)
+        {
             if (bitmap == null) throw new ArgumentNullException("bitmap");
             options = options ?? new OcrOptions();
+            token.ThrowIfCancellationRequested();
 
             bool automatic = string.IsNullOrWhiteSpace(options.LanguageTag) ||
                 string.Equals(
@@ -61,6 +70,7 @@ namespace GlobalTranslator
                     BuildEnhancedVariants(bitmap, variants);
                 else
                     variants.Add(To24Bit(bitmap));
+                token.ThrowIfCancellationRequested();
 
                 int firstVariant = 0;
                 if (automatic && engines.Count > 1)
@@ -70,12 +80,14 @@ namespace GlobalTranslator
                         engineIndex < engines.Count;
                         engineIndex++)
                     {
+                        token.ThrowIfCancellationRequested();
                         OcrEngine candidateEngine = engines[engineIndex];
                         try
                         {
                             string previewText = CleanupText(
                                 await RecognizeBitmapAsync(
                                     candidateEngine, variants[0]));
+                            token.ThrowIfCancellationRequested();
                             previews.Add(new EnginePreview
                             {
                                 Engine = candidateEngine,
@@ -84,6 +96,10 @@ namespace GlobalTranslator
                                 UsefulCharacters =
                                     UsefulCharacterCount(previewText)
                             });
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
                         }
                         catch
                         {
@@ -128,8 +144,10 @@ namespace GlobalTranslator
 
                 for (int i = firstVariant; i < variants.Count; i++)
                 {
+                    token.ThrowIfCancellationRequested();
                     string text = CleanupText(
                         await RecognizeBitmapAsync(engine, variants[i]));
+                    token.ThrowIfCancellationRequested();
                     candidates.Add(new Candidate
                     {
                         Text = text,
