@@ -59,7 +59,8 @@ git worktree add ..\Sharkey-checkpoint 62d397d
 
 ## 版本与发布
 
-版本唯一来源为 `VersionInfo.cs`，开发版采用 `0.2.0-dev`，正式版采用 `0.2.0`。
+版本唯一来源为 `VersionInfo.cs`，当前修复版为 `0.2.1-dev`，保留旧标签 `v0.2.0-dev`。
+正式发布使用不带 `-dev` 的语义化版本号。
 `scripts/Set-Version.ps1` 用来同步程序集、文件和产品版本；同时维护 `CHANGELOG.md`。
 正式发布使用 `scripts/Package-Release.ps1`，要求已提交且干净的工作区，并在发布成功后
 创建本地版本标签。开发版标签不表示已经完成正式发布回归。

@@ -797,6 +797,42 @@ internal static class PopupInteractionProbe
                 Invoke(window, "SetOcrDirty", true);
                 Invoke(window, "Translate", "456", 100, 100, settings, client);
                 Require(!(bool)Field(window, "_editProtected") && !(bool)Field(window, "_manualLayout"), "New F8 inherited OCR protection or manual layout.");
+                Invoke(window, "DismissImmediately");
+                Invoke(window, "Translate", "456", 100, 100, settings, client);
+                Require(window.IsVisible && window.Opacity == 1 &&
+                    !DependencyPropertyHelper.GetValueSource(window, UIElement.OpacityProperty).IsAnimated,
+                    "F8 still uses an opacity entrance animation.");
+                Invoke(window, "Dismiss");
+                Invoke(window, "Translate", "789", 100, 100, settings, client);
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+                timer.Tick += delegate { timer.Stop(); frame.Continue = false; };
+                timer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+                Require(window.IsVisible && window.Opacity == 1 && text.Text == "789", "Old dismissal hid or faded a new F8 result.");
+                Button copy = (Button)Field(window, "_copyTranslation");
+                foreach (string preset in new[] { "Small", "Standard", "Large" })
+                foreach (double width in new[] { 360.0, 440.0 })
+                {
+                    Invoke(window, "ApplyReadingFont", preset);
+                    window.Width = width;
+                    window.Height = window.MinHeight;
+                    text.Text = new string('g', 500);
+                    double previousTop = -1;
+                    foreach (bool loading in new[] { false, true, false })
+                    {
+                        ((ProgressBar)Field(window, "_progress")).Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+                        ((TextBlock)Field(window, "_loadingText")).Visibility = loading ? Visibility.Visible : Visibility.Collapsed;
+                        copy.Content = loading ? "已复制" : "复制译文";
+                        window.UpdateLayout();
+                        Rect buttonBounds = copy.TransformToAncestor(window).TransformBounds(new Rect(copy.RenderSize));
+                        Require(buttonBounds.Bottom <= window.ActualHeight - 8 && buttonBounds.Right <= window.ActualWidth - 8 && copy.ActualHeight >= 32,
+                            "F8 copy button is clipped at minimum size, font=" + preset);
+                        Require(previousTop < 0 || Math.Abs(previousTop - buttonBounds.Top) < .5, "Loading moved the F8 copy button.");
+                        previousTop = buttonBounds.Top;
+                    }
+                }
+                Console.WriteLine("F8_FIX footer=complete-and-stable entrance=opaque staleDismiss=ignored");
             }
             finally { ((IDisposable)client).Dispose(); }
             Console.WriteLine("READING font=3 presets pin=isolated divider=preserved fit=rendered toolbar=compact");

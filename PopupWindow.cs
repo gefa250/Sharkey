@@ -70,6 +70,9 @@ namespace GlobalTranslator
         private TextBlock _brandTitle;
         private readonly DispatcherTimer _resizeTimer;
         private bool _isDismissing;
+        private int _presentationVersion;
+        private Border _header;
+        private DockPanel _actions;
         private bool _isConfiguringSize;
         private double _lastOcrWidth = 560;
         private double _lastOcrHeight = 480;
@@ -245,6 +248,7 @@ namespace GlobalTranslator
             card.Child = root;
 
             Border header = BuildHeader();
+            _header = header;
             Grid.SetRow(header, 0);
             root.Children.Add(header);
 
@@ -395,6 +399,7 @@ namespace GlobalTranslator
             _body.Children.Add(progressPanel);
 
             DockPanel actions = BuildActions();
+            _actions = actions;
             Grid.SetRow(actions, 3);
             _body.Children.Add(actions);
 
@@ -472,6 +477,7 @@ namespace GlobalTranslator
             bool ocrMode, string ocrMetaSuffix, bool reposition)
         {
             if (_cancellation != null) _cancellation.Cancel();
+            _presentationVersion++;
             _cancellation = new CancellationTokenSource();
             CancellationTokenSource activeCancellation = _cancellation;
             _isDismissing = false;
@@ -542,19 +548,29 @@ namespace GlobalTranslator
                 _meta.Text = (settings.Provider == "ModelApi" ? "" : ProviderName(settings.Provider) + " · ") + "→ " + LanguageName(SmartTargetResolver.Resolve(
                     _currentText, settings.TargetLanguageMode, settings.TargetLanguage));
             _meta.ToolTip = ProviderName(settings.Provider);
+            UpdateContentLayout();
             if (reposition) ConfigureModeSize("");
             // Keep fast requests visually quiet. The timer reveals the
             // progress line only after a request takes noticeable time.
             _progress.Visibility = Visibility.Collapsed;
             if (!IsVisible)
             {
-                Opacity = 0;
                 BeginAnimation(OpacityProperty, null);
-                Show();
-                // Create the HWND before calculating the physical placement so
-                // GetDpiForWindow can use the monitor that owns the popup.
-                if (reposition) PositionNear(x, y, screenBounds);
-                AnimateOpacity(0, 1, 140);
+                if (!ocrMode)
+                {
+                    // Create and position the hidden HWND before its first frame.
+                    new WindowInteropHelper(this).EnsureHandle();
+                    if (reposition) PositionNear(x, y, screenBounds);
+                    Opacity = 1;
+                    Show();
+                }
+                else
+                {
+                    Opacity = 0;
+                    Show();
+                    if (reposition) PositionNear(x, y, screenBounds);
+                    AnimateOpacity(0, 1, 140);
+                }
             }
             else
             {
@@ -669,11 +685,13 @@ namespace GlobalTranslator
                 textWidth,
                 TextBlock.GetLineHeight(_translation));
 
-            // Header, body padding, section label, actions and (when used)
-            // the model chip.  The translated text itself is measured using
-            // its real font and wrapping width instead of a character-count
-            // approximation.
-            double chromeHeight = 104;
+            // Measure fixed chrome rather than guessing its combined height.
+            // The reserved status row prevents slow requests moving the footer.
+            _header.Measure(new Size(Math.Max(1, Width - 2), double.PositiveInfinity));
+            _actions.Measure(new Size(Math.Max(1, Width - 34), double.PositiveInfinity));
+            double chromeHeight = _header.DesiredSize.Height + _actions.DesiredSize.Height +
+                _body.Margin.Top + _body.Margin.Bottom + 34 +
+                _translationCard.Padding.Top + _translationCard.Padding.Bottom + 2;
             double desired = chromeHeight + Math.Max(54, textHeight);
             return Math.Max(190, Math.Min(GetCompactHeightLimit(), desired));
         }
@@ -945,6 +963,10 @@ namespace GlobalTranslator
                 return;
             if (_draggingDivider) return;
             bool showSource = _popupMode == TranslationPopupMode.Ocr;
+            _body.RowDefinitions[1].MinHeight = showSource ? 90 : 0;
+            _body.RowDefinitions[2].Height = showSource ? GridLength.Auto : new GridLength(34);
+            _contentGrid.ClipToBounds = !showSource;
+            _translation.MinHeight = showSource ? 54 : 0;
             _translationLabel.Visibility = showSource ? Visibility.Visible : Visibility.Collapsed;
             _translationCard.BorderThickness = new Thickness(showSource ? 1 : 0);
             _translationCard.Background = showSource ? Brushes.White : Brushes.Transparent;
@@ -1257,6 +1279,7 @@ namespace GlobalTranslator
             if (_modelPopup != null) _modelPopup.IsOpen = false;
             if (!wasVisible) return;
             _isDismissing = true;
+            int presentation = ++_presentationVersion;
             if (ShouldAnimate())
             {
                 var animation = new DoubleAnimation
@@ -1266,7 +1289,10 @@ namespace GlobalTranslator
                     Duration = TimeSpan.FromMilliseconds(120),
                     FillBehavior = FillBehavior.Stop
                 };
-                animation.Completed += delegate { FinishDismiss(); };
+                animation.Completed += delegate
+                {
+                    if (_isDismissing && presentation == _presentationVersion) FinishDismiss();
+                };
                 BeginAnimation(OpacityProperty, animation);
             }
             else FinishDismiss();
@@ -1274,6 +1300,7 @@ namespace GlobalTranslator
 
         public void DismissImmediately()
         {
+            _presentationVersion++;
             bool wasVisible = IsVisible;
             _hideTimer.Stop();
             _loadingTimer.Stop();
