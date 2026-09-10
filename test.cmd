@@ -2,13 +2,15 @@
 setlocal
 set "CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 set "OUT=tmp\tests"
+set "APP=bin\Release\Sharkey.exe"
+if not "%~1"=="" set "APP=%~1"
 if not exist "%OUT%" mkdir "%OUT%"
 
 "%CSC%" /nologo /target:exe /out:"%OUT%\FeatureProbe.exe" ^
   /r:System.dll /r:System.Core.dll /r:System.Drawing.dll ^
   tests\FeatureProbe.cs
 if errorlevel 1 exit /b 1
-"%OUT%\FeatureProbe.exe" "bin\Release\Sharkey.exe"
+"%OUT%\FeatureProbe.exe" "%APP%"
 if errorlevel 1 exit /b 1
 
 "%CSC%" /nologo /target:exe /out:"%OUT%\PopupInteractionProbe.exe" ^
@@ -19,7 +21,7 @@ if errorlevel 1 exit /b 1
   /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" ^
   tests\PopupInteractionProbe.cs
 if errorlevel 1 exit /b 1
-"%OUT%\PopupInteractionProbe.exe" "bin\Release\Sharkey.exe"
+"%OUT%\PopupInteractionProbe.exe" "%APP%"
 if errorlevel 1 exit /b 1
 
 echo Sharkey tests passed.

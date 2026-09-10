@@ -45,6 +45,7 @@ namespace GlobalTranslator
         public string OcrHotkey = "F9";
         public string SettingsHotkey = "F10";
         public bool StartWithWindows = StartupManager.IsEnabled();
+        public string PopupFontSize = "Standard";
 
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("GlobalTranslator.Settings.v1");
         private static readonly string Folder = Path.Combine(
@@ -110,6 +111,7 @@ namespace GlobalTranslator
                         case "OcrHotkey": settings.OcrHotkey = value; break;
                         case "SettingsHotkey": settings.SettingsHotkey = value; break;
                         case "StartWithWindows": settings.StartWithWindows = value == "true"; break;
+                        case "PopupFontSize": settings.PopupFontSize = value == "Small" || value == "Large" ? value : "Standard"; break;
                     }
                 }
                 if (!hasVendorProfiles)
@@ -173,6 +175,7 @@ namespace GlobalTranslator
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +
                 "SettingsHotkey=" + Encode(SettingsHotkey) + "\n" +
+                "PopupFontSize=" + Encode(PopupFontSize) + "\n" +
                 "StartWithWindows=" + Encode(StartWithWindows ? "true" : "false");
             byte[] clear = Encoding.UTF8.GetBytes(data);
             byte[] encrypted = ProtectedData.Protect(clear, Entropy, DataProtectionScope.CurrentUser);

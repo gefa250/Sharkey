@@ -108,7 +108,7 @@ namespace GlobalTranslator
         [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromPoint(POINT point, uint flags);
 
-        [DllImport("shcore.dll", SetLastError = true)]
+        [DllImport("shcore.dll", EntryPoint = "GetDpiForMonitor", SetLastError = true)]
         private static extern int GetDpiForMonitorNative(
             IntPtr monitor, int dpiType, out uint dpiX, out uint dpiY);
 

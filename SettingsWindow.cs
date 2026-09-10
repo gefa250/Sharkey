@@ -44,6 +44,7 @@ namespace GlobalTranslator
         private TextBox _ocrHotkey;
         private TextBox _settingsHotkey;
         private CheckBox _startWithWindows;
+        private ComboBox _popupFontSize;
         private bool _loadingValues;
         private string _pendingProvider = "GoogleFree";
         private string _pendingModelVendor = "Custom";
@@ -649,6 +650,19 @@ namespace GlobalTranslator
             root.Children.Add(startupCard);
 
             var versionCard = Card();
+            var reading = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
+            reading.Children.Add(new TextBlock { Text = "浮窗字号", FontSize = 13, Foreground = Navy });
+            _popupFontSize = new ComboBox
+            {
+                ItemsSource = new[] { "小", "标准", "大" },
+                SelectedIndex = 1,
+                Width = 160,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = new Thickness(0, 8, 0, 0),
+                ToolTip = "用于选中翻译与截图翻译的正文；保存后下一次翻译生效"
+            };
+            reading.Children.Add(_popupFontSize);
+            root.Children.Add(reading);
             versionCard.Padding = new Thickness(16);
             var version = new StackPanel();
             version.Children.Add(new TextBlock
@@ -1278,6 +1292,7 @@ namespace GlobalTranslator
                     NormalizeHotkey(_settings.SettingsHotkey, "F10");
                 _startWithWindows.IsChecked =
                     StartupManager.IsEnabled();
+                _popupFontSize.SelectedIndex = _settings.PopupFontSize == "Small" ? 0 : _settings.PopupFontSize == "Large" ? 2 : 1;
                 _pendingProvider =
                     IsKnownProvider(_settings.Provider)
                         ? _settings.Provider
@@ -1388,6 +1403,7 @@ namespace GlobalTranslator
             _settings.SettingsHotkey = settingsGesture.Display;
             _settings.StartWithWindows =
                 _startWithWindows.IsChecked == true;
+            _settings.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" : _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
             try
             {
                 StartupManager.SetEnabled(

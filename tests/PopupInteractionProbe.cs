@@ -486,6 +486,8 @@ internal static class PopupInteractionProbe
             Require(popup.WindowState == WindowState.Normal,
                 "Popup could not restore.");
 
+            VerifyReadingExperience(app);
+
             if (args.Length >= 2)
             {
                 source.Text =
@@ -625,6 +627,181 @@ internal static class PopupInteractionProbe
         using (var output =
             System.IO.File.Create(path))
             encoder.Save(output);
+    }
+
+    private static object Field(object instance, string name)
+    {
+        return instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(instance);
+    }
+
+    private static void SetField(object instance, string name, object value)
+    {
+        instance.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(instance, value);
+    }
+
+    private static object Invoke(object instance, string name, params object[] values)
+    {
+        return instance.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Invoke(instance, values);
+    }
+
+    private static void VerifyReadingExperience(Assembly app)
+    {
+        Window window = (Window)Activator.CreateInstance(app.GetType("GlobalTranslator.PopupWindow"), true);
+        try
+        {
+            object settings = Activator.CreateInstance(app.GetType("GlobalTranslator.AppSettings"), true);
+            Require((string)settings.GetType().GetField("PopupFontSize").GetValue(settings) == "Standard", "Old settings must default to standard font.");
+            // Redirect only this test process's settings path. Never read or overwrite user credentials.
+            FieldInfo settingsPath = settings.GetType().GetField("FilePath", BindingFlags.Static | BindingFlags.NonPublic);
+            string originalPath = (string)settingsPath.GetValue(null);
+            string testPath = System.IO.Path.GetFullPath("tmp/tests/reading-settings-" + Guid.NewGuid().ToString("N") + ".dat");
+            try
+            {
+                settingsPath.SetValue(null, testPath);
+                foreach (string preset in new[] { "Small", "Standard", "Large" })
+                {
+                    settings.GetType().GetField("PopupFontSize").SetValue(settings, preset);
+                    Invoke(settings, "Save");
+                    object loaded = settings.GetType().GetMethod("Load").Invoke(null, null);
+                    Require((string)settings.GetType().GetField("PopupFontSize").GetValue(loaded) == preset, "Font preference did not round-trip: " + preset);
+                }
+            }
+            finally
+            {
+                settingsPath.SetValue(null, originalPath);
+                if (System.IO.File.Exists(testPath)) System.IO.File.Delete(testPath);
+            }
+            settings.GetType().GetField("Provider").SetValue(settings, "ModelApi");
+            settings.GetType().GetField("ModelVendor").SetValue(settings, "DeepSeek");
+            settings.GetType().GetField("DeepSeekModelApiKey").SetValue(settings, "test-only-no-request");
+            Invoke(window, "RefreshModelSelector", settings);
+            Invoke(window, "SetPinned", true);
+            Invoke(window, "SetOcrDirty", true);
+            Invoke(window, "SetOcrDirty", false);
+            Require((bool)window.GetType().GetProperty("IsPinned").GetValue(window, null), "Completing edits cleared the manual pin.");
+            Invoke(window, "SetPinned", false);
+            Invoke(window, "SetOcrDirty", true);
+            Require((bool)Field(window, "_editProtected") && !(bool)Field(window, "_manualPinned"), "Edit protection became a manual pin.");
+            Invoke(window, "SetOcrDirty", false);
+            Require(!(bool)window.GetType().GetProperty("IsPinned").GetValue(window, null), "Edit protection survived clearing the result.");
+
+            TextBox text = (TextBox)Field(window, "_translation");
+            TextBox source = (TextBox)Field(window, "_source");
+            TextBlock meta = (TextBlock)Field(window, "_meta");
+            meta.Text = "中文 → English";
+            ((ProgressBar)Field(window, "_progress")).Visibility = Visibility.Collapsed;
+            ((TextBlock)Field(window, "_loadingText")).Visibility = Visibility.Collapsed;
+            Invoke(window, "SetOcrActionsVisible", false);
+            window.Width = 440;
+            window.Left = 100;
+            window.Top = 50;
+            window.Show();
+            string paragraph = "You can search known problems or submit a new issue in the repository. " +
+                "Keep the complete final line visible while reading, writing, working and debugging";
+            foreach (string preset in new[] { "Small", "Standard", "Large" })
+            {
+                Invoke(window, "ApplyReadingFont", preset);
+                window.Height = 190;
+                text.Text = paragraph;
+                SetField(window, "_translatedText", paragraph);
+                Invoke(window, "UpdateContentLayout");
+                Invoke(window, "UpdateResultHeight", paragraph);
+                window.UpdateLayout();
+                Invoke(window, "EnsureRenderedContentFit", 0);
+                window.UpdateLayout();
+                ScrollViewer scroll = (ScrollViewer)text.Template.FindName("PART_ContentHost", text);
+                Require(scroll.ExtentHeight <= scroll.ViewportHeight + 1, "F8 last line still overflows at font " + preset);
+                Require(text.Padding.Bottom >= 8, "Descender safety padding disappeared.");
+                Require(((TextBlock)Field(window, "_translationLabel")).Visibility == Visibility.Collapsed, "F8 still displays a redundant heading.");
+                Require(((Border)Field(window, "_translationCard")).BorderThickness.Left == 0, "F8 still has a nested text border.");
+            }
+            double height = window.Height;
+            double top = window.Top;
+            Invoke(window, "UpdateResultHeight", "short");
+            Require(window.Height >= height && Math.Abs(window.Top - top) < 1, "Streaming fit shrank or repositioned the card unnecessarily.");
+            Invoke(window, "ApplyReadingFont", "Standard");
+            window.Width = 360;
+            window.UpdateLayout();
+            Require(((Button)Field(window, "_modelButton")).ActualWidth <= 145.5, "F8 model chip overflows narrow toolbar.");
+            window.Width = 440;
+            window.Height = 190;
+            Invoke(window, "UpdateResultHeight", paragraph);
+            Invoke(window, "EnsureRenderedContentFit", 0);
+            window.UpdateLayout();
+            SaveWindowPreview(window, "tmp/tests/reading-f8-100.png", 96);
+            SaveWindowPreview(window, "tmp/tests/reading-f8-150.png", 144);
+            SaveWindowPreview(window, "tmp/tests/reading-f8-200.png", 192);
+
+            FieldInfo mode = window.GetType().GetField("_popupMode", BindingFlags.NonPublic | BindingFlags.Instance);
+            mode.SetValue(window, Enum.Parse(mode.FieldType, "Ocr"));
+            SetField(window, "_ocrMode", true);
+            Invoke(window, "SetOcrActionsVisible", true);
+            source.Text = "原文完整显示。可以拖动中间的分隔条，为译文分配更多空间。";
+            source.IsReadOnly = false;
+            source.Visibility = Visibility.Visible;
+            ((TextBlock)Field(window, "_sourceSummary")).Visibility = Visibility.Collapsed;
+            window.Width = 560;
+            window.Height = 480;
+            Invoke(window, "UpdateContentLayout");
+            window.UpdateLayout();
+            Grid grid = (Grid)Field(window, "_contentGrid");
+            GridSplitter divider = (GridSplitter)Field(window, "_divider");
+            Require(grid.RowDefinitions.Count == 3 && divider.ResizeDirection == GridResizeDirection.Rows, "F9 vertical divider is absent.");
+            string longResult = new string('译', 1600);
+            text.Text = longResult;
+            SetField(window, "_translatedText", longResult);
+            Invoke(window, "UpdateResultHeight", longResult);
+            window.UpdateLayout();
+            Invoke(window, "EnsureRenderedContentFit", 0);
+            window.UpdateLayout();
+            Require(window.Height > 480 && window.Height <= (double)Invoke(window, "GetOcrHeightLimit") + 1, "F9 failed to expand within its screen limit.");
+            text.ScrollToEnd();
+            window.UpdateLayout();
+            ScrollViewer longScroll = (ScrollViewer)text.Template.FindName("PART_ContentHost", text);
+            Require(longScroll.VerticalOffset + longScroll.ViewportHeight >= longScroll.ExtentHeight - 1, "Long F9 result cannot scroll to its final line.");
+            text.Text = paragraph;
+            SetField(window, "_translatedText", paragraph);
+            text.ScrollToHome();
+            window.Height = 480;
+            window.UpdateLayout();
+            divider.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+            grid.RowDefinitions[0].Height = new GridLength(25, GridUnitType.Star);
+            grid.RowDefinitions[2].Height = new GridLength(75, GridUnitType.Star);
+            window.UpdateLayout();
+            divider.RaiseEvent(new DragCompletedEventArgs(0, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
+            double share = (double)Field(window, "_ocrSourceShare");
+            height = window.Height;
+            Invoke(window, "UpdateResultHeight", new string('译', 5000));
+            Invoke(window, "UpdateContentLayout");
+            Require(Math.Abs(share - 25) < 1 && (double)Field(window, "_ocrSourceShare") == share && window.Height == height,
+                "Automatic fit overwrote the user's divider allocation.");
+            SaveWindowPreview(window, "tmp/tests/reading-f9-100.png", 96);
+            window.Width = 800;
+            window.UpdateLayout();
+            Require(grid.ColumnDefinitions.Count == 3 && divider.ResizeDirection == GridResizeDirection.Columns, "Wide F9 divider is absent.");
+            SaveWindowPreview(window, "tmp/tests/reading-f9-wide-150.png", 144);
+            SaveWindowPreview(window, "tmp/tests/reading-f9-wide-200.png", 192);
+
+            // Exercise real request entry/success/failure paths without network access.
+            object client = Activator.CreateInstance(app.GetType("GlobalTranslator.TranslationClient"), true);
+            try
+            {
+                settings.GetType().GetField("Provider").SetValue(settings, "Microsoft");
+                object bounds = Activator.CreateInstance(app.GetType("GlobalTranslator.NativeMethods+RECT"), true);
+                Invoke(window, "SetOcrDirty", true);
+                Invoke(window, "BeginTranslation", "edited words", 100, 100, bounds, settings, client, true, "", false);
+                Require((bool)Field(window, "_editProtected"), "Failed retranslation cleared edit protection.");
+                Require(((StackPanel)Field(window, "_errorPanel")).Visibility == Visibility.Visible, "Missing key did not enter an error state.");
+                Invoke(window, "BeginTranslation", "123", 100, 100, bounds, settings, client, true, "", false);
+                Require(text.Text == "123" && !(bool)Field(window, "_editProtected"), "Successful retranslation did not release edit protection.");
+                Invoke(window, "SetOcrDirty", true);
+                Invoke(window, "Translate", "456", 100, 100, settings, client);
+                Require(!(bool)Field(window, "_editProtected") && !(bool)Field(window, "_manualLayout"), "New F8 inherited OCR protection or manual layout.");
+            }
+            finally { ((IDisposable)client).Dispose(); }
+            Console.WriteLine("READING font=3 presets pin=isolated divider=preserved fit=rendered toolbar=compact");
+        }
+        finally { window.Close(); }
     }
 
     private static void Require(bool condition, string message)
