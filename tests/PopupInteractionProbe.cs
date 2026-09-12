@@ -751,6 +751,13 @@ internal static class PopupInteractionProbe
                     object loaded = settings.GetType().GetMethod("Load").Invoke(null, null);
                     Require((string)settings.GetType().GetField("PopupFontSize").GetValue(loaded) == preset, "Font preference did not round-trip: " + preset);
                 }
+                foreach (string modeName in new[] { "Auto", "Vertical", "Horizontal" })
+                {
+                    settings.GetType().GetField("OcrLayoutMode").SetValue(settings, modeName);
+                    Invoke(settings, "Save");
+                    object loaded = settings.GetType().GetMethod("Load").Invoke(null, null);
+                    Require((string)settings.GetType().GetField("OcrLayoutMode").GetValue(loaded) == modeName, "OCR layout preference did not round-trip: " + modeName);
+                }
             }
             finally
             {
@@ -822,6 +829,15 @@ internal static class PopupInteractionProbe
             mode.SetValue(window, Enum.Parse(mode.FieldType, "Ocr"));
             SetField(window, "_ocrMode", true);
             Invoke(window, "SetOcrActionsVisible", true);
+            Invoke(window, "SetOcrLayoutVisible", true);
+            Button layoutButton = (Button)Field(window, "_layoutButton");
+            Require(layoutButton.Visibility == Visibility.Visible &&
+                layoutButton.ToolTip.ToString().Contains("布局"), "F9 layout control is missing.");
+            Invoke(window, "ToggleLayoutPopup");
+            Popup layoutPopup = (Popup)Field(window, "_layoutPopup");
+            StackPanel layoutMenu = (StackPanel)Field(window, "_layoutMenuItems");
+            Require(layoutPopup.IsOpen && layoutMenu.Children.Count == 3, "F9 layout menu is incomplete.");
+            Invoke(window, "ToggleLayoutPopup");
             source.Text = "原文完整显示。可以拖动中间的分隔条，为译文分配更多空间。";
             source.IsReadOnly = false;
             source.Visibility = Visibility.Visible;
@@ -833,6 +849,23 @@ internal static class PopupInteractionProbe
             Grid grid = (Grid)Field(window, "_contentGrid");
             GridSplitter divider = (GridSplitter)Field(window, "_divider");
             Require(grid.RowDefinitions.Count == 3 && divider.ResizeDirection == GridResizeDirection.Rows, "F9 vertical divider is absent.");
+            Invoke(window, "ApplyOcrLayoutMode", "Horizontal");
+            window.UpdateLayout();
+            Require((string)Field(window, "_ocrLayoutMode") == "Horizontal" &&
+                window.Width >= 760 && grid.ColumnDefinitions.Count == 3 &&
+                divider.ResizeDirection == GridResizeDirection.Columns,
+                "Manual horizontal F9 layout did not switch or widen the workspace.");
+            Invoke(window, "ApplyOcrLayoutMode", "Vertical");
+            window.UpdateLayout();
+            Require((string)Field(window, "_ocrLayoutMode") == "Vertical" &&
+                grid.RowDefinitions.Count == 3 && divider.ResizeDirection == GridResizeDirection.Rows,
+                "Manual vertical F9 layout did not switch back.");
+            Invoke(window, "ApplyOcrLayoutMode", "Auto");
+            window.Width = 560;
+            window.UpdateLayout();
+            Require((string)Field(window, "_ocrLayoutMode") == "Auto" &&
+                grid.RowDefinitions.Count == 3 && divider.ResizeDirection == GridResizeDirection.Rows,
+                "Automatic F9 layout did not follow a narrow workspace.");
             string longResult = new string('译', 1600);
             text.Text = longResult;
             SetField(window, "_translatedText", longResult);

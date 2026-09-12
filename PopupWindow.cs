@@ -33,6 +33,7 @@ namespace GlobalTranslator
         private const int HtBottom = 15;
         private const int HtBottomLeft = 16;
         private const int HtBottomRight = 17;
+        private const double OcrHorizontalLayoutWidth = 760;
 
         private static readonly Brush Navy = Brush("#0B2942");
         private static readonly Brush Ocean = Brush("#087EA4");
@@ -65,6 +66,9 @@ namespace GlobalTranslator
         private bool _draggingDivider;
         private GridSplitter _divider;
         private bool? _dividerIsVertical;
+        private string _ocrLayoutMode = OcrLayoutModes.Auto;
+        private double _ocrVerticalSourceShare = 45;
+        private double _ocrHorizontalSourceShare = 45;
         private TextBlock _translationLabel;
         private Border _headerModelSlot;
         private TextBlock _brandTitle;
@@ -109,6 +113,11 @@ namespace GlobalTranslator
         private int _availableModelCount;
         private Button _collapseButton;
         private Button _expandButton;
+        private Button _layoutButton;
+        private System.Windows.Shapes.Path _layoutGlyph;
+        private Popup _layoutPopup;
+        private Border _layoutPopupCard;
+        private StackPanel _layoutMenuItems;
         private System.Windows.Shapes.Path _expandGlyph;
         private FrameworkElement _resizeGrip;
         private AppSettings _activeSettings;
@@ -486,6 +495,9 @@ namespace GlobalTranslator
             _activeSettings = settings;
             _activeClient = client;
             _ocrMode = ocrMode;
+            _ocrLayoutMode = ocrMode
+                ? OcrLayoutModes.Normalize(settings.OcrLayoutMode)
+                : OcrLayoutModes.Auto;
             _popupMode = ocrMode
                 ? TranslationPopupMode.Ocr
                 : TranslationPopupMode.Selection;
@@ -494,6 +506,8 @@ namespace GlobalTranslator
             {
                 _manualLayout = false;
                 _ocrSourceShare = 45;
+                _ocrVerticalSourceShare = 45;
+                _ocrHorizontalSourceShare = 45;
                 SetOcrDirty(false);
             }
             ApplyReadingFont(settings.PopupFontSize);
@@ -505,6 +519,7 @@ namespace GlobalTranslator
                 : Visibility.Collapsed;
             _translationPanel.Visibility = Visibility.Visible;
             _copyTranslation.Visibility = Visibility.Visible;
+            SetOcrLayoutVisible(ocrMode);
             if (!ocrMode && WindowState == WindowState.Maximized)
                 WindowState = WindowState.Normal;
             _ocrMetaSuffix = ocrMetaSuffix ?? "";
@@ -656,7 +671,13 @@ namespace GlobalTranslator
                 {
                     MinWidth = 420;
                     MinHeight = 340;
-                    Width = _hasOcrSize ? _lastOcrWidth : 560;
+                    double targetWidth = _hasOcrSize ? _lastOcrWidth : 560;
+                    if (OcrLayoutModes.Normalize(_ocrLayoutMode) ==
+                        OcrLayoutModes.Horizontal)
+                        targetWidth = Math.Max(
+                            targetWidth,
+                            OcrHorizontalLayoutWidth);
+                    Width = targetWidth;
                     Height = _hasOcrSize ? _lastOcrHeight : 480;
                     _hasOcrSize = true;
                 }
@@ -791,6 +812,21 @@ namespace GlobalTranslator
             finally { _isConfiguringSize = false; }
         }
 
+        private bool ShouldUseHorizontalOcrLayout()
+        {
+            switch (OcrLayoutModes.Normalize(_ocrLayoutMode))
+            {
+                case OcrLayoutModes.Horizontal:
+                    return true;
+                case OcrLayoutModes.Vertical:
+                    return false;
+                default:
+                    return WindowState == WindowState.Maximized ||
+                           (ActualWidth > 0 ? ActualWidth : Width) >=
+                           OcrHorizontalLayoutWidth;
+            }
+        }
+
         private void UpdateOcrHeight(string translatedText)
         {
             if (_popupMode != TranslationPopupMode.Ocr ||
@@ -798,7 +834,7 @@ namespace GlobalTranslator
                 return;
 
             double windowWidth = Width > 0 ? Width : 560;
-            bool split = windowWidth >= 760;
+            bool split = ShouldUseHorizontalOcrLayout();
             double contentWidth = Math.Max(320, windowWidth - 64);
             double sourceWidth = split
                 ? Math.Max(180, contentWidth * .45 - 24)
@@ -889,8 +925,7 @@ namespace GlobalTranslator
                         0,
                         sourceScroll.ExtentHeight -
                         sourceScroll.ViewportHeight);
-                bool split = WindowState == WindowState.Maximized ||
-                             ActualWidth >= 760;
+                bool split = ShouldUseHorizontalOcrLayout();
                 if (split)
                 {
                     growth = Math.Max(
@@ -1023,9 +1058,15 @@ namespace GlobalTranslator
             _sourcePanel.Visibility = showSource
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-            bool split = showSource &&
-                         (WindowState == WindowState.Maximized ||
-                          ActualWidth >= 760);
+            bool split = showSource && ShouldUseHorizontalOcrLayout();
+            if (showSource && _dividerIsVertical.HasValue &&
+                _dividerIsVertical.Value != split)
+            {
+                RememberDividerShare();
+                _ocrSourceShare = split
+                    ? _ocrHorizontalSourceShare
+                    : _ocrVerticalSourceShare;
+            }
             if (_dividerIsVertical != split)
             {
                 var hitArea = new FrameworkElementFactory(typeof(Grid));
@@ -1117,15 +1158,25 @@ namespace GlobalTranslator
                 _divider.ResizeDirection = GridResizeDirection.Rows;
                 _divider.Cursor = Cursors.SizeNS;
             }
+            UpdateLayoutButton();
         }
 
         private void RememberDividerShare()
         {
             _draggingDivider = false;
+            if (_divider == null || _contentGrid == null) return;
             bool split = _divider.ResizeDirection == GridResizeDirection.Columns;
+            if (split && _contentGrid.ColumnDefinitions.Count < 3) return;
+            if (!split && _contentGrid.RowDefinitions.Count < 3) return;
             double first = split ? _contentGrid.ColumnDefinitions[0].ActualWidth : _contentGrid.RowDefinitions[0].ActualHeight;
             double second = split ? _contentGrid.ColumnDefinitions[2].ActualWidth : _contentGrid.RowDefinitions[2].ActualHeight;
-            if (first + second > 0) _ocrSourceShare = Math.Max(10, Math.Min(90, first * 100 / (first + second)));
+            if (first + second <= 0) return;
+            double share = Math.Max(10, Math.Min(90, first * 100 / (first + second)));
+            _ocrSourceShare = share;
+            if (split)
+                _ocrHorizontalSourceShare = share;
+            else
+                _ocrVerticalSourceShare = share;
         }
 
         private void ApplyReadingFont(string preset)
@@ -1916,7 +1967,7 @@ namespace GlobalTranslator
             header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
             {
                 Point point = e.GetPosition(header);
-                if (point.X >= header.ActualWidth - 145) return;
+                if (point.X >= header.ActualWidth - 190) return;
                 if (e.ClickCount == 2)
                 {
                     ToggleMaximize();
@@ -1952,6 +2003,10 @@ namespace GlobalTranslator
             _pinButton.MouseLeave += delegate { UpdatePinGlyph(); };
             DockPanel.SetDock(_pinButton, Dock.Right);
             panel.Children.Add(_pinButton);
+
+            var layoutHost = BuildLayoutControl();
+            DockPanel.SetDock(layoutHost, Dock.Right);
+            panel.Children.Add(layoutHost);
 
             _headerModelSlot = new Border { VerticalAlignment = VerticalAlignment.Center };
             DockPanel.SetDock(_headerModelSlot, Dock.Right);
@@ -1989,6 +2044,253 @@ namespace GlobalTranslator
             identity.Children.Add(_meta);
             panel.Children.Add(identity);
             return header;
+        }
+
+        private Grid BuildLayoutControl()
+        {
+            _layoutButton = MakeGhostHeaderButton(
+                LayoutVerticalGeometry(),
+                "布局：自动（当前上下）");
+            _layoutGlyph = _layoutButton.Content as System.Windows.Shapes.Path;
+            _layoutButton.Visibility = Visibility.Collapsed;
+            _layoutButton.Click += delegate { ToggleLayoutPopup(); };
+
+            _layoutMenuItems = new StackPanel();
+            _layoutPopupCard = new Border
+            {
+                Width = 210,
+                Background = Brush("#FCFFFFFF"),
+                BorderBrush = Brush("#BFD7E7EC"),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(7),
+                Child = _layoutMenuItems,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    BlurRadius = 24,
+                    ShadowDepth = 6,
+                    Opacity = .2,
+                    Color = Color.FromRgb(5, 45, 63)
+                }
+            };
+            _layoutPopup = new Popup
+            {
+                AllowsTransparency = true,
+                StaysOpen = false,
+                Placement = PlacementMode.Bottom,
+                PlacementTarget = _layoutButton,
+                VerticalOffset = 6,
+                PopupAnimation = PopupAnimation.Fade,
+                Child = _layoutPopupCard
+            };
+            RefreshLayoutMenu();
+
+            var host = new Grid
+            {
+                Width = 38,
+                Height = 30,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            host.Children.Add(_layoutButton);
+            host.Children.Add(_layoutPopup);
+            return host;
+        }
+
+        private void RefreshLayoutMenu()
+        {
+            if (_layoutMenuItems == null) return;
+            _layoutMenuItems.Children.Clear();
+            string[] modes = {
+                OcrLayoutModes.Auto,
+                OcrLayoutModes.Vertical,
+                OcrLayoutModes.Horizontal
+            };
+            foreach (string mode in modes)
+                _layoutMenuItems.Children.Add(BuildLayoutMenuItem(mode));
+            UpdateLayoutButton();
+        }
+
+        private Button BuildLayoutMenuItem(string mode)
+        {
+            string normalized = OcrLayoutModes.Normalize(mode);
+            bool selected = string.Equals(
+                normalized,
+                OcrLayoutModes.Normalize(_ocrLayoutMode),
+                StringComparison.OrdinalIgnoreCase);
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var glyph = new TextBlock
+            {
+                Text = LayoutGlyphText(normalized),
+                Foreground = Ocean,
+                FontSize = 17,
+                FontWeight = FontWeights.SemiBold,
+                Width = 26,
+                TextAlignment = TextAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            content.Children.Add(glyph);
+
+            var labels = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            labels.Children.Add(new TextBlock
+            {
+                Text = OcrLayoutModes.DisplayName(normalized),
+                Foreground = Navy,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold
+            });
+            labels.Children.Add(new TextBlock
+            {
+                Text = LayoutDescription(normalized),
+                Foreground = Muted,
+                FontSize = 10.5,
+                Margin = new Thickness(0, 1, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
+            });
+            Grid.SetColumn(labels, 1);
+            content.Children.Add(labels);
+
+            var check = new System.Windows.Shapes.Path
+            {
+                Data = Geometry.Parse("M 1,5 L 4,8 L 10,1"),
+                Stroke = Ocean,
+                StrokeThickness = 1.8,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                Width = 12,
+                Height = 10,
+                Stretch = Stretch.Uniform,
+                Visibility = selected ? Visibility.Visible : Visibility.Hidden,
+                Margin = new Thickness(10, 0, 3, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(check, 2);
+            content.Children.Add(check);
+
+            var item = new Button
+            {
+                Tag = normalized,
+                Height = 48,
+                Margin = new Thickness(0, 1, 0, 1),
+                Padding = new Thickness(9, 5, 9, 5),
+                Background = selected ? Brush("#E9F7FA") : Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Cursor = Cursors.Hand,
+                ToolTip = OcrLayoutModes.DisplayName(normalized) + " · " + LayoutDescription(normalized),
+                Content = content,
+                Template = RoundedButtonTemplate(11)
+            };
+            item.MouseEnter += delegate { item.Background = Brush("#E3F4F7"); };
+            item.MouseLeave += delegate
+            {
+                item.Background = selected ? Brush("#E9F7FA") : Brushes.Transparent;
+            };
+            item.Click += delegate
+            {
+                if (_layoutPopup != null) _layoutPopup.IsOpen = false;
+                ApplyOcrLayoutMode(normalized);
+            };
+            return item;
+        }
+
+        private void ToggleLayoutPopup()
+        {
+            if (!_ocrMode || _layoutPopup == null) return;
+            RefreshLayoutMenu();
+            _layoutPopup.HorizontalOffset = Math.Min(
+                0,
+                _layoutButton.ActualWidth - _layoutPopupCard.Width);
+            _layoutPopup.IsOpen = !_layoutPopup.IsOpen;
+        }
+
+        private void SetOcrLayoutVisible(bool visible)
+        {
+            if (_layoutButton == null) return;
+            _layoutButton.Visibility = visible
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (!visible && _layoutPopup != null)
+                _layoutPopup.IsOpen = false;
+            UpdateLayoutButton();
+        }
+
+        private void UpdateLayoutButton()
+        {
+            if (_layoutButton == null || _layoutGlyph == null) return;
+            bool split = ShouldUseHorizontalOcrLayout();
+            _layoutGlyph.Data = split
+                ? LayoutHorizontalGeometry()
+                : LayoutVerticalGeometry();
+            string mode = OcrLayoutModes.DisplayName(_ocrLayoutMode);
+            string current = split ? "左右" : "上下";
+            _layoutButton.ToolTip = "布局：" + mode +
+                (string.Equals(mode, "自动", StringComparison.Ordinal)
+                    ? "（当前" + current + "）"
+                    : "") + " · 点击选择";
+        }
+
+        private void ApplyOcrLayoutMode(string mode)
+        {
+            if (!_ocrMode) return;
+            string normalized = OcrLayoutModes.Normalize(mode);
+            _ocrLayoutMode = normalized;
+            if (_activeSettings != null)
+            {
+                _activeSettings.OcrLayoutMode = normalized;
+                try { _activeSettings.Save(); }
+                catch (Exception ex)
+                {
+                    DiagnosticLog.Write(
+                        "OCR layout preference save failed; type=" +
+                        ex.GetType().Name);
+                }
+            }
+            if (normalized == OcrLayoutModes.Horizontal &&
+                WindowState == WindowState.Normal &&
+                Width < OcrHorizontalLayoutWidth)
+            {
+                _isConfiguringSize = true;
+                try
+                {
+                    Width = OcrHorizontalLayoutWidth;
+                    _lastOcrWidth = Width;
+                    _hasOcrSize = true;
+                }
+                finally { _isConfiguringSize = false; }
+            }
+            RefreshLayoutMenu();
+            UpdateContentLayout();
+            if (!string.IsNullOrEmpty(_translatedText))
+            {
+                UpdateResultHeight(_translatedText);
+                ScheduleRenderedContentFit();
+            }
+            ClampCurrentPosition();
+        }
+
+        private static string LayoutGlyphText(string mode)
+        {
+            switch (OcrLayoutModes.Normalize(mode))
+            {
+                case OcrLayoutModes.Vertical: return "↕";
+                case OcrLayoutModes.Horizontal: return "↔";
+                default: return "A";
+            }
+        }
+
+        private static string LayoutDescription(string mode)
+        {
+            switch (OcrLayoutModes.Normalize(mode))
+            {
+                case OcrLayoutModes.Vertical: return "原文在上，译文在下";
+                case OcrLayoutModes.Horizontal: return "原文在左，译文在右";
+                default: return "随窗口宽度自动适配";
+            }
         }
 
         private DockPanel BuildActions()
@@ -2357,6 +2659,20 @@ namespace GlobalTranslator
                 "M 9,1 L 13,1 L 13,5 " +
                 "M 13,9 L 13,13 L 9,13 " +
                 "M 5,13 L 1,13 L 1,9");
+        }
+
+        private static Geometry LayoutVerticalGeometry()
+        {
+            return Geometry.Parse(
+                "M 1,1 L 13,1 L 13,7 L 1,7 Z " +
+                "M 1,9 L 13,9 L 13,15 L 1,15 Z");
+        }
+
+        private static Geometry LayoutHorizontalGeometry()
+        {
+            return Geometry.Parse(
+                "M 1,1 L 7,1 L 7,15 L 1,15 Z " +
+                "M 9,1 L 15,1 L 15,15 L 9,15 Z");
         }
 
         private static Geometry RestoreGeometry()

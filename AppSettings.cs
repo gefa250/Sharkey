@@ -70,6 +70,32 @@ namespace GlobalTranslator
         }
     }
 
+    internal static class OcrLayoutModes
+    {
+        public const string Auto = "Auto";
+        public const string Vertical = "Vertical";
+        public const string Horizontal = "Horizontal";
+
+        public static string Normalize(string value)
+        {
+            if (string.Equals(value, Vertical, StringComparison.OrdinalIgnoreCase))
+                return Vertical;
+            if (string.Equals(value, Horizontal, StringComparison.OrdinalIgnoreCase))
+                return Horizontal;
+            return Auto;
+        }
+
+        public static string DisplayName(string value)
+        {
+            switch (Normalize(value))
+            {
+                case Vertical: return "上下";
+                case Horizontal: return "左右";
+                default: return "自动";
+            }
+        }
+    }
+
     internal sealed class AppSettings
     {
         public string Provider = "GoogleFree";
@@ -115,6 +141,7 @@ namespace GlobalTranslator
         public string SettingsHotkey = "F10";
         public bool StartWithWindows = StartupManager.IsEnabled();
         public string PopupFontSize = "Standard";
+        public string OcrLayoutMode = OcrLayoutModes.Auto;
 
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("GlobalTranslator.Settings.v1");
         private static readonly string Folder = Path.Combine(
@@ -186,6 +213,7 @@ namespace GlobalTranslator
                         case "SettingsHotkey": settings.SettingsHotkey = value; break;
                         case "StartWithWindows": settings.StartWithWindows = value == "true"; break;
                         case "PopupFontSize": settings.PopupFontSize = value == "Small" || value == "Large" ? value : "Standard"; break;
+                        case "OcrLayoutMode": settings.OcrLayoutMode = OcrLayoutModes.Normalize(value); break;
                     }
                 }
                 if (!hasVendorProfiles)
@@ -256,6 +284,7 @@ namespace GlobalTranslator
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +
                 "SettingsHotkey=" + Encode(SettingsHotkey) + "\n" +
                 "PopupFontSize=" + Encode(PopupFontSize) + "\n" +
+                "OcrLayoutMode=" + Encode(OcrLayoutModes.Normalize(OcrLayoutMode)) + "\n" +
                 "StartWithWindows=" + Encode(StartWithWindows ? "true" : "false");
             byte[] clear = Encoding.UTF8.GetBytes(data);
             byte[] encrypted = ProtectedData.Protect(clear, Entropy, DataProtectionScope.CurrentUser);
