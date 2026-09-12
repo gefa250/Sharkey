@@ -240,7 +240,9 @@ namespace GlobalTranslator
             string prompt =
                 "Transcribe every visible character in the image exactly. " +
                 "Preserve line breaks, punctuation, numbers, URLs, and original language. " +
-                "Do not translate, explain, correct, summarize, or add Markdown fences. " +
+                "Do not translate, explain, correct, summarize, or use Markdown. " +
+                "Never use Markdown emphasis such as **bold** or _italics_, backticks, bullets, or XML. " +
+                "Do not insert asterisks or other characters unless they are visibly present in the image. " +
                 "Return only the transcription.";
             string body =
                 "{\"model\":\"" + EscapeJson(model) + "\"," +
@@ -669,6 +671,15 @@ namespace GlobalTranslator
                 int closing = value.LastIndexOf("```", StringComparison.Ordinal);
                 if (closing >= 0) value = value.Substring(0, closing);
             }
+            // Vision models sometimes represent bold text from a document as
+            // Markdown (**term**), even when the OCR prompt requests a plain
+            // transcription. The result is displayed in a plain TextBox, so
+            // remove only balanced inline emphasis markers on the OCR path.
+            value = Regex.Replace(
+                value,
+                @"(?<!\*)\*\*(?<content>[^*\r\n]+?)\*\*(?!\*)",
+                "${content}",
+                RegexOptions.CultureInvariant);
             return value.Trim();
         }
 

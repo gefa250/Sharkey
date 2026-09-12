@@ -381,12 +381,14 @@ internal static class FeatureProbe
                     throw new InvalidOperationException("Vision API key was not sent.");
                 if (!body.Contains("\"model\":\"probe-vision\"") ||
                     !body.Contains("\"image_url\"") ||
-                    !body.Contains("data:image/png;base64,"))
+                    !body.Contains("data:image/png;base64,") ||
+                    !body.Contains("Never use Markdown") ||
+                    !body.Contains("Do not insert asterisks"))
                     throw new InvalidOperationException(
-                        "Vision request does not contain an inline image.");
+                        "Vision request does not contain the plain-text OCR instructions.");
                 byte[] response = Encoding.UTF8.GetBytes(
                     "{\"choices\":[{\"message\":{\"role\":\"assistant\"," +
-                    "\"content\":\"视觉识别成功 123\"}}]}");
+                    "\"content\":\"视觉识别 **成功** 123\"}}]}");
                 context.Response.StatusCode = 200;
                 context.Response.ContentType = "application/json; charset=utf-8";
                 context.Response.ContentLength64 = response.Length;
@@ -423,9 +425,9 @@ internal static class FeatureProbe
                     ((Task)task).Wait();
                     string text = (string)task.GetType()
                         .GetProperty("Result").GetValue(task, null);
-                    if (text != "视觉识别成功 123")
+                    if (text != "视觉识别 成功 123")
                         throw new InvalidOperationException(
-                            "Vision response was not parsed.");
+                            "Vision response Markdown emphasis was not cleaned.");
                     if (serverError != null) throw serverError;
                     Console.WriteLine("VISION_API text=" + text);
                 }
