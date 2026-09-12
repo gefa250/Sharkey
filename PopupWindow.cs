@@ -1871,6 +1871,8 @@ namespace GlobalTranslator
             _activeSettings.ModelBaseUrl = connection.BaseUrl;
             _activeSettings.ModelName = connection.Model;
             _activeSettings.ModelApiKey = connection.ApiKey;
+            _activeSettings.ModelProtocol = ModelApiProtocols.Normalize(
+                connection.Protocol);
             try { _activeSettings.Save(); }
             catch (Exception saveError)
             {

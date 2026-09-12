@@ -82,10 +82,15 @@ OCR 翻译浮窗中的原文可以直接修改。修改后点击“重新翻译�
 - AI 大模型：选择供应商会自动填写推荐的基础地址和模型名称，仍可手动修改；本地
   Ollama 等无需鉴权的服务可选择“自定义”并留空 Key。
 
-模型接口会自动补全 `/chat/completions`，也接受已经包含该路径的完整地址。
-自定义、DeepSeek、MiMo 和 Qwen 分别保存自己的 Base URL、模型名称和 API Key；
+模型接口默认使用 OpenAI Chat Completions，并自动补全 `/chat/completions`；也可以在
+“接口协议”中切换到 Anthropic Messages，自动补全 `/v1/messages`。两种协议会分别按
+各自的请求体、鉴权头和响应格式调用；服务商的基础地址仍需按其官方文档填写，也接受
+已经包含完整接口路径的地址。
+自定义、DeepSeek、MiMo 和 Qwen 分别保存自己的 Base URL、模型名称、协议和 API Key；
 切换供应商会恢复对应配置，不会把一个厂商的密钥带到另一个厂商。所有厂商密钥仍由
 Windows DPAPI 整体加密后保存在本机。
+DeepSeek 和 MiMo 切换到 Anthropic 协议时会自动切换到它们官方的 `/anthropic` 基础地址；
+自定义服务和未提供 Anthropic 推荐地址的供应商仍需按服务商文档填写基础地址。
 使用 AI 模型翻译时，结果浮窗会在原文上方显示紧凑的悬浮模型胶囊；自绘圆角菜单
 只列出配置完整的模型：
 DeepSeek、MiMo、Qwen 需要 Base URL、模型名称和 API Key；自定义公网接口同样需要 Key，

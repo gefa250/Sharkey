@@ -38,6 +38,8 @@ namespace GlobalTranslator
         private PasswordBox _modelApiKey;
         private TextBox _modelName;
         private ComboBox _modelVendor;
+        private ComboBox _modelProtocol;
+        private TextBlock _modelEndpointHint;
         private CheckBox _ocrAiFallback;
         private CheckBox _ocrLocalFallback;
         private Button _copyDiagnostics;
@@ -525,13 +527,34 @@ namespace GlobalTranslator
             _modelVendor.SelectionChanged += ModelVendorChanged;
             content.Children.Add(_modelVendor);
             _modelBaseUrl = AddText(
-                content, "API 地址", "例如 https://api.openai.com/v1");
+                content, "API 基础地址", "例如 https://api.openai.com/v1；也可填完整接口地址");
+            AddFieldLabel(content, "接口协议");
+            _modelProtocol = new ComboBox
+            {
+                ItemsSource = ModelApiProtocolChoices(),
+                Height = 36,
+                Padding = new Thickness(9, 7, 9, 7),
+                Margin = new Thickness(24, 5, 0, 5),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                ToolTip = "默认使用 OpenAI Chat Completions；只有服务商明确支持时才选择 Anthropic Messages"
+            };
+            _modelProtocol.SelectionChanged += ModelProtocolChanged;
+            content.Children.Add(_modelProtocol);
+            _modelEndpointHint = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Muted,
+                FontSize = 10.5,
+                Margin = new Thickness(24, 0, 0, 9)
+            };
+            content.Children.Add(_modelEndpointHint);
             _modelName = AddText(
                 content, "模型名称", "例如 gpt-5.6-sol / deepseek-chat");
             _modelApiKey = AddPassword(
                 content, "API Key", "本地 Ollama 可留空");
             _modelBaseUrl.TextChanged += delegate
             {
+                UpdateModelEndpointHint();
                 UpdateProviderSelection();
             };
             _modelName.TextChanged += delegate
@@ -553,7 +576,7 @@ namespace GlobalTranslator
                 ProviderConfigPanel("Google Cloud Translation", "需要 API Key", googleContent);
             UIElement modelPanel = ProviderConfigPanel(
                 "AI 模型",
-                "OpenAI 兼容接口",
+                "OpenAI / Anthropic 兼容接口",
                 content);
             foreach (ModelVendorChoice vendor in ModelVendors())
                 _providerConfigViews[
@@ -1470,6 +1493,8 @@ namespace GlobalTranslator
             _settings.ModelBaseUrl = activeConnection.BaseUrl;
             _settings.ModelName = activeConnection.Model;
             _settings.ModelApiKey = activeConnection.ApiKey;
+            _settings.ModelProtocol = ModelApiProtocols.Normalize(
+                activeConnection.Protocol);
             _settings.OcrAiFallback = enableAiOcr;
             _settings.OcrLocalFallback = _ocrLocalFallback == null ||
                 _ocrLocalFallback.IsChecked == true;
@@ -1577,6 +1602,46 @@ namespace GlobalTranslator
             UpdateProviderSelection();
         }
 
+        private void ModelProtocolChanged(
+            object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadingValues) return;
+            ModelApiProtocolChoice choice =
+                _modelProtocol == null
+                    ? null
+                    : _modelProtocol.SelectedItem as ModelApiProtocolChoice;
+            if (choice == null) return;
+
+            ModelVendorChoice vendor = SelectedModelVendorChoice();
+            ModelConnectionSettings draft;
+            if (vendor != null &&
+                _modelDrafts.TryGetValue(vendor.Code, out draft))
+            {
+                string oldProtocol = ModelApiProtocols.Normalize(
+                    draft.Protocol);
+                string currentBase = (_modelBaseUrl == null
+                    ? ""
+                    : _modelBaseUrl.Text).Trim();
+                string oldRecommended = vendor.RecommendedBaseUrl(
+                    oldProtocol);
+                string newRecommended = vendor.RecommendedBaseUrl(
+                    choice.Code);
+                // When the user is still on a built-in default, switch the
+                // provider's base URL along with the protocol. A hand-edited
+                // URL is never overwritten.
+                if (!string.IsNullOrWhiteSpace(newRecommended) &&
+                    (string.IsNullOrWhiteSpace(currentBase) ||
+                     string.Equals(
+                         currentBase.TrimEnd('/'),
+                         (oldRecommended ?? "").TrimEnd('/'),
+                         StringComparison.OrdinalIgnoreCase)) &&
+                    _modelBaseUrl != null)
+                    _modelBaseUrl.Text = newRecommended;
+            }
+            UpdateModelEndpointHint();
+            UpdateProviderSelection();
+        }
+
         private void LoadModelDrafts()
         {
             _modelDrafts.Clear();
@@ -1586,7 +1651,8 @@ namespace GlobalTranslator
                 ModelConnectionSettings saved =
                     _settings.GetModelConnection(vendor.Code);
                 if (string.IsNullOrWhiteSpace(saved.BaseUrl))
-                    saved.BaseUrl = vendor.BaseUrl;
+                    saved.BaseUrl = vendor.RecommendedBaseUrl(
+                        saved.Protocol);
                 if (string.IsNullOrWhiteSpace(saved.Model))
                     saved.Model = vendor.Model;
                 _modelDrafts[vendor.Code] = saved;
@@ -1601,7 +1667,8 @@ namespace GlobalTranslator
                 {
                     BaseUrl = vendor.BaseUrl,
                     Model = vendor.Model,
-                    ApiKey = ""
+                    ApiKey = "",
+                    Protocol = ModelApiProtocols.OpenAI
                 };
         }
 
@@ -1618,7 +1685,8 @@ namespace GlobalTranslator
                 {
                     BaseUrl = _modelBaseUrl.Text.Trim(),
                     Model = _modelName.Text.Trim(),
-                    ApiKey = _modelApiKey.Password.Trim()
+                    ApiKey = _modelApiKey.Password.Trim(),
+                    Protocol = SelectedModelProtocol()
                 };
         }
 
@@ -1631,6 +1699,62 @@ namespace GlobalTranslator
             _modelBaseUrl.Text = draft.BaseUrl;
             _modelName.Text = draft.Model;
             _modelApiKey.Password = draft.ApiKey;
+            SelectModelProtocol(draft.Protocol);
+            UpdateModelEndpointHint();
+        }
+
+        private string SelectedModelProtocol()
+        {
+            ModelApiProtocolChoice choice =
+                _modelProtocol == null
+                    ? null
+                    : _modelProtocol.SelectedItem as ModelApiProtocolChoice;
+            return ModelApiProtocols.Normalize(
+                choice == null ? ModelApiProtocols.OpenAI : choice.Code);
+        }
+
+        private void SelectModelProtocol(string protocol)
+        {
+            string requested = ModelApiProtocols.Normalize(protocol);
+            if (_modelProtocol == null) return;
+            for (int i = 0; i < _modelProtocol.Items.Count; i++)
+            {
+                ModelApiProtocolChoice choice =
+                    _modelProtocol.Items[i] as ModelApiProtocolChoice;
+                if (choice != null && string.Equals(
+                        choice.Code, requested,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    _modelProtocol.SelectedIndex = i;
+                    return;
+                }
+            }
+            _modelProtocol.SelectedIndex = 0;
+        }
+
+        private ModelVendorChoice SelectedModelVendorChoice()
+        {
+            return _modelVendor == null
+                ? null
+                : _modelVendor.SelectedItem as ModelVendorChoice;
+        }
+
+        private void UpdateModelEndpointHint()
+        {
+            if (_modelEndpointHint == null) return;
+            string protocol = SelectedModelProtocol();
+            string baseUrl = _modelBaseUrl == null
+                ? ""
+                : _modelBaseUrl.Text.Trim();
+            string endpoint = ModelApiProtocols.BuildEndpoint(
+                baseUrl, protocol);
+            if (string.IsNullOrWhiteSpace(endpoint))
+                endpoint = "（填写基础地址后显示）";
+            _modelEndpointHint.Text =
+                "最终请求地址：" + endpoint + "\n" +
+                (ModelApiProtocols.IsAnthropic(protocol)
+                    ? "Anthropic Messages；服务商需支持该协议，返回内容按 content[].text 读取。"
+                    : "OpenAI Chat Completions；自动补全 /chat/completions。");
         }
 
         private void SelectModelVendor(
@@ -1644,10 +1768,14 @@ namespace GlobalTranslator
                     _modelVendor.Items)
                 {
                     if (choice.Code != "Custom" &&
+                        (string.Equals(
+                             choice.BaseUrl.TrimEnd('/'),
+                             (baseUrl ?? "").TrimEnd('/'),
+                             StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(
-                            choice.BaseUrl.TrimEnd('/'),
-                            (baseUrl ?? "").TrimEnd('/'),
-                            StringComparison.OrdinalIgnoreCase))
+                             (choice.AnthropicBaseUrl ?? "").TrimEnd('/'),
+                             (baseUrl ?? "").TrimEnd('/'),
+                             StringComparison.OrdinalIgnoreCase)))
                     {
                         requested = choice.Code;
                         break;
@@ -2647,24 +2775,42 @@ namespace GlobalTranslator
             {
                 new ModelVendorChoice(
                     "Custom",
-                    "自定义 / 其他 OpenAI 兼容",
+                    "自定义 / 其他兼容接口",
+                    "",
                     "",
                     ""),
                 new ModelVendorChoice(
                     "DeepSeek",
                     "DeepSeek",
                     "https://api.deepseek.com",
-                    "deepseek-v4-flash"),
+                    "deepseek-v4-flash",
+                    "https://api.deepseek.com/anthropic"),
                 new ModelVendorChoice(
                     "MiMo",
                     "小米 MiMo",
                     "https://api.xiaomimimo.com/v1",
-                    "mimo-v2.5"),
+                    "mimo-v2.5",
+                    "https://api.xiaomimimo.com/anthropic"),
                 new ModelVendorChoice(
                     "Qwen",
                     "阿里云百炼 · Qwen（中国区）",
                     "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "qwen-plus")
+                    "qwen-plus",
+                    "")
+            };
+        }
+
+        private static List<ModelApiProtocolChoice>
+            ModelApiProtocolChoices()
+        {
+            return new List<ModelApiProtocolChoice>
+            {
+                new ModelApiProtocolChoice(
+                    ModelApiProtocols.OpenAI,
+                    "OpenAI Chat Completions  ·  /chat/completions"),
+                new ModelApiProtocolChoice(
+                    ModelApiProtocols.Anthropic,
+                    "Anthropic Messages  ·  /v1/messages")
             };
         }
 
@@ -2789,22 +2935,50 @@ namespace GlobalTranslator
             public readonly string Display;
             public readonly string BaseUrl;
             public readonly string Model;
+            public readonly string AnthropicBaseUrl;
 
             public ModelVendorChoice(
                 string code,
                 string display,
                 string baseUrl,
-                string model)
+                string model,
+                string anthropicBaseUrl)
             {
                 Code = code;
                 Display = display;
                 BaseUrl = baseUrl;
                 Model = model;
+                AnthropicBaseUrl = anthropicBaseUrl;
+            }
+
+            public string RecommendedBaseUrl(string protocol)
+            {
+                return ModelApiProtocols.IsAnthropic(protocol)
+                    ? AnthropicBaseUrl
+                    : BaseUrl;
             }
 
             public override string ToString()
             {
                 return Display;
+            }
+        }
+
+        private sealed class ModelApiProtocolChoice
+        {
+            public readonly string Code;
+            private readonly string _display;
+
+            public ModelApiProtocolChoice(
+                string code, string display)
+            {
+                Code = code;
+                _display = display;
+            }
+
+            public override string ToString()
+            {
+                return _display;
             }
         }
     }

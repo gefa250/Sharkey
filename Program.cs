@@ -160,7 +160,8 @@ namespace GlobalTranslator
                 {
                     BaseUrl = _settings.ModelBaseUrl,
                     Model = _settings.ModelName,
-                    ApiKey = _settings.ModelApiKey
+                    ApiKey = _settings.ModelApiKey,
+                    Protocol = _settings.ModelProtocol
                 }.IsUsable(_settings.ModelVendor);
             return _settings.Provider == "Google"
                 ? !string.IsNullOrWhiteSpace(_settings.GoogleApiKey)

@@ -18,7 +18,9 @@ internal static class FeatureProbe
             TestHotkeysAndStartup(app);
             TestSmartTargetResolver(app);
             TestModelApi(app);
+            TestAnthropicModelApi(app);
             TestVisionApi(app);
+            TestAnthropicVisionApi(app);
             TestMicrosoftFree(app);
             TestEnglishOcrPackManager(app);
             TestOcr(app);
@@ -321,6 +323,118 @@ internal static class FeatureProbe
         }
     }
 
+    private static void TestAnthropicModelApi(Assembly app)
+    {
+        const string prefix = "http://127.0.0.1:18933/";
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        Exception serverError = null;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                HttpListenerContext context = listener.GetContext();
+                string body;
+                using (var reader = new StreamReader(
+                    context.Request.InputStream, context.Request.ContentEncoding))
+                    body = reader.ReadToEnd();
+                if (context.Request.Url.AbsolutePath !=
+                    "/anthropic/v1/messages")
+                    throw new InvalidOperationException(
+                        "Unexpected Anthropic model API path.");
+                if (context.Request.Headers["x-api-key"] !=
+                    "anthropic-probe-secret")
+                    throw new InvalidOperationException(
+                        "Anthropic API key was not sent.");
+                if (!body.Contains("\"model\":\"anthropic-probe\"") ||
+                    !body.Contains("\"max_tokens\":") ||
+                    !body.Contains("\"system\"") ||
+                    !body.Contains("\"messages\"") ||
+                    body.Contains("\"role\":\"system\""))
+                    throw new InvalidOperationException(
+                        "Anthropic request body is incomplete or uses an OpenAI system role.");
+
+                context.Response.StatusCode = 200;
+                context.Response.ContentType = "text/event-stream";
+                context.Response.SendChunked = true;
+                using (var writer = new StreamWriter(
+                    context.Response.OutputStream,
+                    new UTF8Encoding(false)))
+                {
+                    writer.NewLine = "\n";
+                    writer.Write(
+                        "event: message_start\n" +
+                        "data: {\"type\":\"message_start\"}\n\n");
+                    writer.Write(
+                        "event: content_block_delta\n" +
+                        "data: {\"type\":\"content_block_delta\",\"index\":0," +
+                        "\"delta\":{\"type\":\"text_delta\",\"text\":\"Anthropic \"}}\n\n");
+                    writer.Write(
+                        "event: content_block_delta\n" +
+                        "data: {\"type\":\"content_block_delta\",\"index\":0," +
+                        "\"delta\":{\"type\":\"text_delta\",\"text\":\"协议翻译成功。\"}}\n\n");
+                    writer.Write(
+                        "event: message_stop\n" +
+                        "data: {\"type\":\"message_stop\"}\n\n");
+                    writer.Flush();
+                }
+                context.Response.Close();
+            }
+            catch (Exception ex) { serverError = ex; }
+        });
+
+        try
+        {
+            Type settingsType = app.GetType(
+                "GlobalTranslator.AppSettings", true);
+            object settings = Activator.CreateInstance(settingsType, true);
+            settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
+            settingsType.GetField("ModelProtocol").SetValue(settings, "Anthropic");
+            settingsType.GetField("ModelBaseUrl").SetValue(
+                settings, prefix + "anthropic");
+            settingsType.GetField("ModelApiKey").SetValue(
+                settings, "anthropic-probe-secret");
+            settingsType.GetField("ModelName").SetValue(
+                settings, "anthropic-probe");
+
+            Type clientType = app.GetType(
+                "GlobalTranslator.TranslationClient", true);
+            object client = Activator.CreateInstance(clientType, true);
+            try
+            {
+                MethodInfo translate = clientType.GetMethod(
+                    "TranslateAsync",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[] { typeof(string), settingsType, typeof(CancellationToken) },
+                    null);
+                object task = translate.Invoke(client, new[]
+                {
+                    (object)"Anthropic protocol translation works.",
+                    settings,
+                    CancellationToken.None
+                });
+                ((Task)task).Wait();
+                object result = task.GetType().GetProperty("Result").GetValue(task, null);
+                string translated = (string)result.GetType()
+                    .GetField("Text").GetValue(result);
+                if (translated != "Anthropic 协议翻译成功。")
+                    throw new InvalidOperationException(
+                        "Anthropic model response was not parsed.");
+                if (serverError != null) throw serverError;
+                Console.WriteLine("ANTHROPIC_MODEL_API text=" + translated);
+            }
+            finally { ((IDisposable)client).Dispose(); }
+        }
+        finally
+        {
+            listener.Stop();
+            listener.Close();
+        }
+    }
+
     private static void TestMicrosoftFree(Assembly app)
     {
         Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
@@ -430,6 +544,109 @@ internal static class FeatureProbe
                             "Vision response Markdown emphasis was not cleaned.");
                     if (serverError != null) throw serverError;
                     Console.WriteLine("VISION_API text=" + text);
+                }
+            }
+            finally { ((IDisposable)client).Dispose(); }
+        }
+        finally
+        {
+            listener.Stop();
+            listener.Close();
+        }
+    }
+
+    private static void TestAnthropicVisionApi(Assembly app)
+    {
+        const string prefix = "http://127.0.0.1:18934/";
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        Exception serverError = null;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                HttpListenerContext context = listener.GetContext();
+                string body;
+                using (var reader = new StreamReader(
+                    context.Request.InputStream, context.Request.ContentEncoding))
+                    body = reader.ReadToEnd();
+                if (context.Request.Url.AbsolutePath !=
+                    "/anthropic/v1/messages")
+                    throw new InvalidOperationException(
+                        "Unexpected Anthropic vision API path.");
+                if (context.Request.Headers["x-api-key"] !=
+                    "anthropic-vision-secret")
+                    throw new InvalidOperationException(
+                        "Anthropic vision API key was not sent.");
+                if (!body.Contains("\"model\":\"anthropic-vision\"") ||
+                    !body.Contains("\"max_tokens\":") ||
+                    !body.Contains("\"system\"") ||
+                    !body.Contains("\"type\":\"image\"") ||
+                    !body.Contains("\"media_type\":\"image/png\"") ||
+                    body.Contains("\"image_url\""))
+                    throw new InvalidOperationException(
+                        "Anthropic vision request body is incomplete.");
+                byte[] response = Encoding.UTF8.GetBytes(
+                    "{\"type\":\"message\",\"content\":[" +
+                    "{\"type\":\"thinking\",\"thinking\":\"internal\"}," +
+                    "{\"type\":\"text\",\"text\":\"Anthropic OCR **成功** 123\"}]}");
+                context.Response.StatusCode = 200;
+                context.Response.ContentType = "application/json; charset=utf-8";
+                context.Response.ContentLength64 = response.Length;
+                context.Response.OutputStream.Write(
+                    response, 0, response.Length);
+                context.Response.Close();
+            }
+            catch (Exception ex) { serverError = ex; }
+        });
+
+        try
+        {
+            Type settingsType = app.GetType(
+                "GlobalTranslator.AppSettings", true);
+            object settings = Activator.CreateInstance(settingsType, true);
+            settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelProtocol").SetValue(settings, "Anthropic");
+            settingsType.GetField("ModelBaseUrl").SetValue(
+                settings, prefix + "anthropic");
+            settingsType.GetField("ModelApiKey").SetValue(
+                settings, "anthropic-vision-secret");
+            settingsType.GetField("OcrVisionModel").SetValue(
+                settings, "anthropic-vision");
+
+            Type clientType = app.GetType(
+                "GlobalTranslator.TranslationClient", true);
+            object client = Activator.CreateInstance(clientType, true);
+            try
+            {
+                MethodInfo recognize = clientType.GetMethod(
+                    "RecognizeImageAsync",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[]
+                    {
+                        typeof(Bitmap),
+                        settingsType,
+                        typeof(CancellationToken)
+                    },
+                    null);
+                using (var bitmap = new Bitmap(120, 60))
+                {
+                    object task = recognize.Invoke(
+                        client,
+                        new object[]
+                        {
+                            bitmap, settings, CancellationToken.None
+                        });
+                    ((Task)task).Wait();
+                    string text = (string)task.GetType()
+                        .GetProperty("Result").GetValue(task, null);
+                    if (text != "Anthropic OCR 成功 123")
+                        throw new InvalidOperationException(
+                            "Anthropic vision response was not parsed.");
+                    if (serverError != null) throw serverError;
+                    Console.WriteLine("ANTHROPIC_VISION text=" + text);
                 }
             }
             finally { ((IDisposable)client).Dispose(); }

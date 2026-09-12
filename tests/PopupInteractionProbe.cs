@@ -350,10 +350,39 @@ internal static class PopupInteractionProbe
                     "_modelApiKey",
                     BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
+            ComboBox modelProtocol = (ComboBox)
+                settingsWindowType.GetField(
+                    "_modelProtocol",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            TextBlock modelEndpointHint = (TextBlock)
+                settingsWindowType.GetField(
+                    "_modelEndpointHint",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(
+                modelProtocol != null && modelProtocol.Items.Count == 2 &&
+                modelProtocol.SelectedIndex == 0 &&
+                modelEndpointHint != null &&
+                modelEndpointHint.Text.IndexOf(
+                    "/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0,
+                "OpenAI protocol is not the default model configuration.");
             Require(
                 modelBase.Text == "https://api.deepseek.com" &&
                 modelName.Text == "deepseek-v4-flash",
                 "DeepSeek vendor preset did not populate defaults.");
+            modelProtocol.SelectedIndex = 1;
+            Require(
+                modelBase.Text == "https://api.deepseek.com/anthropic" &&
+                modelEndpointHint.Text.IndexOf(
+                    "/v1/messages", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Anthropic protocol did not update the DeepSeek endpoint hint.");
+            modelProtocol.SelectedIndex = 0;
+            Require(
+                modelBase.Text == "https://api.deepseek.com" &&
+                modelEndpointHint.Text.IndexOf(
+                    "/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Switching back to OpenAI did not restore the default endpoint.");
             modelApiKey.Password = "deepseek-secret";
             modelVendor.SelectedIndex = 2;
             Require(
