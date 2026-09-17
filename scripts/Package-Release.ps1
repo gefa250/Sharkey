@@ -11,38 +11,38 @@ $changeLog = Join-Path $projectRoot "CHANGELOG.md"
 $dist = Join-Path $projectRoot "dist"
 
 if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
-    throw "正式发布版本必须是 x.y.z，例如 0.1.0。"
+    throw "A release version must use x.y.z format, for example 0.1.0."
 }
 if (-not (Test-Path (Join-Path $projectRoot ".git"))) {
-    throw "当前目录尚未初始化 Git。"
+    throw "The project directory is not a Git repository."
 }
 Push-Location $projectRoot
 try {
     $dirty = git status --porcelain
-    if ($LASTEXITCODE -ne 0) { throw "无法读取 Git 工作区状态。" }
-    if ($dirty) { throw "工作区存在未提交或未跟踪的修改，不能发布。" }
+    if ($LASTEXITCODE -ne 0) { throw "Unable to read the Git working tree status." }
+    if ($dirty) { throw "The working tree has uncommitted or untracked files." }
 
     $versionSource = Get-Content -LiteralPath $versionFile -Raw
     if ($versionSource -notmatch ('SemanticVersion\s*=\s*"' + [regex]::Escape($Version) + '"')) {
-        throw "VersionInfo.cs 与目标版本 $Version 不一致。"
+        throw "VersionInfo.cs does not match release version $Version."
     }
     $changeSource = Get-Content -LiteralPath $changeLog -Raw
     if ($changeSource -notmatch ('(?m)^##\s+' + [regex]::Escape($Version) + '\s+-\s+\d{4}-\d{2}-\d{2}\s*$')) {
-        throw "CHANGELOG.md 缺少版本 $Version 的正式发布日期章节。"
+        throw "CHANGELOG.md has no dated release section for version $Version."
     }
     if ((git tag --list "v$Version") -eq "v$Version") {
-        throw "Git 标签 v$Version 已存在。"
+        throw "Git tag v$Version already exists."
     }
 
     & (Join-Path $projectRoot "build.cmd")
-    if ($LASTEXITCODE -ne 0) { throw "Release 构建失败。" }
+    if ($LASTEXITCODE -ne 0) { throw "Release build failed." }
     & (Join-Path $projectRoot "test.cmd")
-    if ($LASTEXITCODE -ne 0) { throw "自动测试失败。" }
+    if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
 
     $exe = Join-Path $projectRoot "bin\Release\Sharkey.exe"
     $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion
     if ($actual -ne $Version) {
-        throw "EXE ProductVersion 为 $actual，与目标版本 $Version 不一致。"
+        throw "EXE ProductVersion is $actual, expected $Version."
     }
 
     New-Item -ItemType Directory -Force -Path $dist | Out-Null
@@ -95,11 +95,11 @@ try {
 
     if (-not $SkipTag) {
         git tag -a "v$Version" -m "Sharkey v$Version"
-        if ($LASTEXITCODE -ne 0) { throw "创建 Git 标签失败。" }
+        if ($LASTEXITCODE -ne 0) { throw "Unable to create the Git tag." }
     }
-    Write-Host "GitHub Release 文件已生成：dist\Sharkey-win-x64.exe、.sha256、RELEASE-NOTES.md"
-    Write-Host "归档包已生成：dist\Sharkey-v$Version-win-x64.zip"
-    if (-not $SkipTag) { Write-Host "已创建本地标签 v$Version（未推送）。" }
+    Write-Host "GitHub Release assets created: dist\Sharkey-win-x64.exe, .sha256, RELEASE-NOTES.md"
+    Write-Host "Archive created: dist\Sharkey-v$Version-win-x64.zip"
+    if (-not $SkipTag) { Write-Host "Created local tag v$Version (not pushed)." }
 }
 finally {
     Pop-Location
