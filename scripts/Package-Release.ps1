@@ -22,11 +22,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Unable to read the Git working tree status." }
     if ($dirty) { throw "The working tree has uncommitted or untracked files." }
 
-    $versionSource = Get-Content -LiteralPath $versionFile -Raw
+    $versionSource = Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8
     if ($versionSource -notmatch ('SemanticVersion\s*=\s*"' + [regex]::Escape($Version) + '"')) {
         throw "VersionInfo.cs does not match release version $Version."
     }
-    $changeSource = Get-Content -LiteralPath $changeLog -Raw
+    $changeSource = Get-Content -LiteralPath $changeLog -Raw -Encoding UTF8
     if ($changeSource -notmatch ('(?m)^##\s+' + [regex]::Escape($Version) + '\s+-\s+\d{4}-\d{2}-\d{2}\s*$')) {
         throw "CHANGELOG.md has no dated release section for version $Version."
     }
