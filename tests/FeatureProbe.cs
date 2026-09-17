@@ -2,6 +2,8 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
 using System.Threading;
@@ -19,11 +21,15 @@ internal static class FeatureProbe
             TestSmartTargetResolver(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
+            TestModelStreamReliability(app);
+            TestFailedTranslationNotCached(app);
+            TestUpdateService(app);
             TestVisionApi(app);
             TestAnthropicVisionApi(app);
             TestMicrosoftFree(app);
             TestEnglishOcrPackManager(app);
             TestOcr(app);
+            TestScreenshotRightClickCancellation(app);
             return 0;
         }
         catch (Exception ex)
@@ -52,32 +58,39 @@ internal static class FeatureProbe
         AssertTarget(resolve, "日本語の文章です。", "Smart", "en", "zh-Hans");
         AssertTarget(resolve, "한국어 문장입니다.", "Smart", "en", "zh-Hans");
         AssertTarget(resolve, "APB协议验证", "Smart", "en", "en");
+        AssertTarget(
+            resolve,
+            "Please send the updated quotation to 王先生.",
+            "Smart",
+            "en",
+            "zh-Hans");
+        AssertTarget(
+            resolve,
+            "请查看型号 ABC-123 和 https://example.com/item",
+            "Smart",
+            "en",
+            "en");
         AssertTarget(resolve, "https://example.com/123", "Smart", "en", "zh-Hans");
         AssertTarget(resolve, "if (count > 0) return;", "Smart", "en", "zh-Hans");
         AssertTarget(resolve, "任意文本", "Fixed", "ko", "ko");
         MethodInfo preserve = resolver.GetMethod(
             "ShouldPreserveContent",
             BindingFlags.Static | BindingFlags.Public);
-        if (!(bool)preserve.Invoke(
-                null,
-                new object[]
-                {
-                    "https://example.com/123", "Smart"
-                }) ||
-            !(bool)preserve.Invoke(
-                null,
-                new object[]
-                {
-                    "if (count > 0) return;", "Smart"
-                }) ||
-            !(bool)preserve.Invoke(
-                null,
-                new object[] { "2026-07-29", "Smart" }) ||
-            (bool)preserve.Invoke(
-                null,
-                new object[] { "Hello world", "Smart" }))
-            throw new InvalidOperationException(
-                "Smart target content-preservation rules are incorrect.");
+        AssertPreserve(preserve, "https://example.com/123", true);
+        AssertPreserve(preserve, "sales@example.com", true);
+        AssertPreserve(preserve, "2026-07-29", true);
+        AssertPreserve(preserve, "ABC-123", true);
+        AssertPreserve(preserve, "if (count > 0) return;", true);
+        AssertPreserve(preserve, "var total = price * quantity;", true);
+        AssertPreserve(preserve, "Hello world", false);
+        AssertPreserve(
+            preserve,
+            "Please confirm the price; delivery is required next week.",
+            false);
+        AssertPreserve(
+            preserve,
+            "Total amount = USD 1,200. Please confirm.",
+            false);
 
         Type settingsType = app.GetType(
             "GlobalTranslator.AppSettings", true);
@@ -97,6 +110,21 @@ internal static class FeatureProbe
                 "DeepSeek Vision is not the default OCR engine.");
         Console.WriteLine(
             "SMART_TARGET zh=>en other=>zh-Hans fixed=True vision=DeepSeek");
+    }
+
+    private static void AssertPreserve(
+        MethodInfo preserve,
+        string text,
+        bool expected)
+    {
+        bool actual = (bool)preserve.Invoke(
+            null,
+            new object[] { text, "Smart" });
+        if (actual != expected)
+            throw new InvalidOperationException(
+                "Content-preservation mismatch for '" + text +
+                "': expected " + expected +
+                ", actual " + actual + ".");
     }
 
     private static void AssertTarget(
@@ -264,7 +292,8 @@ internal static class FeatureProbe
 
                 byte[] response = Encoding.UTF8.GetBytes(
                     "{\"choices\":[{\"message\":{\"role\":\"assistant\"," +
-                    "\"content\":\"<text>模型接口翻译成功。</text>\"}}]}");
+                    "\"content\":\"<text>模型接口翻译成功。</text>\"}," +
+                    "\"finish_reason\":\"stop\"}]}");
                 context.Response.StatusCode = 200;
                 context.Response.ContentType = "application/json; charset=utf-8";
                 context.Response.ContentLength64 = response.Length;
@@ -432,6 +461,658 @@ internal static class FeatureProbe
         {
             listener.Stop();
             listener.Close();
+        }
+    }
+
+    private static void TestModelStreamReliability(Assembly app)
+    {
+        Type clientType = app.GetType(
+            "GlobalTranslator.TranslationClient", true);
+
+        string openAiDone =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"正常完成\"}}]}\n\n" +
+            "data: [DONE]\n\n";
+        AssertStreamText(
+            clientType,
+            "ReadModelStreamAsync",
+            openAiDone,
+            "正常完成");
+
+        string openAiStop =
+            "data: {\"choices\":[{\"delta\":{\"content\":\"正常停止\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+        AssertStreamText(
+            clientType,
+            "ReadModelStreamAsync",
+            openAiStop,
+            "正常停止");
+        AssertStreamFailure(
+            clientType,
+            "ReadModelStreamAsync",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"部分\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+            typeof(InvalidOperationException),
+            "长度限制");
+        AssertStreamFailure(
+            clientType,
+            "ReadModelStreamAsync",
+            "data: {\"error\":{\"type\":\"server_error\",\"message\":\"probe error\"}}\n\n",
+            typeof(InvalidOperationException),
+            "probe error");
+        AssertStreamFailure(
+            clientType,
+            "ReadModelStreamAsync",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"意外断流\"}}]}\n\n",
+            typeof(InvalidOperationException),
+            "意外中断");
+
+        string anthropicComplete =
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"完整译文\"}}\n\n" +
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n";
+        AssertStreamText(
+            clientType,
+            "ReadAnthropicModelStreamAsync",
+            anthropicComplete,
+            "完整译文");
+        AssertStreamFailure(
+            clientType,
+            "ReadAnthropicModelStreamAsync",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"部分\"}}\n\n" +
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n",
+            typeof(InvalidOperationException),
+            "长度限制");
+        AssertStreamFailure(
+            clientType,
+            "ReadAnthropicModelStreamAsync",
+            "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"anthropic probe error\"}}\n\n",
+            typeof(InvalidOperationException),
+            "anthropic probe error");
+        AssertStreamFailure(
+            clientType,
+            "ReadAnthropicModelStreamAsync",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"意外断流\"}}\n\n",
+            typeof(InvalidOperationException),
+            "意外中断");
+
+        AssertStreamTimeout(
+            clientType,
+            "ReadModelStreamAsync",
+            CancellationToken.None,
+            typeof(TimeoutException));
+        AssertStreamTimeout(
+            clientType,
+            "ReadAnthropicModelStreamAsync",
+            CancellationToken.None,
+            typeof(TimeoutException));
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            AssertStreamTimeout(
+                clientType,
+                "ReadModelStreamAsync",
+                cancelled.Token,
+                typeof(OperationCanceledException));
+            AssertStreamTimeout(
+                clientType,
+                "ReadAnthropicModelStreamAsync",
+                cancelled.Token,
+                typeof(OperationCanceledException));
+        }
+
+        MethodInfo openAiFinish = clientType.GetMethod(
+            "ValidateOpenAiFinishReason",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo anthropicFinish = clientType.GetMethod(
+            "ValidateAnthropicStopReason",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        AssertInvocationFailure(
+            delegate { openAiFinish.Invoke(null, new object[] { "length" }); },
+            typeof(InvalidOperationException),
+            "长度限制");
+        AssertInvocationFailure(
+            delegate
+            {
+                anthropicFinish.Invoke(
+                    null,
+                    new object[] { "max_tokens", false });
+            },
+            typeof(InvalidOperationException),
+            "长度限制");
+        Console.WriteLine(
+            "MODEL_STREAM terminal/truncation/error/eof/timeout/cancel=True");
+    }
+
+    private static void AssertStreamText(
+        Type clientType,
+        string methodName,
+        string payload,
+        string expected)
+    {
+        using (var response = CreateStreamResponse(
+            new MemoryStream(Encoding.UTF8.GetBytes(payload))))
+        {
+            object result = WaitForStreamResult(
+                clientType,
+                methodName,
+                response,
+                CancellationToken.None,
+                TimeSpan.FromSeconds(1));
+            string text = (string)result.GetType()
+                .GetField("Text").GetValue(result);
+            if (text != expected)
+                throw new InvalidOperationException(
+                    methodName + " returned '" + text +
+                    "' instead of '" + expected + "'.");
+        }
+    }
+
+    private static void AssertStreamFailure(
+        Type clientType,
+        string methodName,
+        string payload,
+        Type expectedType,
+        string expectedMessage)
+    {
+        AssertInvocationFailure(
+            delegate
+            {
+                using (var response = CreateStreamResponse(
+                    new MemoryStream(Encoding.UTF8.GetBytes(payload))))
+                    WaitForStreamResult(
+                        clientType,
+                        methodName,
+                        response,
+                        CancellationToken.None,
+                        TimeSpan.FromSeconds(1));
+            },
+            expectedType,
+            expectedMessage);
+    }
+
+    private static void AssertStreamTimeout(
+        Type clientType,
+        string methodName,
+        CancellationToken token,
+        Type expectedType)
+    {
+        AssertInvocationFailure(
+            delegate
+            {
+                using (var response = CreateStreamResponse(
+                    new NeverEndingStream()))
+                    WaitForStreamResult(
+                        clientType,
+                        methodName,
+                        response,
+                        token,
+                        TimeSpan.FromMilliseconds(80));
+            },
+            expectedType,
+            "");
+    }
+
+    private static HttpResponseMessage CreateStreamResponse(Stream stream)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK);
+        response.Content = new StreamContent(stream);
+        response.Content.Headers.ContentType =
+            new MediaTypeHeaderValue("text/event-stream");
+        return response;
+    }
+
+    private static object WaitForStreamResult(
+        Type clientType,
+        string methodName,
+        HttpResponseMessage response,
+        CancellationToken token,
+        TimeSpan timeout)
+    {
+        MethodInfo method = null;
+        foreach (MethodInfo candidate in clientType.GetMethods(
+            BindingFlags.Static | BindingFlags.NonPublic))
+            if (candidate.Name == methodName &&
+                candidate.GetParameters().Length == 5)
+            {
+                method = candidate;
+                break;
+            }
+        if (method == null)
+            throw new MissingMethodException(methodName);
+        object task = method.Invoke(
+            null,
+            new object[]
+            {
+                response,
+                "probe-model",
+                null,
+                token,
+                timeout
+            });
+        ((Task)task).Wait();
+        return task.GetType().GetProperty("Result").GetValue(task, null);
+    }
+
+    private static void AssertInvocationFailure(
+        Action action,
+        Type expectedType,
+        string expectedMessage)
+    {
+        try
+        {
+            action();
+        }
+        catch (Exception error)
+        {
+            Exception actual = Unwrap(error);
+            if (!expectedType.IsAssignableFrom(actual.GetType()))
+                throw new InvalidOperationException(
+                    "Expected " + expectedType.Name +
+                    " but received " + actual.GetType().Name + ".",
+                    actual);
+            if (!string.IsNullOrEmpty(expectedMessage) &&
+                actual.Message.IndexOf(
+                    expectedMessage,
+                    StringComparison.OrdinalIgnoreCase) < 0)
+                throw new InvalidOperationException(
+                    "Failure message did not contain '" +
+                    expectedMessage + "': " + actual.Message,
+                    actual);
+            return;
+        }
+        throw new InvalidOperationException(
+            "Expected " + expectedType.Name + " was not thrown.");
+    }
+
+    private static void TestFailedTranslationNotCached(Assembly app)
+    {
+        const string prefix = "http://127.0.0.1:18935/";
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        int requestCount = 0;
+        Exception serverError = null;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                for (int index = 0; index < 2; index++)
+                {
+                    HttpListenerContext context = listener.GetContext();
+                    Interlocked.Increment(ref requestCount);
+                    using (var reader = new StreamReader(
+                        context.Request.InputStream,
+                        context.Request.ContentEncoding))
+                        reader.ReadToEnd();
+                    context.Response.StatusCode = 200;
+                    context.Response.ContentType = "text/event-stream";
+                    context.Response.SendChunked = true;
+                    byte[] body = Encoding.UTF8.GetBytes(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"部分译文\"}}]}\n\n");
+                    context.Response.OutputStream.Write(body, 0, body.Length);
+                    context.Response.Close();
+                }
+            }
+            catch (Exception error) { serverError = error; }
+        });
+
+        try
+        {
+            Type settingsType = app.GetType(
+                "GlobalTranslator.AppSettings", true);
+            object settings = Activator.CreateInstance(settingsType, true);
+            settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelProtocol").SetValue(settings, "OpenAI");
+            settingsType.GetField("ModelBaseUrl").SetValue(settings, prefix + "v1");
+            settingsType.GetField("ModelApiKey").SetValue(settings, "probe-secret");
+            settingsType.GetField("ModelName").SetValue(settings, "deepseek-cache-probe");
+
+            Type clientType = app.GetType(
+                "GlobalTranslator.TranslationClient", true);
+            object client = Activator.CreateInstance(clientType, true);
+            try
+            {
+                MethodInfo translate = clientType.GetMethod(
+                    "TranslateAsync",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[] { typeof(string), settingsType, typeof(CancellationToken) },
+                    null);
+                for (int attempt = 0; attempt < 2; attempt++)
+                    AssertInvocationFailure(
+                        delegate
+                        {
+                            object task = translate.Invoke(
+                                client,
+                                new object[]
+                                {
+                                    "Please translate this uncached text.",
+                                    settings,
+                                    CancellationToken.None
+                                });
+                            ((Task)task).Wait();
+                        },
+                        typeof(InvalidOperationException),
+                        "意外中断");
+            }
+            finally { ((IDisposable)client).Dispose(); }
+
+            if (serverError != null) throw serverError;
+            if (requestCount != 2)
+                throw new InvalidOperationException(
+                    "Incomplete translations were cached; request count=" +
+                    requestCount + ".");
+            Console.WriteLine("MODEL_CACHE incompleteCached=False");
+        }
+        finally
+        {
+            listener.Stop();
+            listener.Close();
+        }
+    }
+
+    private static void TestUpdateService(Assembly app)
+    {
+        Type serviceType = app.GetType(
+            "GlobalTranslator.UpdateService", true);
+        MethodInfo parse = serviceType.GetMethod(
+            "ParseLatestReleaseJson",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        string json =
+            "{\"tag_name\":\"v0.2.3\",\"name\":\"Sharkey v0.2.3\"," +
+            "\"body\":\"Update notes\",\"html_url\":\"https://example.test/release\"," +
+            "\"draft\":false,\"prerelease\":false,\"assets\":[" +
+            "{\"name\":\"Sharkey-win-x64.exe\",\"browser_download_url\":\"https://example.test/Sharkey.exe\"}," +
+            "{\"name\":\"Sharkey-win-x64.exe.sha256\",\"browser_download_url\":\"https://example.test/Sharkey.sha256\"}]}";
+        object update = parse.Invoke(
+            null,
+            new object[] { json, "0.2.2" });
+        if (update == null ||
+            (string)update.GetType().GetField("Version").GetValue(update) !=
+            "0.2.3")
+            throw new InvalidOperationException(
+                "GitHub release update was not parsed.");
+        if (parse.Invoke(
+                null,
+                new object[] { json, "0.2.3" }) != null)
+            throw new InvalidOperationException(
+                "Current GitHub release was reported as newer.");
+
+        MethodInfo normalizeHash = serviceType.GetMethod(
+            "NormalizeSha256",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        string hash = new string('a', 64);
+        string normalized = (string)normalizeHash.Invoke(
+            null,
+            new object[] { hash + "  Sharkey-win-x64.exe\r\n" });
+        if (normalized != hash)
+            throw new InvalidOperationException(
+                "SHA-256 release file was not parsed.");
+        AssertInvocationFailure(
+            delegate
+            {
+                normalizeHash.Invoke(null, new object[] { "bad-hash" });
+            },
+            typeof(InvalidOperationException),
+            "SHA-256");
+
+        MethodInfo computeHash = serviceType.GetMethod(
+            "ComputeSha256",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        MethodInfo verifyHash = serviceType.GetMethod(
+            "VerifySha256",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        string hashProbe = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(hashProbe, "verified update bytes");
+            string actualHash = (string)computeHash.Invoke(
+                null,
+                new object[] { hashProbe });
+            verifyHash.Invoke(
+                null,
+                new object[] { hashProbe, actualHash });
+            AssertInvocationFailure(
+                delegate
+                {
+                    verifyHash.Invoke(
+                        null,
+                        new object[] { hashProbe, new string('0', 64) });
+                },
+                typeof(InvalidOperationException),
+                "校验失败");
+        }
+        finally
+        {
+            File.Delete(hashProbe);
+        }
+
+        string missingAsset = json.Replace(
+            "Sharkey-win-x64.exe.sha256",
+            "wrong.sha256");
+        AssertInvocationFailure(
+            delegate
+            {
+                parse.Invoke(
+                    null,
+                    new object[] { missingAsset, "0.2.2" });
+            },
+            typeof(InvalidOperationException),
+            "SHA-256");
+
+        Type bootstrapper = app.GetType(
+            "GlobalTranslator.UpdateBootstrapper", true);
+        MethodInfo replace = bootstrapper.GetMethod(
+            "ReplaceExecutable",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        string folder = Path.Combine(
+            Path.GetTempPath(),
+            "SharkeyUpdateProbe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string source = Path.Combine(folder, "new.exe");
+            string target = Path.Combine(folder, "Sharkey.exe");
+            string backup = target + ".update-backup";
+            File.WriteAllText(source, "new-version");
+            File.WriteAllText(target, "old-version");
+            replace.Invoke(
+                null,
+                new object[] { source, target, backup });
+            if (File.ReadAllText(target) != "new-version" ||
+                File.ReadAllText(backup) != "old-version")
+                throw new InvalidOperationException(
+                    "Updater did not replace and back up the executable.");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+        Console.WriteLine(
+            "UPDATER release/semver/hash/replace=True");
+    }
+
+    private static void TestScreenshotRightClickCancellation(Assembly app)
+    {
+        Type selectorType = app.GetType(
+            "GlobalTranslator.ScreenshotSelector", true);
+        TestScreenshotRightClickState(selectorType, "idle");
+        TestScreenshotRightClickState(selectorType, "dragging");
+        TestScreenshotRightClickState(selectorType, "small");
+        TestScreenshotEscapeAndSubmit(selectorType);
+        Console.WriteLine(
+            "SCREENSHOT_CANCEL idle/dragging/small mouse-up-guard=True esc/submit=True");
+    }
+
+    private static void TestScreenshotRightClickState(
+        Type selectorType,
+        string state)
+    {
+        using (var selector = (System.Windows.Forms.Form)
+            Activator.CreateInstance(selectorType, true))
+        {
+            MethodInfo mouseDown = selectorType.GetMethod(
+                "OnMouseDown",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            MethodInfo mouseMove = selectorType.GetMethod(
+                "OnMouseMove",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            MethodInfo mouseUp = selectorType.GetMethod(
+                "OnMouseUp",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            if (state == "dragging" || state == "small")
+            {
+                mouseDown.Invoke(
+                    selector,
+                    new object[]
+                    {
+                        new System.Windows.Forms.MouseEventArgs(
+                            System.Windows.Forms.MouseButtons.Left,
+                            1,
+                            20,
+                            20,
+                            0)
+                    });
+                if (state == "dragging")
+                    mouseMove.Invoke(
+                        selector,
+                        new object[]
+                        {
+                            new System.Windows.Forms.MouseEventArgs(
+                                System.Windows.Forms.MouseButtons.Left,
+                                0,
+                                120,
+                                90,
+                                0)
+                        });
+                else
+                    mouseUp.Invoke(
+                        selector,
+                        new object[]
+                        {
+                            new System.Windows.Forms.MouseEventArgs(
+                                System.Windows.Forms.MouseButtons.Left,
+                                1,
+                                22,
+                                22,
+                                0)
+                        });
+            }
+
+            mouseDown.Invoke(
+                selector,
+                new object[]
+                {
+                    new System.Windows.Forms.MouseEventArgs(
+                        System.Windows.Forms.MouseButtons.Right,
+                        1,
+                        40,
+                        40,
+                        0)
+                });
+            bool pending = (bool)selectorType.GetField(
+                "_rightCancelPending",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(selector);
+            if (!pending ||
+                selector.DialogResult != System.Windows.Forms.DialogResult.None)
+                throw new InvalidOperationException(
+                    "Right mouse down closed the screenshot overlay in " +
+                    state + " state.");
+
+            mouseUp.Invoke(
+                selector,
+                new object[]
+                {
+                    new System.Windows.Forms.MouseEventArgs(
+                        System.Windows.Forms.MouseButtons.Left,
+                        1,
+                        100,
+                        100,
+                        0)
+                });
+            if (selector.DialogResult == System.Windows.Forms.DialogResult.OK ||
+                selectorType.GetProperty("SelectedBitmap")
+                    .GetValue(selector, null) != null)
+                throw new InvalidOperationException(
+                    "Left mouse up submitted a screenshot while right-click cancellation was pending.");
+
+            mouseUp.Invoke(
+                selector,
+                new object[]
+                {
+                    new System.Windows.Forms.MouseEventArgs(
+                        System.Windows.Forms.MouseButtons.Right,
+                        1,
+                        40,
+                        40,
+                        0)
+                });
+            if (selector.DialogResult != System.Windows.Forms.DialogResult.Cancel)
+                throw new InvalidOperationException(
+                    "Right mouse up did not cancel screenshot selection in " +
+                    state + " state.");
+        }
+    }
+
+    private static void TestScreenshotEscapeAndSubmit(Type selectorType)
+    {
+        using (var selector = (System.Windows.Forms.Form)
+            Activator.CreateInstance(selectorType, true))
+        {
+            selectorType.GetMethod(
+                "OnKeyDown",
+                BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(
+                    selector,
+                    new object[]
+                    {
+                        new System.Windows.Forms.KeyEventArgs(
+                            System.Windows.Forms.Keys.Escape)
+                    });
+            if (selector.DialogResult != System.Windows.Forms.DialogResult.Cancel)
+                throw new InvalidOperationException(
+                    "Escape no longer cancels screenshot selection.");
+        }
+
+        using (var selector = (System.Windows.Forms.Form)
+            Activator.CreateInstance(selectorType, true))
+        {
+            MethodInfo mouseDown = selectorType.GetMethod(
+                "OnMouseDown",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            MethodInfo mouseUp = selectorType.GetMethod(
+                "OnMouseUp",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            mouseDown.Invoke(
+                selector,
+                new object[]
+                {
+                    new System.Windows.Forms.MouseEventArgs(
+                        System.Windows.Forms.MouseButtons.Left,
+                        1,
+                        20,
+                        20,
+                        0)
+                });
+            mouseUp.Invoke(
+                selector,
+                new object[]
+                {
+                    new System.Windows.Forms.MouseEventArgs(
+                        System.Windows.Forms.MouseButtons.Left,
+                        1,
+                        120,
+                        90,
+                        0)
+                });
+            Bitmap selected = (Bitmap)selectorType
+                .GetProperty("SelectedBitmap")
+                .GetValue(selector, null);
+            if (selector.DialogResult != System.Windows.Forms.DialogResult.OK ||
+                selected == null)
+                throw new InvalidOperationException(
+                    "Normal left-button screenshot selection no longer submits.");
+            selected.Dispose();
         }
     }
 
@@ -804,5 +1485,52 @@ internal static class FeatureProbe
                ex.InnerException != null)
             ex = ex.InnerException;
         return ex;
+    }
+
+    private sealed class NeverEndingStream : Stream
+    {
+        private readonly TaskCompletionSource<int> _pending =
+            new TaskCompletionSource<int>();
+
+        public override bool CanRead { get { return true; } }
+        public override bool CanSeek { get { return false; } }
+        public override bool CanWrite { get { return false; } }
+        public override long Length { get { throw new NotSupportedException(); } }
+        public override long Position
+        {
+            get { throw new NotSupportedException(); }
+            set { throw new NotSupportedException(); }
+        }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+        {
+            return _pending.Task;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

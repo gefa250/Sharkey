@@ -208,8 +208,10 @@ internal static class PopupInteractionProbe
             TabItem translationTab =
                 (TabItem)tabs.Items[0];
             Require(
-                translationTab.Content is Grid,
-                "Translation page still uses one long page-level scroll view.");
+                translationTab.Content is ScrollViewer,
+                "Translation settings must scroll when the window is short.");
+            Require(settingsWindow.ResizeMode == ResizeMode.CanResize,
+                "Settings window cannot be resized.");
             Grid providerPicker = (Grid)settingsWindowType
                 .GetField(
                     "_providerPickerGrid",
@@ -454,7 +456,7 @@ internal static class PopupInteractionProbe
                     openDiagnosticFolder.Content as string,
                     "打开日志目录") &&
                 supportSummary.IndexOf(
-                    "0.2.2-dev", StringComparison.Ordinal) >= 0 &&
+                    "0.2.2", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
                     "CLR:", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
@@ -492,6 +494,23 @@ internal static class PopupInteractionProbe
             Require(
                 string.Equals(cancelSettings.Content as string, "取消"),
                 "Settings cancel button is missing.");
+            Button checkUpdate = (Button)settingsWindowType
+                .GetField(
+                    "_checkUpdate",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            TextBlock updateStatus = (TextBlock)settingsWindowType
+                .GetField(
+                    "_updateStatus",
+                    BindingFlags.Instance | BindingFlags.NonPublic)
+                .GetValue(settingsWindow);
+            Require(
+                checkUpdate != null &&
+                string.Equals(
+                    checkUpdate.Content as string,
+                    "检查更新") &&
+                updateStatus != null,
+                "General settings update controls are missing.");
             TextBox modelBaseUrl = (TextBox)settingsWindowType
                 .GetField(
                     "_modelBaseUrl",
@@ -500,6 +519,47 @@ internal static class PopupInteractionProbe
             string savedModelBaseUrl = modelBaseUrl.Text;
             modelBaseUrl.Text = "unsaved-probe-value";
             settingsWindow.Show();
+            Invoke(settingsWindow, "SelectConfigSection", "Model");
+            Invoke(settingsWindow, "BrowseProvider", "ModelApi:DeepSeek");
+            settingsWindow.Height = 480;
+            settingsWindow.UpdateLayout();
+            var settingsScroll = (ScrollViewer)translationTab.Content;
+            Require(settingsScroll.ScrollableHeight > 0,
+                "Short settings window does not expose overflowing model fields through scrolling.");
+            settingsScroll.ScrollToBottom();
+            settingsWindow.UpdateLayout();
+            var keyInput = (PasswordBox)Field(settingsWindow, "_modelApiKey");
+            keyInput.Password = "probe-api-key";
+            Grid keyHost = keyInput.Parent as Grid;
+            Button revealKey = null;
+            TextBox revealedKey = null;
+            foreach (UIElement child in keyHost.Children)
+            {
+                var button = child as Button;
+                if (button != null) revealKey = button;
+                var textBox = child as TextBox;
+                if (textBox != null) revealedKey = textBox;
+            }
+            Require(revealKey != null && revealedKey != null,
+                "API Key visibility toggle is missing.");
+            revealKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(revealedKey.Visibility == Visibility.Visible &&
+                revealedKey.Text == "probe-api-key" &&
+                (string)revealKey.ToolTip == "隐藏 API Key",
+                "API Key reveal button did not show the complete value.");
+            revealKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(revealedKey.Visibility == Visibility.Collapsed &&
+                (string)revealKey.ToolTip == "显示完整 API Key",
+                "API Key reveal button did not restore password masking.");
+            Rect keyBounds = keyInput.TransformToAncestor(settingsScroll)
+                .TransformBounds(new Rect(keyInput.RenderSize));
+            Require(keyBounds.Top >= 0 && keyBounds.Bottom <= settingsScroll.ActualHeight + 1,
+                "API Key input is not fully reachable at the bottom of the settings scroll view.");
+            Rect cancelBounds = cancelSettings.TransformToAncestor(settingsWindow)
+                .TransformBounds(new Rect(cancelSettings.RenderSize));
+            Require(cancelBounds.Bottom <= settingsWindow.ActualHeight,
+                "Settings footer is outside the resized window.");
+            settingsWindow.Height = 820;
             cancelSettings.RaiseEvent(
                 new RoutedEventArgs(Button.ClickEvent));
             Require(!settingsWindow.IsVisible,
@@ -911,6 +971,19 @@ internal static class PopupInteractionProbe
                 Invoke(window, "BeginTranslation", "edited words", 100, 100, bounds, settings, client, true, "", false);
                 Require((bool)Field(window, "_editProtected"), "Failed retranslation cleared edit protection.");
                 Require(((StackPanel)Field(window, "_errorPanel")).Visibility == Visibility.Visible, "Missing key did not enter an error state.");
+                SetField(window, "_translatedText", "partial translation");
+                text.Text = "partial translation";
+                ((Button)Field(window, "_copyTranslation")).Visibility = Visibility.Visible;
+                Invoke(
+                    window,
+                    "ShowTranslationError",
+                    new TimeoutException("stream timeout"));
+                Require(
+                    (string)Field(window, "_translatedText") == "" &&
+                    text.Text == "" &&
+                    text.Visibility == Visibility.Collapsed &&
+                    ((Button)Field(window, "_copyTranslation")).Visibility == Visibility.Collapsed,
+                    "Failed stream retained a visible or copyable partial translation.");
                 Invoke(window, "BeginTranslation", "123", 100, 100, bounds, settings, client, true, "", false);
                 Require(text.Text == "123" && !(bool)Field(window, "_editProtected"), "Successful retranslation did not release edit protection.");
                 Invoke(window, "SetOcrDirty", true);

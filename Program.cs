@@ -28,6 +28,10 @@ namespace GlobalTranslator
         private Mutex _mutex;
         private int _ocrRequestId;
         private CancellationTokenSource _ocrCancellation;
+        private CancellationTokenSource _updateCancellation;
+        private UpdateService _updateService;
+        private UpdateWindow _updateWindow;
+        private bool _updateCheckInProgress;
         private bool _screenshotSelecting;
 
         [STAThread]
@@ -36,6 +40,19 @@ namespace GlobalTranslator
             Mutex mutex = null;
             try
             {
+                string[] commandLine = Environment.GetCommandLineArgs();
+                var updateArguments = new string[Math.Max(
+                    0,
+                    commandLine.Length - 1)];
+                if (updateArguments.Length > 0)
+                    Array.Copy(
+                        commandLine,
+                        1,
+                        updateArguments,
+                        0,
+                        updateArguments.Length);
+                if (UpdateBootstrapper.TryRun(updateArguments))
+                    return;
                 DiagnosticLog.WriteStartup();
                 AppDomain.CurrentDomain.UnhandledException += delegate(
                     object sender, UnhandledExceptionEventArgs args)
@@ -88,6 +105,7 @@ namespace GlobalTranslator
         {
             base.OnStartup(e);
             _client = new TranslationClient();
+            _updateService = new UpdateService();
             _ocr = new OcrService();
             _popup = new PopupWindow();
             _popup.OcrRecaptureRequested += delegate
@@ -113,6 +131,10 @@ namespace GlobalTranslator
                 RefreshDismissHotkey();
                 UpdateTrayLabels();
                 RefreshStartupMenu();
+            };
+            _settingsWindow.UpdateCheckRequested += async delegate
+            {
+                await CheckForUpdatesAsync(true);
             };
 
             // Selection is captured only when the user presses F8. Do not install the
@@ -150,6 +172,100 @@ namespace GlobalTranslator
             {
                 _settingsWindow.Show();
             }
+            BeginAutomaticUpdateCheck();
+        }
+
+        private async void BeginAutomaticUpdateCheck()
+        {
+            try
+            {
+                await Task.Delay(1500);
+                await CheckForUpdatesAsync(false);
+            }
+            catch
+            {
+                // CheckForUpdatesAsync handles and logs expected failures.
+            }
+        }
+
+        private async Task CheckForUpdatesAsync(bool manual)
+        {
+            if (_updateCheckInProgress) return;
+            if (_updateService == null || !_updateService.IsConfigured)
+            {
+                if (manual && _settingsWindow != null)
+                    _settingsWindow.SetUpdateStatus(
+                        "发布仓库尚未配置",
+                        true);
+                return;
+            }
+
+            _updateCheckInProgress = true;
+            if (manual && _settingsWindow != null)
+                _settingsWindow.SetUpdateStatus(
+                    "正在检查更新…",
+                    false);
+            var cancellation = new CancellationTokenSource();
+            _updateCancellation = cancellation;
+            try
+            {
+                UpdateInfo update = await _updateService.CheckAsync(
+                    manual,
+                    cancellation.Token);
+                if (update == null)
+                {
+                    if (manual && _settingsWindow != null)
+                        _settingsWindow.SetUpdateStatus(
+                            "当前已是最新版本",
+                            true);
+                    return;
+                }
+
+                if (_settingsWindow != null)
+                    _settingsWindow.SetUpdateStatus(
+                        "发现新版本 " + update.Version,
+                        true);
+                ShowUpdateWindow(update);
+            }
+            catch (OperationCanceledException)
+            {
+                if (manual && _settingsWindow != null)
+                    _settingsWindow.SetUpdateStatus(
+                        "检查已取消",
+                        true);
+            }
+            catch (Exception error)
+            {
+                DiagnosticLog.Write(
+                    "Update check failed; type=" +
+                    error.GetType().Name);
+                if (manual && _settingsWindow != null)
+                    _settingsWindow.SetUpdateStatus(
+                        "检查失败：" + CompactError(error.Message),
+                        true);
+            }
+            finally
+            {
+                if (ReferenceEquals(_updateCancellation, cancellation))
+                    _updateCancellation = null;
+                cancellation.Dispose();
+                _updateCheckInProgress = false;
+            }
+        }
+
+        private void ShowUpdateWindow(UpdateInfo update)
+        {
+            if (_updateWindow != null && _updateWindow.IsVisible)
+            {
+                _updateWindow.Activate();
+                return;
+            }
+            _updateWindow = new UpdateWindow(update, _updateService);
+            if (_settingsWindow != null && _settingsWindow.IsVisible)
+                _updateWindow.Owner = _settingsWindow;
+            _updateWindow.Closed += delegate { _updateWindow = null; };
+            _updateWindow.Show();
+            _updateWindow.Activate();
         }
 
         private bool HasConfiguredProvider()
@@ -677,7 +793,9 @@ namespace GlobalTranslator
             }
             if (_monitor != null) _monitor.Dispose();
             if (_ocrCancellation != null) _ocrCancellation.Cancel();
+            if (_updateCancellation != null) _updateCancellation.Cancel();
             if (_client != null) _client.Dispose();
+            if (_updateService != null) _updateService.Dispose();
             if (_mutex != null) _mutex.Dispose();
             DiagnosticLog.Write("Application stopped");
             base.OnExit(e);

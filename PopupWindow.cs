@@ -1259,6 +1259,7 @@ namespace GlobalTranslator
 
         private void ShowTranslationError(Exception error)
         {
+            _translatedText = "";
             _translation.Text = "";
             _translation.Visibility = Visibility.Collapsed;
             _copyTranslation.Visibility = Visibility.Collapsed;

@@ -61,6 +61,16 @@ try {
             "# Sharkey v$Version`r`n`r`n$section`r`n",
             (New-Object Text.UTF8Encoding($false)))
 
+        $releaseExe = Join-Path $dist "Sharkey-win-x64.exe"
+        Copy-Item -LiteralPath $exe -Destination $releaseExe -Force
+        $fixedNotes = Join-Path $dist "RELEASE-NOTES.md"
+        Copy-Item -LiteralPath $notes -Destination $fixedNotes -Force
+        $releaseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $releaseExe).Hash.ToLowerInvariant()
+        [IO.File]::WriteAllText(
+            "$releaseExe.sha256",
+            "$releaseHash  Sharkey-win-x64.exe`r`n",
+            (New-Object Text.UTF8Encoding($false)))
+
         $package = Join-Path $dist "Sharkey-v$Version-win-x64.zip"
         if (Test-Path $package) { Remove-Item -LiteralPath $package -Force }
         Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $package
@@ -87,7 +97,8 @@ try {
         git tag -a "v$Version" -m "Sharkey v$Version"
         if ($LASTEXITCODE -ne 0) { throw "创建 Git 标签失败。" }
     }
-    Write-Host "发布包已生成：dist\Sharkey-v$Version-win-x64.zip"
+    Write-Host "GitHub Release 文件已生成：dist\Sharkey-win-x64.exe、.sha256、RELEASE-NOTES.md"
+    Write-Host "归档包已生成：dist\Sharkey-v$Version-win-x64.zip"
     if (-not $SkipTag) { Write-Host "已创建本地标签 v$Version（未推送）。" }
 }
 finally {

@@ -1,9 +1,30 @@
 using System;
+using System.Text.RegularExpressions;
 
 namespace GlobalTranslator
 {
     internal static class SmartTargetResolver
     {
+        private static readonly Regex DirectionNoisePattern =
+            new Regex(
+                @"(?i)(?:\bhttps?://|\bwww\.)\S+|\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant);
+
+        private static readonly Regex EmailPattern =
+            new Regex(
+                @"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant |
+                RegexOptions.IgnoreCase);
+
+        private static readonly Regex CodeKeywordPattern =
+            new Regex(
+                @"^\s*(?:if|else|for|foreach|while|switch|case|return|var|let|const|class|struct|interface|public|private|protected|internal|static|void|function|namespace|using|import|from|def|select|insert|update|delete)\b",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant |
+                RegexOptions.IgnoreCase);
+
         public static string Resolve(
             string text,
             string mode,
@@ -19,11 +40,14 @@ namespace GlobalTranslator
 
         public static string ResolveSmart(string text)
         {
+            string meaningfulText = DirectionNoisePattern.Replace(
+                text ?? "",
+                " ");
             int han = 0;
             int latin = 0;
             int kana = 0;
             int hangul = 0;
-            foreach (char value in text ?? "")
+            foreach (char value in meaningfulText)
             {
                 int code = value;
                 if (IsKana(code))
@@ -40,7 +64,6 @@ namespace GlobalTranslator
                 return "zh-Hans";
             if (han > 0 &&
                 (latin == 0 ||
-                 han >= 2 ||
                  (double)han / (han + latin) >= 0.30))
                 return "en";
             return "zh-Hans";
@@ -64,33 +87,89 @@ namespace GlobalTranslator
                  uri.Scheme == Uri.UriSchemeHttps))
                 return true;
 
+            if (EmailPattern.IsMatch(value))
+                return true;
+
             bool hasLetter = false;
             bool hasDigit = false;
-            bool hasCodePunctuation = false;
             foreach (char character in value)
             {
                 if (char.IsLetter(character))
                     hasLetter = true;
                 if (char.IsDigit(character))
                     hasDigit = true;
-                if ("{}[]();=<>".IndexOf(character) >= 0)
-                    hasCodePunctuation = true;
             }
             if (!hasLetter && hasDigit)
                 return true;
-            if (hasCodePunctuation &&
-                (value.IndexOf(';') >= 0 ||
-                 value.IndexOf('{') >= 0 ||
-                 value.IndexOf('}') >= 0 ||
-                 value.IndexOf('=') >= 0 ||
-                 value.StartsWith(
-                     "if ",
-                     StringComparison.OrdinalIgnoreCase) ||
-                 value.StartsWith(
-                     "if(",
-                     StringComparison.OrdinalIgnoreCase)))
+
+            if (LooksLikeStandaloneSku(value))
+                return true;
+            if (LooksLikeCode(value))
                 return true;
             return false;
+        }
+
+        private static bool LooksLikeStandaloneSku(string value)
+        {
+            if (value.Length > 128 ||
+                value.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
+                return false;
+
+            bool hasLatinLetter = false;
+            bool hasDigit = false;
+            foreach (char character in value)
+            {
+                if (IsLatinLetter(character))
+                {
+                    hasLatinLetter = true;
+                    continue;
+                }
+                if (char.IsDigit(character))
+                {
+                    hasDigit = true;
+                    continue;
+                }
+                if ("._-/".IndexOf(character) < 0)
+                    return false;
+            }
+            return hasLatinLetter && hasDigit;
+        }
+
+        private static bool LooksLikeCode(string value)
+        {
+            bool hasPairedBraces =
+                value.IndexOf('{') >= 0 && value.IndexOf('}') >= 0;
+            bool hasStrongOperator =
+                value.IndexOf("=>", StringComparison.Ordinal) >= 0 ||
+                value.IndexOf("==", StringComparison.Ordinal) >= 0 ||
+                value.IndexOf("!=", StringComparison.Ordinal) >= 0 ||
+                value.IndexOf("&&", StringComparison.Ordinal) >= 0 ||
+                value.IndexOf("||", StringComparison.Ordinal) >= 0 ||
+                value.IndexOf("::", StringComparison.Ordinal) >= 0;
+            if (hasPairedBraces || hasStrongOperator)
+                return true;
+
+            bool hasAssignment = value.IndexOf('=') >= 0;
+            bool hasStatementEnd = value.IndexOf(';') >= 0;
+            bool hasParentheses =
+                value.IndexOf('(') >= 0 && value.IndexOf(')') >= 0;
+            bool hasBrackets =
+                value.IndexOf('[') >= 0 && value.IndexOf(']') >= 0;
+            bool hasCodeKeyword = CodeKeywordPattern.IsMatch(value);
+
+            int syntaxSignals = 0;
+            if (hasAssignment) syntaxSignals++;
+            if (hasStatementEnd) syntaxSignals++;
+            if (hasParentheses) syntaxSignals++;
+            if (hasBrackets) syntaxSignals++;
+
+            if (hasCodeKeyword && syntaxSignals > 0)
+                return true;
+
+            int wordCount = Regex.Matches(
+                value,
+                @"[\p{L}_][\p{L}\p{Nd}_-]*").Count;
+            return syntaxSignals >= 2 && wordCount <= 3;
         }
 
         private static string NormalizeFixedTarget(

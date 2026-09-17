@@ -40,6 +40,8 @@ namespace GlobalTranslator
         private const int TranslationCacheCapacity = 20;
         private static readonly TimeSpan TranslationCacheLifetime =
             TimeSpan.FromMinutes(15);
+        private static readonly TimeSpan ModelStreamIdleTimeout =
+            TimeSpan.FromSeconds(30);
 
         public TranslationClient()
         {
@@ -393,7 +395,12 @@ namespace GlobalTranslator
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    string errorJson = await response.Content.ReadAsStringAsync();
+                    string errorJson = useStream
+                        ? await ReadContentWithTimeoutAsync(
+                            response.Content,
+                            token,
+                            ModelStreamIdleTimeout)
+                        : await response.Content.ReadAsStringAsync();
                     throw ApiError("模型 API", response.StatusCode, errorJson);
                 }
 
@@ -412,6 +419,7 @@ namespace GlobalTranslator
                     string.IsNullOrWhiteSpace(data.Choices[0].Message.Content))
                     throw new InvalidOperationException(
                         "模型 API 返回格式不兼容，未找到 choices[0].message.content。");
+                ValidateOpenAiFinishReason(data.Choices[0].FinishReason);
                 string translatedText = CleanTranslationText(
                     data.Choices[0].Message.Content);
                 if (string.IsNullOrWhiteSpace(translatedText))
@@ -470,15 +478,33 @@ namespace GlobalTranslator
         private static async Task<TranslationResult> ReadModelStreamAsync(
             HttpResponseMessage response, string model, Action<string> progress, CancellationToken token)
         {
+            return await ReadModelStreamAsync(
+                response,
+                model,
+                progress,
+                token,
+                ModelStreamIdleTimeout);
+        }
+
+        private static async Task<TranslationResult> ReadModelStreamAsync(
+            HttpResponseMessage response,
+            string model,
+            Action<string> progress,
+            CancellationToken token,
+            TimeSpan idleTimeout)
+        {
             var translated = new StringBuilder();
             DateTime lastProgressUtc = DateTime.MinValue;
+            bool sawTerminal = false;
             using (Stream stream = await response.Content.ReadAsStreamAsync())
             using (var reader = new StreamReader(stream, Encoding.UTF8))
             {
                 while (true)
                 {
-                    token.ThrowIfCancellationRequested();
-                    string line = await reader.ReadLineAsync();
+                    string line = await ReadLineWithTimeoutAsync(
+                        reader,
+                        token,
+                        idleTimeout);
                     if (line == null) break;
                     if (string.IsNullOrWhiteSpace(line) || line.StartsWith(":", StringComparison.Ordinal))
                         continue;
@@ -486,17 +512,39 @@ namespace GlobalTranslator
                         continue;
 
                     string payload = line.Substring(5).Trim();
-                    if (payload == "[DONE]") break;
+                    if (payload == "[DONE]")
+                    {
+                        sawTerminal = true;
+                        break;
+                    }
+
+                    string streamError;
+                    if (TryGetStreamError(payload, out streamError))
+                        throw new InvalidOperationException(
+                            "模型 API 流式响应出错：" + streamError);
 
                     ModelApiStreamResponse chunk;
                     try { chunk = Deserialize<ModelApiStreamResponse>(payload); }
-                    catch { continue; }
-                    if (chunk == null || chunk.Choices == null || chunk.Choices.Length == 0 ||
-                        chunk.Choices[0].Delta == null ||
-                        string.IsNullOrEmpty(chunk.Choices[0].Delta.Content))
+                    catch (Exception error)
+                    {
+                        throw new InvalidOperationException(
+                            "模型 API 返回了无法解析的流式数据。",
+                            error);
+                    }
+                    if (chunk == null || chunk.Choices == null || chunk.Choices.Length == 0)
                         continue;
 
-                    translated.Append(chunk.Choices[0].Delta.Content);
+                    ModelApiStreamChoice choice = chunk.Choices[0];
+                    if (!string.IsNullOrWhiteSpace(choice.FinishReason))
+                    {
+                        ValidateOpenAiFinishReason(choice.FinishReason);
+                        sawTerminal = true;
+                    }
+                    if (choice.Delta == null ||
+                        string.IsNullOrEmpty(choice.Delta.Content))
+                        continue;
+
+                    translated.Append(choice.Delta.Content);
                     DateTime nowUtc = DateTime.UtcNow;
                     if (progress != null &&
                         (nowUtc - lastProgressUtc).TotalMilliseconds >= 30)
@@ -507,6 +555,9 @@ namespace GlobalTranslator
                 }
             }
 
+            if (!sawTerminal)
+                throw new InvalidOperationException(
+                    "模型 API 流式响应意外中断，译文不完整，请重试。");
             if (translated.Length == 0)
                 throw new InvalidOperationException("模型 API 返回了空翻译结果。");
             string translatedText = CleanTranslationText(
@@ -529,6 +580,22 @@ namespace GlobalTranslator
                 Action<string> progress,
                 CancellationToken token)
         {
+            return await ReadAnthropicModelStreamAsync(
+                response,
+                model,
+                progress,
+                token,
+                ModelStreamIdleTimeout);
+        }
+
+        private static async Task<TranslationResult>
+            ReadAnthropicModelStreamAsync(
+                HttpResponseMessage response,
+                string model,
+                Action<string> progress,
+                CancellationToken token,
+                TimeSpan idleTimeout)
+        {
             string mediaType = response.Content.Headers.ContentType == null
                 ? ""
                 : response.Content.Headers.ContentType.MediaType;
@@ -537,7 +604,15 @@ namespace GlobalTranslator
                     "text/event-stream",
                     StringComparison.OrdinalIgnoreCase))
             {
-                string json = await response.Content.ReadAsStringAsync();
+                string json = await ReadContentWithTimeoutAsync(
+                    response.Content,
+                    token,
+                    idleTimeout);
+                Dictionary<string, object> root = DeserializeJsonObject(json);
+                ThrowIfAnthropicError(root);
+                ValidateAnthropicStopReason(
+                    GetStringValue(root, "stop_reason"),
+                    false);
                 string text = ExtractAnthropicText(json);
                 if (string.IsNullOrWhiteSpace(text))
                     throw new InvalidOperationException(
@@ -556,13 +631,16 @@ namespace GlobalTranslator
 
             var translated = new StringBuilder();
             DateTime lastProgressUtc = DateTime.MinValue;
+            bool sawTerminal = false;
             using (Stream stream = await response.Content.ReadAsStreamAsync())
             using (var reader = new StreamReader(stream, Encoding.UTF8))
             {
                 while (true)
                 {
-                    token.ThrowIfCancellationRequested();
-                    string line = await reader.ReadLineAsync();
+                    string line = await ReadLineWithTimeoutAsync(
+                        reader,
+                        token,
+                        idleTimeout);
                     if (line == null) break;
                     if (string.IsNullOrWhiteSpace(line) ||
                         line.StartsWith(":", StringComparison.Ordinal))
@@ -571,7 +649,40 @@ namespace GlobalTranslator
                         continue;
 
                     string payload = line.Substring(5).Trim();
-                    if (payload == "[DONE]") break;
+                    if (payload == "[DONE]")
+                    {
+                        sawTerminal = true;
+                        break;
+                    }
+
+                    Dictionary<string, object> root =
+                        DeserializeJsonObject(payload);
+                    ThrowIfAnthropicError(root);
+                    string eventType = GetStringValue(root, "type");
+                    if (string.Equals(
+                            eventType,
+                            "message_stop",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        sawTerminal = true;
+                        break;
+                    }
+                    if (string.Equals(
+                            eventType,
+                            "message_delta",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        Dictionary<string, object> deltaObject =
+                            GetDictionaryValue(root, "delta");
+                        string stopReason = GetStringValue(
+                            deltaObject,
+                            "stop_reason");
+                        if (!string.IsNullOrWhiteSpace(stopReason))
+                        {
+                            ValidateAnthropicStopReason(stopReason, true);
+                            sawTerminal = true;
+                        }
+                    }
                     string delta = ExtractAnthropicDeltaText(payload);
                     if (string.IsNullOrEmpty(delta)) continue;
                     translated.Append(delta);
@@ -585,6 +696,9 @@ namespace GlobalTranslator
                 }
             }
 
+            if (!sawTerminal)
+                throw new InvalidOperationException(
+                    "模型 API 流式响应意外中断，译文不完整，请重试。");
             if (translated.Length == 0)
                 throw new InvalidOperationException(
                     "模型 API 返回了空翻译结果。");
@@ -599,6 +713,110 @@ namespace GlobalTranslator
                 DetectedLanguage = "",
                 Provider = "AI 模型 · " + model
             };
+        }
+
+        private static async Task<string> ReadLineWithTimeoutAsync(
+            StreamReader reader,
+            CancellationToken token,
+            TimeSpan idleTimeout)
+        {
+            token.ThrowIfCancellationRequested();
+            using (CancellationTokenSource timeoutSource =
+                CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                Task<string> readTask = reader.ReadLineAsync();
+                Task delayTask = Task.Delay(
+                    idleTimeout,
+                    timeoutSource.Token);
+                Task completed = await Task.WhenAny(readTask, delayTask);
+                if (completed == readTask)
+                {
+                    timeoutSource.Cancel();
+                    return await readTask;
+                }
+
+                ObserveLateFault(readTask);
+                token.ThrowIfCancellationRequested();
+                throw new TimeoutException(
+                    "模型 API 流式响应超过 30 秒没有收到新数据。");
+            }
+        }
+
+        private static async Task<string> ReadContentWithTimeoutAsync(
+            HttpContent content,
+            CancellationToken token,
+            TimeSpan idleTimeout)
+        {
+            token.ThrowIfCancellationRequested();
+            using (CancellationTokenSource timeoutSource =
+                CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                Task<string> readTask = content.ReadAsStringAsync();
+                Task delayTask = Task.Delay(
+                    idleTimeout,
+                    timeoutSource.Token);
+                Task completed = await Task.WhenAny(readTask, delayTask);
+                if (completed == readTask)
+                {
+                    timeoutSource.Cancel();
+                    return await readTask;
+                }
+
+                ObserveLateFault(readTask);
+                token.ThrowIfCancellationRequested();
+                throw new TimeoutException(
+                    "模型 API 响应内容超过 30 秒没有读取完成。");
+            }
+        }
+
+        private static void ObserveLateFault(Task task)
+        {
+            task.ContinueWith(
+                completed =>
+                {
+                    var ignored = completed.Exception;
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+        }
+
+        private static void ValidateOpenAiFinishReason(string finishReason)
+        {
+            string reason = (finishReason ?? "").Trim();
+            if (reason.Length == 0 ||
+                string.Equals(reason, "stop", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (string.Equals(reason, "length", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(reason, "max_tokens", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "模型 API 输出达到长度限制，译文可能不完整，请重试。");
+            throw new InvalidOperationException(
+                "模型 API 未正常结束（" + reason + "），请重试。");
+        }
+
+        private static void ValidateAnthropicStopReason(
+            string stopReason,
+            bool requireKnownReason)
+        {
+            string reason = (stopReason ?? "").Trim();
+            if (reason.Length == 0)
+            {
+                if (requireKnownReason)
+                    throw new InvalidOperationException(
+                        "模型 API 未提供完整结束标记，请重试。");
+                return;
+            }
+            if (string.Equals(reason, "end_turn", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(reason, "stop_sequence", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(reason, "stop", StringComparison.OrdinalIgnoreCase))
+                return;
+            if (string.Equals(reason, "max_tokens", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(reason, "length", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "模型 API 输出达到长度限制，译文可能不完整，请重试。");
+            throw new InvalidOperationException(
+                "模型 API 未正常结束（" + reason + "），请重试。");
         }
 
         private async Task<TranslationResult> TranslateMicrosoftFreeAsync(
@@ -803,6 +1021,89 @@ namespace GlobalTranslator
             var serializer = new DataContractJsonSerializer(typeof(T));
             using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
                 return (T)serializer.ReadObject(stream);
+        }
+
+        private static Dictionary<string, object> DeserializeJsonObject(
+            string json)
+        {
+            try
+            {
+                var root = new JavaScriptSerializer().DeserializeObject(json)
+                           as Dictionary<string, object>;
+                if (root == null)
+                    throw new InvalidOperationException();
+                return root;
+            }
+            catch (Exception error)
+            {
+                throw new InvalidOperationException(
+                    "模型 API 返回了无法解析的流式数据。",
+                    error);
+            }
+        }
+
+        private static Dictionary<string, object> GetDictionaryValue(
+            Dictionary<string, object> source,
+            string key)
+        {
+            if (source == null) return null;
+            object value;
+            return source.TryGetValue(key, out value)
+                ? value as Dictionary<string, object>
+                : null;
+        }
+
+        private static string GetStringValue(
+            Dictionary<string, object> source,
+            string key)
+        {
+            if (source == null) return "";
+            object value;
+            return source.TryGetValue(key, out value)
+                ? value as string ?? ""
+                : "";
+        }
+
+        private static bool TryGetStreamError(
+            string json,
+            out string message)
+        {
+            Dictionary<string, object> root = DeserializeJsonObject(json);
+            Dictionary<string, object> error =
+                GetDictionaryValue(root, "error");
+            if (error == null)
+            {
+                message = "";
+                return false;
+            }
+            message = GetStringValue(error, "message");
+            if (string.IsNullOrWhiteSpace(message))
+                message = GetStringValue(error, "type");
+            if (string.IsNullOrWhiteSpace(message))
+                message = "服务返回了流内错误。";
+            return true;
+        }
+
+        private static void ThrowIfAnthropicError(
+            Dictionary<string, object> root)
+        {
+            string eventType = GetStringValue(root, "type");
+            Dictionary<string, object> error =
+                GetDictionaryValue(root, "error");
+            if (!string.Equals(
+                    eventType,
+                    "error",
+                    StringComparison.OrdinalIgnoreCase) &&
+                error == null)
+                return;
+
+            string message = GetStringValue(error, "message");
+            if (string.IsNullOrWhiteSpace(message))
+                message = GetStringValue(error, "type");
+            if (string.IsNullOrWhiteSpace(message))
+                message = "服务返回了流内错误。";
+            throw new InvalidOperationException(
+                "模型 API 流式响应出错：" + message);
         }
 
         private static string ExtractAnthropicText(string json)
@@ -1034,6 +1335,7 @@ namespace GlobalTranslator
         private sealed class ModelApiChoice
         {
             [DataMember(Name = "message")] public ModelApiMessage Message { get; set; }
+            [DataMember(Name = "finish_reason")] public string FinishReason { get; set; }
         }
         [DataContract]
         private sealed class ModelApiMessage
@@ -1049,6 +1351,7 @@ namespace GlobalTranslator
         private sealed class ModelApiStreamChoice
         {
             [DataMember(Name = "delta")] public ModelApiMessage Delta { get; set; }
+            [DataMember(Name = "finish_reason")] public string FinishReason { get; set; }
         }
     }
 }

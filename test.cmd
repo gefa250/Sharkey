@@ -8,6 +8,7 @@ if not exist "%OUT%" mkdir "%OUT%"
 
 "%CSC%" /nologo /target:exe /out:"%OUT%\FeatureProbe.exe" ^
   /r:System.dll /r:System.Core.dll /r:System.Drawing.dll ^
+  /r:System.Net.Http.dll /r:System.Windows.Forms.dll ^
   tests\FeatureProbe.cs
 if errorlevel 1 exit /b 1
 "%OUT%\FeatureProbe.exe" "%APP%"

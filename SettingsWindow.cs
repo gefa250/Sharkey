@@ -9,6 +9,7 @@ using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using ShapePath = System.Windows.Shapes.Path;
 using Windows.Globalization;
 using Windows.Media.Ocr;
 
@@ -36,6 +37,8 @@ namespace GlobalTranslator
         private TextBox _region;
         private TextBox _modelBaseUrl;
         private PasswordBox _modelApiKey;
+        private readonly Dictionary<PasswordBox, TextBox> _revealedKeys =
+            new Dictionary<PasswordBox, TextBox>();
         private TextBox _modelName;
         private ComboBox _modelVendor;
         private ComboBox _modelProtocol;
@@ -44,6 +47,8 @@ namespace GlobalTranslator
         private CheckBox _ocrLocalFallback;
         private Button _copyDiagnostics;
         private Button _openDiagnosticFolder;
+        private Button _checkUpdate;
+        private TextBlock _updateStatus;
         private TextBox _ocrVisionModel;
         private Button _cancelSettings;
         private TextBox _translateHotkey;
@@ -80,16 +85,18 @@ namespace GlobalTranslator
         private string _activeModelVendor = "";
 
         public event EventHandler SettingsSaved;
+        public event EventHandler UpdateCheckRequested;
 
         public SettingsWindow(AppSettings settings)
         {
             _settings = settings;
             Title = "鲨译 Sharkey · 设置";
             Width = 760;
-            Height = 820;
-            MinHeight = 690;
+            Height = Math.Min(820, SystemParameters.WorkArea.Height);
+            MinWidth = 760;
+            MinHeight = 480;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            ResizeMode = ResizeMode.CanMinimize;
+            ResizeMode = ResizeMode.CanResize;
             Background = Page;
             FontFamily = new FontFamily("Microsoft YaHei UI");
             KeyDown += SettingsWindowKeyDown;
@@ -332,7 +339,7 @@ namespace GlobalTranslator
             configuration.Margin = new Thickness(0, 10, 0, 0);
             Grid.SetRow(configuration, 3);
             root.Children.Add(configuration);
-            return root;
+            return Scroll(root);
         }
 
         private Border BuildProviderPicker()
@@ -713,6 +720,32 @@ namespace GlobalTranslator
                 Foreground = Muted,
                 FontSize = 11
             });
+            var updateActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 12, 0, 0)
+            };
+            _checkUpdate = SecondaryButton("检查更新");
+            _checkUpdate.Width = 102;
+            _checkUpdate.Click += delegate
+            {
+                SetUpdateStatus("正在检查更新…", false);
+                var handler = UpdateCheckRequested;
+                if (handler != null)
+                    handler(this, EventArgs.Empty);
+            };
+            updateActions.Children.Add(_checkUpdate);
+            _updateStatus = new TextBlock
+            {
+                Text = "启动后每天自动检查一次",
+                Foreground = Muted,
+                FontSize = 10.5,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(10, 0, 0, 0),
+                TextWrapping = TextWrapping.Wrap
+            };
+            updateActions.Children.Add(_updateStatus);
+            version.Children.Add(updateActions);
             versionCard.Child = version;
             root.Children.Add(versionCard);
 
@@ -750,6 +783,16 @@ namespace GlobalTranslator
             diagnosticsCard.Child = diagnostics;
             root.Children.Add(diagnosticsCard);
             return Scroll(root);
+        }
+
+        public void SetUpdateStatus(
+            string status,
+            bool checkEnabled)
+        {
+            if (_updateStatus != null)
+                _updateStatus.Text = status ?? "";
+            if (_checkUpdate != null)
+                _checkUpdate.IsEnabled = checkEnabled;
         }
 
         private void CopyDiagnosticsClick(object sender, RoutedEventArgs e)
@@ -2648,19 +2691,126 @@ namespace GlobalTranslator
             return box;
         }
 
-        private static PasswordBox AddPassword(
+        private PasswordBox AddPassword(
             Panel parent, string label, string placeholder)
         {
             AddFieldLabel(parent, label);
+            var host = new Grid
+            {
+                Margin = new Thickness(24, 5, 0, 9),
+                Height = 36,
+                ToolTip = placeholder
+            };
+            host.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = new GridLength(1, GridUnitType.Star)
+            });
+            host.ColumnDefinitions.Add(new ColumnDefinition
+            {
+                Width = GridLength.Auto
+            });
+
             var box = new PasswordBox
             {
-                Height = 36,
                 Padding = new Thickness(9, 7, 9, 7),
-                Margin = new Thickness(24, 5, 0, 9),
-                ToolTip = placeholder,
-                BorderBrush = Line
+                BorderBrush = Line,
+                ToolTip = placeholder
             };
-            parent.Children.Add(box);
+            var revealed = new TextBox
+            {
+                Padding = new Thickness(9, 7, 9, 7),
+                BorderBrush = Line,
+                Visibility = Visibility.Collapsed,
+                ToolTip = placeholder
+            };
+            var eye = new ShapePath
+            {
+                Data = Geometry.Parse(
+                    "M1,10 C4,4 8,2 12,2 C16,2 20,4 23,10 C20,16 16,18 12,18 C8,18 4,16 1,10 Z M8,10 A4,4 0 1 0 16,10 A4,4 0 1 0 8,10"),
+                Stroke = Ocean,
+                StrokeThickness = 1.4,
+                Fill = Brushes.Transparent,
+                Stretch = Stretch.Uniform,
+                Width = 23,
+                Height = 19
+            };
+            var eyeOff = new ShapePath
+            {
+                Data = Geometry.Parse(
+                    "M2,3 L22,17 M1,10 C4,4 8,2 12,2 C16,2 20,4 23,10 C20,16 16,18 12,18 C8,18 4,16 1,10 Z"),
+                Stroke = Ocean,
+                StrokeThickness = 1.4,
+                Fill = Brushes.Transparent,
+                Stretch = Stretch.Uniform,
+                Width = 23,
+                Height = 19,
+                Visibility = Visibility.Collapsed
+            };
+            var icon = new Grid
+            {
+                Width = 24,
+                Height = 20
+            };
+            icon.Children.Add(eye);
+            icon.Children.Add(eyeOff);
+            var toggle = new Button
+            {
+                Content = icon,
+                Width = 36,
+                Margin = new Thickness(5, 0, 0, 0),
+                Padding = new Thickness(4, 0, 4, 0),
+                Foreground = Ocean,
+                Background = Brushes.White,
+                BorderBrush = Line,
+                Cursor = Cursors.Hand,
+                ToolTip = "显示完整 API Key"
+            };
+            Grid.SetColumn(box, 0);
+            Grid.SetColumn(revealed, 0);
+            Grid.SetColumn(toggle, 1);
+            host.Children.Add(box);
+            host.Children.Add(revealed);
+            host.Children.Add(toggle);
+            parent.Children.Add(host);
+            _revealedKeys[box] = revealed;
+
+            box.PasswordChanged += delegate
+            {
+                if (revealed.Text != box.Password)
+                    revealed.Text = box.Password;
+            };
+            revealed.TextChanged += delegate
+            {
+                if (revealed.Visibility == Visibility.Visible &&
+                    box.Password != revealed.Text)
+                    box.Password = revealed.Text;
+            };
+            toggle.Click += delegate
+            {
+                bool show = revealed.Visibility != Visibility.Visible;
+                revealed.Visibility = show
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                box.Visibility = show
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+                eye.Visibility = show
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
+                eyeOff.Visibility = show
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                toggle.ToolTip = show
+                    ? "隐藏 API Key"
+                    : "显示完整 API Key";
+                if (show)
+                {
+                    revealed.Focus();
+                    revealed.CaretIndex = revealed.Text.Length;
+                }
+                else
+                    box.Focus();
+            };
             return box;
         }
 

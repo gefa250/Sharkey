@@ -13,6 +13,7 @@ namespace GlobalTranslator
         private Point _current;
         private Rectangle _selection;
         private bool _dragging;
+        private bool _rightCancelPending;
 
         public Bitmap SelectedBitmap { get; private set; }
 
@@ -67,7 +68,7 @@ namespace GlobalTranslator
             using (var background = new SolidBrush(Color.FromArgb(220, 8, 42, 67)))
             using (var brush = new SolidBrush(Color.White))
             {
-                const string hint = "鲨译 OCR  ·  拖动框选文字  ·  Esc 取消";
+                const string hint = "鲨译 OCR  ·  拖动框选文字  ·  右键 / Esc 取消";
                 SizeF size = e.Graphics.MeasureString(hint, font);
                 var box = new RectangleF(
                     (ClientSize.Width - size.Width) / 2 - 18, 22,
@@ -79,6 +80,18 @@ namespace GlobalTranslator
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
+            if (e.Button == MouseButtons.Right)
+            {
+                // Keep the overlay alive until button-up, otherwise the browser
+                // underneath receives the release and opens its context menu.
+                _rightCancelPending = true;
+                _dragging = false;
+                _selection = Rectangle.Empty;
+                Capture = true;
+                Invalidate();
+                return;
+            }
+            if (_rightCancelPending) return;
             if (e.Button != MouseButtons.Left) return;
             _start = e.Location;
             _current = e.Location;
@@ -97,6 +110,15 @@ namespace GlobalTranslator
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
+            if (_rightCancelPending)
+            {
+                if (e.Button == MouseButtons.Right)
+                {
+                    _rightCancelPending = false;
+                    CancelSelection();
+                }
+                return;
+            }
             if (!_dragging || e.Button != MouseButtons.Left) return;
             _dragging = false;
             Capture = false;
@@ -119,10 +141,21 @@ namespace GlobalTranslator
         {
             if (e.KeyCode == Keys.Escape)
             {
-                DialogResult = DialogResult.Cancel;
-                Close();
+                if (!_rightCancelPending) CancelSelection();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
             }
             base.OnKeyDown(e);
+        }
+
+        private void CancelSelection()
+        {
+            _dragging = false;
+            Capture = false;
+            _selection = Rectangle.Empty;
+            DialogResult = DialogResult.Cancel;
+            Close();
         }
 
         protected override void Dispose(bool disposing)
