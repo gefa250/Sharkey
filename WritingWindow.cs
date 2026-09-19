@@ -62,7 +62,7 @@ namespace GlobalTranslator
             var splitter = new GridSplitter { Height = 8, HorizontalAlignment = HorizontalAlignment.Stretch }; Grid.SetRow(splitter, 1); body.Children.Add(splitter);
             var resultGroup = new GroupBox { Header = "译文 · 核对后复制", Content = _result, Padding = new Thickness(4) };
             Grid.SetRow(resultGroup, 2); body.Children.Add(resultGroup); root.Children.Add(body);
-            _source.ToolTip = "填写中文原意，也可粘贴 PDF 文本"; _result.ToolTip = "译文可编辑，核对后复制";
+            _source.ToolTip = "填写中文原意，也可粘贴 PDF 文本。按 Enter 翻译，Shift+Enter 换行"; _result.ToolTip = "译文可编辑，核对后复制";
             _source.TextChanged += delegate { Invalidate(); };
             _requirements.TextChanged += delegate { Invalidate(); };
             _rewrite.Checked += delegate { Invalidate(); }; _rewrite.Unchecked += delegate { Invalidate(); };
@@ -70,7 +70,14 @@ namespace GlobalTranslator
             Closed += delegate { Invalidate(); };
             PreviewKeyDown += async delegate(object sender, System.Windows.Input.KeyEventArgs e)
             {
-                if (e.Key == System.Windows.Input.Key.Enter && System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control)
+                bool controlEnter =
+                    e.Key == System.Windows.Input.Key.Enter &&
+                    System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.Control;
+                bool sourceEnter =
+                    e.Key == System.Windows.Input.Key.Enter &&
+                    System.Windows.Input.Keyboard.Modifiers == System.Windows.Input.ModifierKeys.None &&
+                    ReferenceEquals(System.Windows.Input.Keyboard.FocusedElement, _source);
+                if (controlEnter || sourceEnter)
                 { e.Handled = true; await Translate(); }
             };
             if (entry != null)
