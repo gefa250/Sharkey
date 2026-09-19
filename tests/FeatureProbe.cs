@@ -259,7 +259,7 @@ internal static class FeatureProbe
             throw new InvalidOperationException(
                 "Startup command does not target Sharkey.exe.");
         Console.WriteLine(
-            "HOTKEY defaults=F8/F9/F10 combo={0} startupCommandReady=True",
+            "HOTKEY defaults=F7/F8/F9/F10 combo={0} startupCommandReady=True",
             display);
     }
 
