@@ -52,6 +52,7 @@ namespace GlobalTranslator
         private TextBox _ocrVisionModel;
         private Button _cancelSettings;
         private TextBox _translateHotkey;
+        private TextBox _writingHotkey;
         private TextBox _ocrHotkey;
         private TextBox _settingsHotkey;
         private CheckBox _startWithWindows;
@@ -609,6 +610,8 @@ namespace GlobalTranslator
                 Foreground = Navy,
                 Margin = new Thickness(0, 0, 0, 10)
             });
+            _writingHotkey = AddHotkeyRecorder(
+                shortcutContent, "中译外表达", "打开或唤回表达窗口，保留当前输入");
             _translateHotkey = AddHotkeyRecorder(
                 shortcutContent,
                 "选中文字翻译",
@@ -623,7 +626,7 @@ namespace GlobalTranslator
                 "随时打开 Sharkey 设置页");
             var reset = new Button
             {
-                Content = "恢复默认 F8 / F9 / F10",
+                Content = "恢复默认 F7 / F8 / F9 / F10",
                 Height = 34,
                 Padding = new Thickness(13, 0, 13, 0),
                 Margin = new Thickness(0, 4, 0, 0),
@@ -636,6 +639,7 @@ namespace GlobalTranslator
             reset.Click += delegate
             {
                 _translateHotkey.Text = "F8";
+                _writingHotkey.Text = "F7";
                 _ocrHotkey.Text = "F9";
                 _settingsHotkey.Text = "F10";
             };
@@ -1431,6 +1435,7 @@ namespace GlobalTranslator
                     _ocrVisionModel.Text = _settings.OcrVisionModel;
                 _translateHotkey.Text =
                     NormalizeHotkey(_settings.TranslateHotkey, "F8");
+                _writingHotkey.Text = NormalizeHotkey(_settings.WritingHotkey, "F7");
                 _ocrHotkey.Text =
                     NormalizeHotkey(_settings.OcrHotkey, "F9");
                 _settingsHotkey.Text =
@@ -1463,10 +1468,11 @@ namespace GlobalTranslator
             HotkeyGesture translateGesture;
             HotkeyGesture ocrGesture;
             HotkeyGesture settingsGesture;
+            HotkeyGesture writingGesture;
             if (!ValidateHotkeys(
                 out translateGesture,
                 out ocrGesture,
-                out settingsGesture))
+                out settingsGesture, out writingGesture))
                 return;
 
             bool enableAiOcr = _ocrAiFallback != null &&
@@ -1546,6 +1552,7 @@ namespace GlobalTranslator
                 : _ocrVisionModel.Text.Trim();
             _settings.AutoTranslate = false;
             _settings.TranslateHotkey = translateGesture.Display;
+            _settings.WritingHotkey = writingGesture.Display;
             _settings.OcrHotkey = ocrGesture.Display;
             _settings.SettingsHotkey = settingsGesture.Display;
             _settings.StartWithWindows =
@@ -1573,12 +1580,15 @@ namespace GlobalTranslator
         private bool ValidateHotkeys(
             out HotkeyGesture translate,
             out HotkeyGesture ocr,
-            out HotkeyGesture settings)
+            out HotkeyGesture settings, out HotkeyGesture writing)
         {
             translate = null;
             ocr = null;
             settings = null;
+            writing = null;
             string error;
+            if (!HotkeyGesture.TryParse(_writingHotkey.Text, out writing, out error))
+                return ShowHotkeyError("中译外表达", error, _writingHotkey);
             if (!HotkeyGesture.TryParse(
                 _translateHotkey.Text,
                 out translate,
@@ -1597,12 +1607,12 @@ namespace GlobalTranslator
                 out error))
                 return ShowHotkeyError(
                     "打开设置", error, _settingsHotkey);
-            if (translate.SameAs(ocr) ||
+            if (writing.SameAs(translate) || writing.SameAs(ocr) || writing.SameAs(settings) || translate.SameAs(ocr) ||
                 translate.SameAs(settings) ||
                 ocr.SameAs(settings))
                 return ShowHotkeyError(
                     "快捷键冲突",
-                    "三项功能不能使用相同的快捷键。",
+                    "四项功能不能使用相同的快捷键。",
                     null);
             return true;
         }

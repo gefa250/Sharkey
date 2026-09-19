@@ -49,6 +49,21 @@ internal static class PopupInteractionProbe
                 app.GetType("GlobalTranslator.OcrRecognitionResult", true);
             object settings = Activator.CreateInstance(settingsType, true);
             object client = Activator.CreateInstance(clientType, true);
+            Type writingType = app.GetType("GlobalTranslator.WritingWindow", true);
+            Window writing = (Window)Activator.CreateInstance(writingType, new object[] { settings, client, null });
+            var writingSource = (TextBox)writingType.GetField("_source", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
+            var writingResult = (TextBox)writingType.GetField("_result", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
+            var writingCopy = (Button)writingType.GetField("_copy", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
+            writingSource.Text = "请确认交期"; writingResult.Text = "Please confirm the delivery date.";
+            Require(writingCopy.IsEnabled, "Completed writing result cannot be copied.");
+            writing.Show(); writing.UpdateLayout();
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
+            writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
+            Require(writingSource.ActualHeight > 35 && writingResult.ActualHeight > 35, "Writing workspace editors collapsed at minimum size.");
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace-small.png", 96);
+            writingSource.Text = "请确认数量";
+            Require(writingResult.Text.Length == 0 && !writingCopy.IsEnabled, "Changed source left stale writing result.");
+            writing.Close();
             object ocrResult = Activator.CreateInstance(ocrResultType, true);
             settingsType.GetField("Provider").SetValue(settings, "Microsoft");
             ocrResultType.GetField("Text").SetValue(
@@ -329,6 +344,12 @@ internal static class PopupInteractionProbe
                 !string.IsNullOrWhiteSpace(ocrHotkey.Text) &&
                 !string.IsNullOrWhiteSpace(settingsHotkey.Text),
                 "One or more hotkey recorders are empty.");
+            TextBox writingHotkey = (TextBox)settingsWindowType.GetField("_writingHotkey", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(settingsWindow);
+            Require(writingHotkey != null && writingHotkey.Text == "F7", "Writing hotkey default was not loaded.");
+            var validateKeys = settingsWindowType.GetMethod("ValidateHotkeys", BindingFlags.Instance | BindingFlags.NonPublic);
+            writingHotkey.Text = "Ctrl+Shift+J";
+            Require((bool)validateKeys.Invoke(settingsWindow, new object[] { null, null, null, null }), "Custom writing hotkey failed validation.");
+            writingHotkey.Text = "F7";
             ComboBox modelVendor = (ComboBox)settingsWindowType
                 .GetField(
                     "_modelVendor",
@@ -456,7 +477,7 @@ internal static class PopupInteractionProbe
                     openDiagnosticFolder.Content as string,
                     "打开日志目录") &&
                 supportSummary.IndexOf(
-                    "0.2.2", StringComparison.Ordinal) >= 0 &&
+                    "0.2.3", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
                     "CLR:", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(

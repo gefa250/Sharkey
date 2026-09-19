@@ -87,6 +87,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="VersionInfo.cs" />
+    <Compile Include="TextTools.cs" />
+    <Compile Include="WritingWindow.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="HotkeyGesture.cs" />
     <Compile Include="StartupManager.cs" />

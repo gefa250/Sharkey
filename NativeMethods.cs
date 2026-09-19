@@ -28,6 +28,7 @@ namespace GlobalTranslator
         internal const int HOTKEY_SCREENSHOT = 2;
         internal const int HOTKEY_SETTINGS = 3;
         internal const int HOTKEY_DISMISS = 4;
+        internal const int HOTKEY_WRITING = 5;
         internal const uint SWP_NOACTIVATE = 0x0010;
         internal const uint SWP_NOZORDER = 0x0004;
 

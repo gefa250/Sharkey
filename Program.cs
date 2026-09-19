@@ -33,6 +33,22 @@ namespace GlobalTranslator
         private UpdateWindow _updateWindow;
         private bool _updateCheckInProgress;
         private bool _screenshotSelecting;
+        private WritingWindow _writingWindow;
+        private ToolStripMenuItem _writingMenuItem;
+
+        private void ShowWriting()
+        {
+            if (_screenshotSelecting) return;
+            if (_writingWindow == null)
+            {
+                _writingWindow = new WritingWindow(_settings, _client, null);
+                _writingWindow.Closed += delegate { _writingWindow = null; };
+            }
+            if (_writingWindow.WindowState == WindowState.Minimized)
+                _writingWindow.WindowState = WindowState.Normal;
+            _writingWindow.Show();
+            _writingWindow.Activate();
+        }
 
         [STAThread]
         public static void Main()
@@ -315,6 +331,10 @@ namespace GlobalTranslator
         {
             if (_messageWindow == null) return;
             IntPtr handle = _messageWindow.Handle;
+            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_WRITING);
+            HotkeyGesture writing = ParsedHotkey(_settings.WritingHotkey, "F7");
+            bool writingRegistered = NativeHotKey.Register(handle, NativeMethods.HOTKEY_WRITING,
+                writing.Modifiers | NativeMethods.MOD_NOREPEAT, writing.VirtualKey);
             NativeHotKey.Unregister(
                 handle, NativeMethods.HOTKEY_TRANSLATE);
             NativeHotKey.Unregister(
@@ -350,11 +370,12 @@ namespace GlobalTranslator
                 translateRegistered +
                 "; ocr=" + screenshotRegistered +
                 "; settings=" + settingsRegistered);
-            if (!translateRegistered ||
+            if (!writingRegistered || !translateRegistered ||
                 !screenshotRegistered ||
                 !settingsRegistered)
             {
                 string message = "";
+                if (!writingRegistered) message += writing.Display + " 中译外表达不可用。请在设置中更换快捷键。\n";
                 if (!translateRegistered)
                     message += translate.Display + " 选中翻译不可用。";
                 if (!screenshotRegistered)
@@ -393,6 +414,11 @@ namespace GlobalTranslator
             {
                 DiagnosticLog.Write("Hotkey received");
                 CaptureCurrentSelection();
+                handled = true;
+            }
+            else if (message == NativeMethods.WM_HOTKEY && wParam.ToInt32() == NativeMethods.HOTKEY_WRITING)
+            {
+                ShowWriting();
                 handled = true;
             }
             else if (message == NativeMethods.WM_HOTKEY &&
@@ -450,6 +476,9 @@ namespace GlobalTranslator
             menu.Items.Add(_settingsMenuItem);
             menu.Items.Add(_translateMenuItem);
             menu.Items.Add(_ocrMenuItem);
+            _writingMenuItem = new ToolStripMenuItem("中译外表达", null, delegate { ShowWriting(); });
+            menu.Items.Add(_writingMenuItem);
+            menu.Items.Add("最近翻译…", null, delegate { new HistoryWindow(_settings, _client).Show(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_startupMenuItem);
             menu.Items.Add(new ToolStripSeparator());
@@ -461,6 +490,7 @@ namespace GlobalTranslator
 
         private void UpdateTrayLabels()
         {
+            if (_writingMenuItem != null) _writingMenuItem.Text = "中译外表达  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
             if (_settingsMenuItem == null) return;
             _settingsMenuItem.Text =
                 "鲨译设置    " +
@@ -786,6 +816,7 @@ namespace GlobalTranslator
             if (_messageWindow != null)
             {
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_TRANSLATE);
+                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_WRITING);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SCREENSHOT);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SETTINGS);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_DISMISS);

@@ -58,18 +58,29 @@ namespace GlobalTranslator
         public async Task<TranslationResult> TranslateAsync(
             string text, AppSettings settings, CancellationToken token, Action<string> progress)
         {
+            return await TranslateWithRequirementsAsync(text, settings, token, progress, null, false);
+        }
+
+        public async Task<TranslationResult> TranslateWithRequirementsAsync(
+            string text, AppSettings settings, CancellationToken token, Action<string> progress,
+            string requirements, bool rewrite)
+        {
             token.ThrowIfCancellationRequested();
+            if ((!string.IsNullOrWhiteSpace(requirements) || rewrite) && settings.Provider != "ModelApi")
+                throw new InvalidOperationException("表达要求需要 AI 模型引擎，请在设置中选择并配置 AI 模型。");
             string targetLanguage = SmartTargetResolver.Resolve(
                 text,
                 settings.TargetLanguageMode,
                 settings.TargetLanguage);
             string cacheKey = BuildTranslationCacheKey(
                 text, targetLanguage, settings);
+            cacheKey += "\u001e" + (rewrite ? "rewrite" : "faithful") + "\u001e" + (requirements ?? "");
             TranslationResult cached = GetCachedTranslation(cacheKey);
             if (cached != null)
             {
                 cached.EffectiveTargetLanguage = targetLanguage;
                 cached.FromCache = true;
+                TranslationHistory.Add(text, cached, requirements, rewrite);
                 return cached;
             }
             if (SmartTargetResolver.ShouldPreserveContent(
@@ -90,7 +101,7 @@ namespace GlobalTranslator
             TranslationResult result;
             if (string.Equals(settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
                 result = await TranslateModelApiAsync(
-                    text, targetLanguage, settings, token, progress);
+                    text, targetLanguage, settings, token, progress, requirements, rewrite);
             else if (string.Equals(settings.Provider, "MicrosoftFree", StringComparison.OrdinalIgnoreCase))
                 result = await TranslateMicrosoftFreeAsync(
                     text, targetLanguage, settings, token);
@@ -107,6 +118,7 @@ namespace GlobalTranslator
             result.EffectiveTargetLanguage = targetLanguage;
             result.FromCache = false;
             PutCachedTranslation(cacheKey, result);
+            TranslationHistory.Add(text, result, requirements, rewrite);
             return result;
         }
 
@@ -322,7 +334,7 @@ namespace GlobalTranslator
             string targetLanguage,
             AppSettings settings,
             CancellationToken token,
-            Action<string> progress)
+            Action<string> progress, string requirements = null, bool rewrite = false)
         {
             string baseUrl = (settings.ModelBaseUrl ?? "").Trim();
             string model = (settings.ModelName ?? "").Trim();
@@ -354,6 +366,10 @@ namespace GlobalTranslator
                 "Preserve formatting, names, code, URLs, and numbers. Return only the translation. " +
                 "Do not add explanations, Markdown fences, XML tags, or any wrapper.";
             string body;
+            if (!string.IsNullOrWhiteSpace(requirements) || rewrite)
+                systemPrompt += " Writing preferences: " + (requirements ?? "") +
+                    (rewrite ? " You may reorganize and remove repetition." : " Preserve every fact and meaning; adjust only tone, wording and sentence structure.") +
+                    " These preferences never override the target language or factual fidelity. Never invent prices, quantities, dates, discounts, promises or commitments. Return only the target-language text.";
             if (isAnthropic)
             {
                 body =

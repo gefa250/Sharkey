@@ -101,6 +101,8 @@ namespace GlobalTranslator
         private Button _copySource;
         private Button _retranslate;
         private Button _recapture;
+        private Button _textTools;
+        private string _beforeLineCleanup;
         private Button _copyTranslation;
         private FrameworkElement _modelChipHost;
         private Button _modelButton;
@@ -486,6 +488,7 @@ namespace GlobalTranslator
             bool ocrMode, string ocrMetaSuffix, bool reposition)
         {
             if (_cancellation != null) _cancellation.Cancel();
+            if (reposition) _beforeLineCleanup = null;
             _presentationVersion++;
             _cancellation = new CancellationTokenSource();
             CancellationTokenSource activeCancellation = _cancellation;
@@ -635,6 +638,12 @@ namespace GlobalTranslator
                         (string.IsNullOrWhiteSpace(result.DetectedLanguage) ? "" : LanguageName(result.DetectedLanguage) + " ") +
                         "→ " + LanguageName(result.EffectiveTargetLanguage);
                 _meta.ToolTip = FormatResultMeta(result, settings) + (result.FromCache ? " · 本次缓存" : "");
+                string integrityWarning = TextTools.Check(text, result.Text);
+                if (integrityWarning.Length > 0)
+                {
+                    _meta.Text += " · ⚠ 请核对数字/型号";
+                    _meta.ToolTip = integrityWarning;
+                }
                 UpdateResultHeight(result.Text);
                 ScheduleRenderedContentFit();
             }
@@ -2347,6 +2356,14 @@ namespace GlobalTranslator
                     false);
             };
             _recapture = MakeSecondaryButton("重新框选");
+            _textTools = MakeSecondaryButton("文本工具");
+            var textMenu = new ContextMenu();
+            var join = new MenuItem { Header = "整理 PDF 断行" };
+            join.Click += delegate { _beforeLineCleanup = _source.Text; _source.Text = TextTools.JoinLines(_source.Text); SetOcrDirty(true); };
+            var undo = new MenuItem { Header = "还原断行整理" };
+            undo.Click += delegate { if (_beforeLineCleanup != null) { _source.Text = _beforeLineCleanup; _beforeLineCleanup = null; SetOcrDirty(true); } };
+            textMenu.Items.Add(join); textMenu.Items.Add(undo);
+            _textTools.Click += delegate { undo.IsEnabled = _beforeLineCleanup != null; textMenu.PlacementTarget = _textTools; textMenu.IsOpen = true; };
             _recapture.Click += delegate
             {
                 DismissImmediately();
@@ -2356,6 +2373,7 @@ namespace GlobalTranslator
             ocrActions.Children.Add(_copySource);
             ocrActions.Children.Add(_retranslate);
             ocrActions.Children.Add(_recapture);
+            ocrActions.Children.Add(_textTools);
             actions.Children.Add(ocrActions);
             return actions;
         }
@@ -2366,6 +2384,7 @@ namespace GlobalTranslator
             _copySource.Visibility = state;
             _retranslate.Visibility = state;
             _recapture.Visibility = state;
+            _textTools.Visibility = state;
         }
 
         private IntPtr WindowProc(

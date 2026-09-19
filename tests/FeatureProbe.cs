@@ -19,6 +19,7 @@ internal static class FeatureProbe
         {
             TestHotkeysAndStartup(app);
             TestSmartTargetResolver(app);
+            TestTextToolsAndWriting(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
             TestModelStreamReliability(app);
@@ -43,6 +44,72 @@ internal static class FeatureProbe
             }
             return 1;
         }
+    }
+
+    private static void TestTextToolsAndWriting(Assembly app)
+    {
+        Type tools = app.GetType("GlobalTranslator.TextTools", true);
+        Func<string, string> join = s => (string)tools.GetMethod("JoinLines").Invoke(null, new object[] { s });
+        Func<string, string, string> check = (a, b) => (string)tools.GetMethod("Check").Invoke(null, new object[] { a, b });
+        if (join("Please confirm the\nshipping date.") != "Please confirm the shipping date." ||
+            join("请确认\n交期") != "请确认交期" ||
+            join("First paragraph.\n\nSecond") != "First paragraph.\n\nSecond" ||
+            join("- Item one\n- Item two") != "- Item one\n- Item two" ||
+            join("Name  Qty\nABC  12") != "Name  Qty\nABC  12")
+            throw new Exception("PDF paragraph/list/table preservation failed.");
+        if (check("USD 1,200 AB-120", "USD 1200 AB-120") != "" ||
+            check("型号AB-120，数量1200", "AB-121 quantity 120").Length == 0 ||
+            check("12.5%", "125%").Length == 0)
+            throw new Exception("Number/model validation failed.");
+        Type history = app.GetType("GlobalTranslator.TranslationHistory", true);
+        history.GetMethod("Clear").Invoke(null, null);
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        object settings = Activator.CreateInstance(settingsType, true);
+        settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+        settingsType.GetField("TargetLanguageMode").SetValue(settings, "Fixed");
+        settingsType.GetField("TargetLanguage").SetValue(settings, "en");
+        settingsType.GetField("ModelName").SetValue(settings, "probe-model");
+        var listener = new HttpListener(); listener.Prefixes.Add("http://127.0.0.1:18939/"); listener.Start();
+        settingsType.GetField("ModelBaseUrl").SetValue(settings, "http://127.0.0.1:18939/v1");
+        Exception serverError = null;
+        var server = Task.Run(delegate
+        {
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    var context = listener.GetContext(); string body;
+                    using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
+                    if ((i == 0 && !body.Contains("formal-mail")) || (i == 1 && !body.Contains("brief-chat")) ||
+                        (i == 2 && body.Contains("Writing preferences")) || !body.Contains("English"))
+                        throw new Exception("Writing preferences leaked or target language missing.");
+                    byte[] response = Encoding.UTF8.GetBytes("{\"choices\":[{\"message\":{\"content\":\"Result " + i + "\"},\"finish_reason\":\"stop\"}]}");
+                    context.Response.ContentLength64 = response.Length; context.Response.OutputStream.Write(response, 0, response.Length); context.Response.Close();
+                }
+            }
+            catch (Exception ex) { serverError = ex; }
+        });
+        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
+        object client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            var method = clientType.GetMethod("TranslateWithRequirementsAsync");
+            foreach (string requirement in new[] { "formal-mail", "formal-mail", "brief-chat", "" })
+            {
+                var task = (Task)method.Invoke(client, new object[] { "请确认交期", settings, CancellationToken.None, null, requirement, false });
+                if (!task.Wait(10000)) throw new Exception("Writing request/cache test timed out.");
+            }
+            if (!server.Wait(2000)) throw new Exception("Expected distinct requests not received.");
+            if (serverError != null) throw serverError;
+            Array found = (Array)history.GetMethod("Search").Invoke(null, new object[] { "交期" });
+            if (found.Length != 3) throw new Exception("History deduplication/search failed.");
+            settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
+            var unsupported = (Task)method.Invoke(client, new object[] { "中文", settings, CancellationToken.None, null, "formal", false });
+            try { unsupported.GetAwaiter().GetResult(); throw new Exception("Unsupported requirements were silently ignored."); }
+            catch (InvalidOperationException) { }
+            Console.WriteLine("WRITING requirements/cache/isolation/history/pdf/numbers=True");
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); history.GetMethod("Clear").Invoke(null, null); }
     }
 
     private static void TestSmartTargetResolver(Assembly app)

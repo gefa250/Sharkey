@@ -101,6 +101,7 @@ namespace GlobalTranslator
         public string Provider = "GoogleFree";
         public string TargetLanguageMode = "Smart";
         public string TargetLanguage = "zh-Hans";
+        public string WritingTargetLanguage = "en";
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
         public string MicrosoftRegion = "";
@@ -137,6 +138,7 @@ namespace GlobalTranslator
         public bool OcrAiConsentGranted = false;
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
+        public string WritingHotkey = "F7";
         public string OcrHotkey = "F9";
         public string SettingsHotkey = "F10";
         public bool StartWithWindows = StartupManager.IsEnabled();
@@ -177,6 +179,7 @@ namespace GlobalTranslator
                         case "Provider": settings.Provider = value; break;
                         case "TargetLanguageMode": settings.TargetLanguageMode = value; break;
                         case "TargetLanguage": settings.TargetLanguage = value; break;
+                        case "WritingTargetLanguage": settings.WritingTargetLanguage = value; break;
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
                         case "MicrosoftRegion": settings.MicrosoftRegion = value; break;
@@ -209,6 +212,7 @@ namespace GlobalTranslator
                         case "OcrAiConsentGranted": settings.OcrAiConsentGranted = value == "true"; break;
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
+                        case "WritingHotkey": settings.WritingHotkey = value; break;
                         case "OcrHotkey": settings.OcrHotkey = value; break;
                         case "SettingsHotkey": settings.SettingsHotkey = value; break;
                         case "StartWithWindows": settings.StartWithWindows = value == "true"; break;
@@ -249,6 +253,7 @@ namespace GlobalTranslator
                 "Provider=" + Encode(Provider) + "\n" +
                 "TargetLanguageMode=" + Encode(TargetLanguageMode) + "\n" +
                 "TargetLanguage=" + Encode(TargetLanguage) + "\n" +
+                "WritingTargetLanguage=" + Encode(WritingTargetLanguage) + "\n" +
                 "GoogleApiKey=" + Encode(GoogleApiKey) + "\n" +
                 "MicrosoftApiKey=" + Encode(MicrosoftApiKey) + "\n" +
                 "MicrosoftRegion=" + Encode(MicrosoftRegion) + "\n" +
@@ -281,6 +286,7 @@ namespace GlobalTranslator
                 "OcrAiConsentGranted=" + Encode(OcrAiConsentGranted ? "true" : "false") + "\n" +
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
+                "WritingHotkey=" + Encode(WritingHotkey) + "\n" +
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +
                 "SettingsHotkey=" + Encode(SettingsHotkey) + "\n" +
                 "PopupFontSize=" + Encode(PopupFontSize) + "\n" +

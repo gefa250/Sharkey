@@ -34,12 +34,13 @@ try {
         throw "Git tag v$Version already exists."
     }
 
-    & (Join-Path $projectRoot "build.cmd")
+    $releaseOutput = "bin\Release-$Version"
+    & (Join-Path $projectRoot "build.cmd") $releaseOutput
     if ($LASTEXITCODE -ne 0) { throw "Release build failed." }
-    & (Join-Path $projectRoot "test.cmd")
+    & (Join-Path $projectRoot "test.cmd") "$releaseOutput\Sharkey.exe"
     if ($LASTEXITCODE -ne 0) { throw "Automated tests failed." }
 
-    $exe = Join-Path $projectRoot "bin\Release\Sharkey.exe"
+    $exe = Join-Path $projectRoot "$releaseOutput\Sharkey.exe"
     $actual = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe).ProductVersion
     if ($actual -ne $Version) {
         throw "EXE ProductVersion is $actual, expected $Version."
@@ -75,7 +76,7 @@ try {
         if (Test-Path $package) { Remove-Item -LiteralPath $package -Force }
         Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $package
 
-        $pdb = Join-Path $projectRoot "bin\Release\Sharkey.pdb"
+        $pdb = Join-Path $projectRoot "$releaseOutput\Sharkey.pdb"
         if (Test-Path $pdb) {
             $symbols = Join-Path $dist "Sharkey-v$Version-symbols.zip"
             if (Test-Path $symbols) { Remove-Item -LiteralPath $symbols -Force }
