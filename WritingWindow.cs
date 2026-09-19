@@ -25,7 +25,10 @@ namespace GlobalTranslator
         public WritingWindow(AppSettings settings, TranslationClient client, HistoryEntry entry)
         {
             _settings = settings; _client = client;
-            Title = "鲨译 · 中译外表达"; Width = 760; Height = 720; MinWidth = 540; MinHeight = 480;
+            Title = "鲨译 · 中译外表达";
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            ResizeMode = ResizeMode.CanResize;
+            FitToWorkArea();
             Background = new SolidColorBrush(Color.FromRgb(245, 250, 253));
             var root = new DockPanel { Margin = new Thickness(18) }; Content = root;
             var top = new StackPanel(); DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
@@ -76,6 +79,20 @@ namespace GlobalTranslator
                 int index = Array.IndexOf(Codes, entry.Target); if (index >= 0) _language.SelectedIndex = index;
                 _result.Text = entry.Translation;
             }
+            Loaded += delegate { FitToWorkArea(); };
+        }
+
+        private void FitToWorkArea()
+        {
+            Rect area = SystemParameters.WorkArea;
+            double maxWidth = Math.Max(360, area.Width - 24);
+            double maxHeight = Math.Max(360, area.Height - 24);
+            MinWidth = Math.Min(540, maxWidth);
+            MinHeight = Math.Min(480, maxHeight);
+            MaxWidth = maxWidth;
+            MaxHeight = maxHeight;
+            Width = Math.Min(760, maxWidth);
+            Height = Math.Min(720, maxHeight);
         }
         private void Invalidate()
         {
