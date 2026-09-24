@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 
 internal static class FeatureProbe
 {
@@ -20,6 +21,7 @@ internal static class FeatureProbe
             TestHotkeysAndStartup(app);
             TestSmartTargetResolver(app);
             TestTextToolsAndWriting(app);
+            TestCommunicationApi(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
             TestModelStreamReliability(app);
@@ -28,8 +30,6 @@ internal static class FeatureProbe
             TestVisionApi(app);
             TestAnthropicVisionApi(app);
             TestMicrosoftFree(app);
-            TestEnglishOcrPackManager(app);
-            TestOcr(app);
             TestScreenshotRightClickCancellation(app);
             return 0;
         }
@@ -110,6 +110,191 @@ internal static class FeatureProbe
             Console.WriteLine("WRITING requirements/cache/isolation/history/pdf/numbers=True");
         }
         finally { listener.Close(); ((IDisposable)client).Dispose(); history.GetMethod("Clear").Invoke(null, null); }
+    }
+
+    private static void TestCommunicationApi(Assembly app)
+    {
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        Type inputType = app.GetType("GlobalTranslator.CommunicationRequest", true);
+        Type turnType = app.GetType("GlobalTranslator.CommunicationTurn", true);
+        Type resultType = app.GetType("GlobalTranslator.CommunicationResult", true);
+        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
+        object settings = Activator.CreateInstance(settingsType, true);
+        settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
+            "http://127.0.0.1:18944/v1");
+        settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
+        settingsType.GetField("CustomModelName").SetValue(settings, "probe-chat");
+        var listener = new HttpListener();
+        listener.Prefixes.Add("http://127.0.0.1:18944/");
+        listener.Start();
+        Exception serverError = null;
+        var serializer = new JavaScriptSerializer();
+        var server = Task.Run(delegate
+        {
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    HttpListenerContext context = listener.GetContext();
+                    string body;
+                    using (var reader = new StreamReader(context.Request.InputStream))
+                        body = reader.ReadToEnd();
+                    if (!body.Contains("Customer conversation") ||
+                        !body.Contains("reply, meaning_zh, advice_zh") ||
+                        !body.Contains("probe-chat"))
+                        throw new Exception("Communication prompt or model missing.");
+                    if (i == 0 && (!body.Contains("data:image/png;base64,AQID") ||
+                        !body.Contains("data:image/png;base64,BAUG") ||
+                        !body.Contains("Match the customer's language")))
+                        throw new Exception("Ordered screenshots or auto language missing.");
+                    if (i == 1 && (!body.Contains("shorter") ||
+                        !body.Contains("Previous reply") ||
+                        !body.Contains("Give advice only")))
+                        throw new Exception("Adjustment history or advice-only mode missing.");
+                    if (i == 2)
+                    {
+                        context.Response.StatusCode = 400;
+                        byte[] error = Encoding.UTF8.GetBytes(
+                            "{\"error\":{\"message\":\"image input unsupported\"}}");
+                        context.Response.OutputStream.Write(error, 0, error.Length);
+                        context.Response.Close();
+                        continue;
+                    }
+                    string answer = i == 0
+                        ? "{\"reply\":\"Please confirm the quantity.\",\"meaning_zh\":\"请确认数量。\",\"advice_zh\":\"价格待核实。\"}"
+                        : "{\"reply\":\"\",\"meaning_zh\":\"\",\"advice_zh\":\"先核实交期。\"}";
+                    string response = serializer.Serialize(new
+                    {
+                        choices = new[] { new { message = new { content = answer },
+                            finish_reason = "stop" } }
+                    });
+                    byte[] bytes = Encoding.UTF8.GetBytes(response);
+                    context.Response.OutputStream.Write(bytes, 0, bytes.Length);
+                    context.Response.Close();
+                }
+            }
+            catch (Exception error) { serverError = error; }
+        });
+        object client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            object input = Activator.CreateInstance(inputType, true);
+            inputType.GetField("Background").SetValue(input, "客户说交期太久");
+            inputType.GetField("Intent").SetValue(input, "想请客户确认数量，价格未核实");
+            inputType.GetField("Images").SetValue(input, new[]
+                { new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 } });
+            object first = CommunicationResultFor(clientType, client, input,
+                settings);
+            if ((string)resultType.GetField("Reply").GetValue(first) !=
+                    "Please confirm the quantity." ||
+                (string)resultType.GetField("MeaningZh").GetValue(first) !=
+                    "请确认数量。")
+                throw new Exception("Communication result was not parsed.");
+            object turn = Activator.CreateInstance(turnType, true);
+            turnType.GetField("Instruction").SetValue(turn, "initial");
+            turnType.GetField("Reply").SetValue(turn,
+                "Please confirm the quantity.");
+            Array turns = Array.CreateInstance(turnType, 1);
+            turns.SetValue(turn, 0);
+            inputType.GetField("Turns").SetValue(input, turns);
+            inputType.GetField("Adjustment").SetValue(input, "shorter");
+            inputType.GetField("AdviceOnly").SetValue(input, true);
+            object second = CommunicationResultFor(clientType, client, input,
+                settings);
+            if ((string)resultType.GetField("Reply").GetValue(second) != "" ||
+                (string)resultType.GetField("AdviceZh").GetValue(second) !=
+                    "先核实交期。")
+                throw new Exception("Advice-only result was not parsed.");
+            inputType.GetField("AdviceOnly").SetValue(input, false);
+            inputType.GetField("Background").SetValue(input, "");
+            inputType.GetField("Intent").SetValue(input, "");
+            try
+            {
+                CommunicationResultFor(clientType, client, input, settings);
+                throw new Exception("Unsupported image was accepted.");
+            }
+            catch (Exception error)
+            {
+                if (Unwrap(error).GetType().Name !=
+                    "UnsupportedCommunicationImageException") throw;
+            }
+            if (!server.Wait(10000) || serverError != null)
+                throw serverError ?? new Exception("Communication server timed out.");
+            try
+            {
+                resultType.GetMethod("Parse").Invoke(null, new object[]
+                    { "{\"reply\":\"missing meaning\",\"advice_zh\":\"提示\"}", false });
+                throw new Exception("Malformed communication result was accepted.");
+            }
+            catch (TargetInvocationException error)
+            {
+                if (!(error.InnerException is InvalidOperationException)) throw;
+            }
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); }
+
+        var anthropic = new HttpListener();
+        anthropic.Prefixes.Add("http://127.0.0.1:18945/");
+        anthropic.Start();
+        Exception anthropicError = null;
+        var anthropicServer = Task.Run(delegate
+        {
+            try
+            {
+                var context = anthropic.GetContext();
+                string body;
+                using (var reader = new StreamReader(context.Request.InputStream))
+                    body = reader.ReadToEnd();
+                if (!body.Contains("\"type\":\"image\"") ||
+                    !body.Contains("\"source\":{\"type\":\"base64\"") ||
+                    context.Request.Headers["x-api-key"] != "probe-secret")
+                    throw new Exception("Anthropic image body or auth missing.");
+                context.Response.ContentType = "text/event-stream";
+                string answer = "{\"reply\":\"Hello.\",\"meaning_zh\":\"你好。\",\"advice_zh\":\"确认条款。\"}";
+                string stream = "data: " + serializer.Serialize(new
+                {
+                    type = "content_block_delta",
+                    delta = new { type = "text_delta", text = answer }
+                }) + "\n\n" +
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
+                    "data: {\"type\":\"message_stop\"}\n\n";
+                byte[] bytes = Encoding.UTF8.GetBytes(stream);
+                context.Response.OutputStream.Write(bytes, 0, bytes.Length);
+                context.Response.Close();
+            }
+            catch (Exception error) { anthropicError = error; }
+        });
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
+            "http://127.0.0.1:18945/anthropic");
+        settingsType.GetField("CustomModelProtocol").SetValue(settings,
+            "Anthropic");
+        client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            object input = Activator.CreateInstance(inputType, true);
+            inputType.GetField("Intent").SetValue(input, "礼貌回复");
+            inputType.GetField("Images").SetValue(input,
+                new[] { new byte[] { 1, 2, 3 } });
+            object answer = CommunicationResultFor(clientType, client, input,
+                settings);
+            if ((string)resultType.GetField("Reply").GetValue(answer) !=
+                "Hello.") throw new Exception("Anthropic reply missing.");
+            if (!anthropicServer.Wait(10000) || anthropicError != null)
+                throw anthropicError ?? new Exception("Anthropic server timed out.");
+            Console.WriteLine("COMMUNICATION openai/anthropic/images/advice/adjustment=True");
+        }
+        finally { anthropic.Close(); ((IDisposable)client).Dispose(); }
+    }
+
+    private static object CommunicationResultFor(Type clientType, object client,
+        object input, object settings)
+    {
+        object task = clientType.GetMethod("ComposeCommunicationAsync")
+            .Invoke(client, new[] { input, settings, (object)CancellationToken.None });
+        ((Task)task).GetAwaiter().GetResult();
+        return task.GetType().GetProperty("Result").GetValue(task, null);
     }
 
     private static void TestSmartTargetResolver(Assembly app)
@@ -263,71 +448,6 @@ internal static class FeatureProbe
             display);
     }
 
-    private static void TestEnglishOcrPackManager(Assembly app)
-    {
-        Type manager = app.GetType(
-            "GlobalTranslator.OcrLanguagePackManager", true);
-        bool installed = (bool)manager.GetMethod(
-            "IsEnglishInstalled",
-            BindingFlags.Static | BindingFlags.Public)
-            .Invoke(null, null);
-        string tag = (string)manager.GetMethod(
-            "GetInstalledEnglishTag",
-            BindingFlags.Static | BindingFlags.Public)
-            .Invoke(null, null);
-        string command = (string)manager.GetProperty(
-            "ManualInstallCommand",
-            BindingFlags.Static | BindingFlags.Public)
-            .GetValue(null, null);
-        if (installed != !string.IsNullOrWhiteSpace(tag))
-            throw new InvalidOperationException(
-                "English OCR installed state and language tag disagree.");
-        if (!command.Contains("Language.Basic") ||
-            !command.Contains("Language.OCR") ||
-            !command.Contains("en-US") ||
-            !command.Contains("Add-WindowsCapability"))
-            throw new InvalidOperationException(
-                "English OCR manual install command is incomplete.");
-
-        MethodInfo parsePercent = manager.GetMethod(
-            "ParseDismPercent",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        int percent = (int)parsePercent.Invoke(
-            null, new object[] { "[================ 42.5% ================]" });
-        int missingPercent = (int)parsePercent.Invoke(
-            null, new object[] { "Deployment Image Servicing and Management" });
-        if (percent != 43 || missingPercent != -1)
-            throw new InvalidOperationException(
-                "DISM progress parsing is incorrect.");
-
-        Type actionType = app.GetType(
-            "GlobalTranslator.OcrComponentAction", true);
-        object installAction = Enum.Parse(
-            actionType, "InstallRequired");
-        MethodInfo buildScript = manager.GetMethod(
-            "BuildOperationScript",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        string script = (string)buildScript.Invoke(
-            null,
-            new object[]
-            {
-                installAction,
-                @"C:\Temp\sharkey.status",
-                @"C:\Temp\sharkey.log"
-            });
-        if (!script.Contains("dism.exe") ||
-            !script.Contains("PROGRESS") ||
-            !script.Contains("InstallingBasic") ||
-            !script.Contains("InstallingOcr") ||
-            !script.Contains("CheckingDependencies"))
-            throw new InvalidOperationException(
-                "OCR component task script is incomplete.");
-        Console.WriteLine(
-            "ENGLISH_OCR installed={0} tag={1} commandReady=True progress={2}",
-            installed,
-            string.IsNullOrEmpty(tag) ? "(none)" : tag,
-            percent);
-    }
 
     private static void TestModelApi(Assembly app)
     {
@@ -1404,146 +1524,6 @@ internal static class FeatureProbe
             listener.Stop();
             listener.Close();
         }
-    }
-
-    private static void TestOcr(Assembly app)
-    {
-        using (var bitmap = new Bitmap(1000, 180))
-        using (Graphics graphics = Graphics.FromImage(bitmap))
-        using (var font = new Font("Microsoft YaHei UI", 42, FontStyle.Bold))
-        {
-            graphics.Clear(Color.White);
-            graphics.DrawString("截图识别测试 123", font, Brushes.Black, 18, 42);
-
-            object result = RecognizeOcr(app, bitmap);
-            string text = (string)result.GetType().GetField("Text").GetValue(result);
-            double quality = (double)result.GetType()
-                .GetField("QualityScore").GetValue(result);
-            Console.WriteLine(
-                "OCR quality={0:0.00} text={1}",
-                quality, text.Replace("\r", " ").Replace("\n", " "));
-            if (string.IsNullOrWhiteSpace(text)) throw new InvalidOperationException("OCR returned empty text.");
-        }
-
-        using (var dark = new Bitmap(760, 100))
-        using (Graphics graphics = Graphics.FromImage(dark))
-        using (var font = new Font("Microsoft YaHei UI", 18, FontStyle.Bold))
-        {
-            graphics.Clear(Color.FromArgb(25, 30, 38));
-            graphics.DrawString(
-                "深色截图 OCR Enhance 456", font, Brushes.White, 8, 22);
-            object result = RecognizeOcr(app, dark);
-            string text = (string)result.GetType().GetField("Text").GetValue(result);
-            Console.WriteLine(
-                "OCR_DARK text=" + text.Replace("\r", " ").Replace("\n", " "));
-            if (string.IsNullOrWhiteSpace(text))
-                throw new InvalidOperationException("Enhanced dark OCR returned empty text.");
-            if (!text.Contains("深色截图"))
-                throw new InvalidOperationException(
-                    "Automatic OCR lost Chinese text in a mixed-language image.");
-        }
-
-        Type managerType = app.GetType(
-            "GlobalTranslator.OcrLanguagePackManager", true);
-        bool englishInstalled = (bool)managerType.GetMethod(
-            "IsEnglishInstalled",
-            BindingFlags.Static | BindingFlags.Public)
-            .Invoke(null, null);
-        if (englishInstalled)
-        {
-            using (var english = new Bitmap(1500, 210))
-            using (Graphics graphics = Graphics.FromImage(english))
-            using (var font = new Font(
-                "Segoe UI", 30, FontStyle.Regular))
-            {
-                graphics.Clear(Color.White);
-                graphics.DrawString(
-                    "Verilog introduced several important improvements over its predecessor\n" +
-                    "languages, which helped make it a more popular and effective HDL for digital",
-                    font, Brushes.Black, 18, 28);
-                object result = RecognizeOcr(app, english);
-                string text = (string)result.GetType()
-                    .GetField("Text").GetValue(result);
-                string language = (string)result.GetType()
-                    .GetField("Language").GetValue(result);
-                Console.WriteLine(
-                    "OCR_AUTO_ENGLISH language={0} text={1}",
-                    language,
-                    text.Replace("\r", " ").Replace("\n", " "));
-                if (!language.StartsWith(
-                    "en", StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException(
-                        "Automatic OCR did not select the English recognizer.");
-                if (text.Contains("itS") || text.Contains("fO r"))
-                    throw new InvalidOperationException(
-                        "Automatic English OCR retained known casing/spacing errors.");
-                if (!text.Contains("\n"))
-                    throw new InvalidOperationException(
-                        "OCR did not preserve source line breaks.");
-            }
-
-            using (var layout = new Bitmap(1000, 230))
-            using (Graphics graphics = Graphics.FromImage(layout))
-            using (var font = new Font(
-                "Segoe UI", 28, FontStyle.Regular))
-            {
-                graphics.Clear(Color.White);
-                graphics.DrawString(
-                    "Heading", font, Brushes.Black, 20, 12);
-                graphics.DrawString(
-                    "Indented item", font, Brushes.Black, 120, 55);
-                graphics.DrawString(
-                    "Second paragraph", font, Brushes.Black, 20, 145);
-                object result = RecognizeOcr(app, layout);
-                string text = (string)result.GetType()
-                    .GetField("Text").GetValue(result);
-                Console.WriteLine(
-                    "OCR_LAYOUT text=" +
-                    text.Replace("\r", "\\r").Replace("\n", "\\n"));
-                string[] lines = text.Split('\n');
-                if (lines.Length < 4)
-                    throw new InvalidOperationException(
-                        "OCR did not preserve paragraph spacing.");
-                bool indented = false;
-                foreach (string line in lines)
-                    if (line.StartsWith(" ") &&
-                        line.TrimStart().StartsWith(
-                            "Indented", StringComparison.OrdinalIgnoreCase))
-                        indented = true;
-                if (!indented)
-                    throw new InvalidOperationException(
-                        "OCR did not preserve source indentation.");
-            }
-        }
-
-        Type serviceType = app.GetType("GlobalTranslator.OcrService", true);
-        MethodInfo cleanup = serviceType.GetMethod(
-            "CleanupText", BindingFlags.Static | BindingFlags.NonPublic);
-        string cleaned = (string)cleanup.Invoke(
-            null, new object[] { "截 图 识 别 Test 123" });
-        if (cleaned != "截图识别 Test 123")
-            throw new InvalidOperationException(
-                "CJK whitespace cleanup failed: " + cleaned);
-        Console.WriteLine("OCR_CJK_CLEANUP text=" + cleaned);
-    }
-
-    private static object RecognizeOcr(Assembly app, Bitmap bitmap)
-    {
-        Type ocrType = app.GetType("GlobalTranslator.OcrService", true);
-        Type optionsType = app.GetType("GlobalTranslator.OcrOptions", true);
-        object ocr = Activator.CreateInstance(ocrType, true);
-        object options = Activator.CreateInstance(optionsType, true);
-        optionsType.GetField("LanguageTag").SetValue(options, "auto");
-        optionsType.GetField("AutoEnhance").SetValue(options, true);
-        MethodInfo recognize = ocrType.GetMethod(
-            "RecognizeAsync",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-            null,
-            new[] { typeof(Bitmap), optionsType },
-            null);
-        object task = recognize.Invoke(ocr, new object[] { bitmap, options });
-        ((Task)task).Wait();
-        return task.GetType().GetProperty("Result").GetValue(task, null);
     }
 
     private static Exception Unwrap(Exception ex)

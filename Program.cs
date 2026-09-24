@@ -15,7 +15,6 @@ namespace GlobalTranslator
     {
         private readonly AppSettings _settings = AppSettings.Load();
         private TranslationClient _client;
-        private OcrService _ocr;
         private SelectionMonitor _monitor;
         private PopupWindow _popup;
         private SettingsWindow _settingsWindow;
@@ -39,9 +38,11 @@ namespace GlobalTranslator
         private void ShowWriting()
         {
             if (_screenshotSelecting) return;
+            if (_writingWindow != null && _writingWindow.IsCapturing) return;
             if (_writingWindow == null)
             {
-                _writingWindow = new WritingWindow(_settings, _client, null);
+                _writingWindow = new WritingWindow(_settings, _client,
+                    ShowModelSettings);
                 _writingWindow.Closed += delegate { _writingWindow = null; };
             }
             if (_writingWindow.WindowState == WindowState.Minimized)
@@ -122,7 +123,6 @@ namespace GlobalTranslator
             base.OnStartup(e);
             _client = new TranslationClient();
             _updateService = new UpdateService();
-            _ocr = new OcrService();
             _popup = new PopupWindow();
             _popup.OcrRecaptureRequested += delegate
             {
@@ -375,7 +375,7 @@ namespace GlobalTranslator
                 !settingsRegistered)
             {
                 string message = "";
-                if (!writingRegistered) message += writing.Display + " 中译外表达不可用。请在设置中更换快捷键。\n";
+                if (!writingRegistered) message += writing.Display + " 外贸沟通助手不可用。请在设置中更换快捷键。\n";
                 if (!translateRegistered)
                     message += translate.Display + " 选中翻译不可用。";
                 if (!screenshotRegistered)
@@ -476,7 +476,7 @@ namespace GlobalTranslator
             menu.Items.Add(_settingsMenuItem);
             menu.Items.Add(_translateMenuItem);
             menu.Items.Add(_ocrMenuItem);
-            _writingMenuItem = new ToolStripMenuItem("中译外表达", null, delegate { ShowWriting(); });
+            _writingMenuItem = new ToolStripMenuItem("外贸沟通助手", null, delegate { ShowWriting(); });
             menu.Items.Add(_writingMenuItem);
             menu.Items.Add("最近翻译…", null, delegate { new HistoryWindow(_settings, _client).Show(); });
             menu.Items.Add(new ToolStripSeparator());
@@ -490,7 +490,7 @@ namespace GlobalTranslator
 
         private void UpdateTrayLabels()
         {
-            if (_writingMenuItem != null) _writingMenuItem.Text = "中译外表达  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
+            if (_writingMenuItem != null) _writingMenuItem.Text = "外贸沟通助手  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
             if (_settingsMenuItem == null) return;
             _settingsMenuItem.Text =
                 "鲨译设置    " +
@@ -593,85 +593,22 @@ namespace GlobalTranslator
                     _screenshotSelecting = false;
                 }
                 if (image == null) return;
-
-                OcrRecognitionResult result = null;
-                string aiFailure = "";
-                if (_settings.OcrAiFallback)
-                {
-                    try
-                    {
-                        string aiText = await _client.RecognizeImageAsync(
-                            image, _settings, activeCancellation.Token);
-                        if (!string.IsNullOrWhiteSpace(aiText))
-                        {
-                            result = new OcrRecognitionResult
-                            {
-                                Text = aiText,
-                                Engine = "DeepSeek Vision · " +
-                                    _settings.OcrVisionModel,
-                                QualityScore = 1,
-                                IsLowQuality = false,
-                                UsedAi = true
-                            };
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception aiError)
-                    {
-                        DiagnosticLog.Write(
-                            "AI vision OCR failed; type=" +
-                            aiError.GetType().Name);
-                        aiFailure = "DeepSeek Vision 不可用，已尝试本地 OCR：" +
-                            aiError.Message;
-                    }
-                }
-
-                if (result == null && _settings.OcrLocalFallback)
-                {
-                    try
-                    {
-                        var options = new OcrOptions
-                        {
-                            // Local OCR is an explicit offline fallback. Do not
-                            // require or select a language pack from settings.
-                            LanguageTag = "auto",
-                            AutoEnhance = _settings.OcrAutoEnhance
-                        };
-                        result = await _ocr.RecognizeAsync(
-                            image, options, activeCancellation.Token);
-                        if (!string.IsNullOrWhiteSpace(aiFailure))
-                            result.Warning = AppendWarning(
-                                result.Warning, aiFailure);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception localError)
-                    {
-                        if (!string.IsNullOrWhiteSpace(aiFailure))
-                            throw new InvalidOperationException(
-                                aiFailure + "；本地 OCR 回退也不可用：" +
-                                localError.Message);
-                        throw;
-                    }
-                }
-                if (result == null)
-                {
+                if (!_settings.OcrAiFallback)
                     throw new InvalidOperationException(
-                        string.IsNullOrWhiteSpace(aiFailure)
-                            ? "DeepSeek Vision 未返回识别文字。"
-                            : aiFailure + " 请检查 OCR 设置中的模型与 API Key。" );
-                }
+                        "请在 OCR 设置中启用 AI 视觉识别。");
+
+                string aiText = await _client.RecognizeImageAsync(
+                    image, _settings, activeCancellation.Token);
+                var result = new OcrRecognitionResult
+                {
+                    Text = aiText,
+                    Engine = "AI 视觉 · " + _settings.OcrVisionModel,
+                };
 
                 if (requestId != _ocrRequestId) return;
 
                 DiagnosticLog.Write(
                     "OCR completed; engine=" + result.Engine +
-                    "; quality=" + result.QualityScore.ToString("0.00") +
                     "; characters=" + result.Text.Length);
                 if (string.IsNullOrWhiteSpace(result.Text))
                 {
@@ -698,8 +635,6 @@ namespace GlobalTranslator
                         },
                     _settings,
                     _client);
-                if (!string.IsNullOrEmpty(result.Warning))
-                    DiagnosticLog.Write("OCR warning: " + result.Warning);
             }
             catch (OperationCanceledException)
             {
@@ -723,12 +658,6 @@ namespace GlobalTranslator
                     _ocrCancellation = null;
                 activeCancellation.Dispose();
             }
-        }
-
-        private static string AppendWarning(string current, string addition)
-        {
-            if (string.IsNullOrWhiteSpace(current)) return addition;
-            return current + "\n" + addition;
         }
 
         private static string CompactError(string message)

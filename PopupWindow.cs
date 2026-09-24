@@ -462,14 +462,6 @@ namespace GlobalTranslator
             TranslationClient client)
         {
             string suffix = "  ·  " + result.Engine;
-            if (!string.IsNullOrEmpty(result.Language))
-                suffix += " (" + result.Language + ")";
-            if (result.UsedAi && !string.IsNullOrWhiteSpace(result.Warning))
-                suffix += "  ·  AI 提示";
-            else if (!result.UsedAi && !string.IsNullOrWhiteSpace(result.Warning))
-                suffix += "  ·  本地回退";
-            else if (!result.UsedAi && result.IsLowQuality)
-                suffix += "  ·  可能需要重新框选";
             BeginTranslation(
                 result.Text,
                 screenBounds.Left,

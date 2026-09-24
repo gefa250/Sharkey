@@ -10,8 +10,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ShapePath = System.Windows.Shapes.Path;
-using Windows.Globalization;
-using Windows.Media.Ocr;
 
 namespace GlobalTranslator
 {
@@ -44,7 +42,6 @@ namespace GlobalTranslator
         private ComboBox _modelProtocol;
         private TextBlock _modelEndpointHint;
         private CheckBox _ocrAiFallback;
-        private CheckBox _ocrLocalFallback;
         private Button _copyDiagnostics;
         private Button _openDiagnosticFolder;
         private Button _checkUpdate;
@@ -611,7 +608,7 @@ namespace GlobalTranslator
                 Margin = new Thickness(0, 0, 0, 10)
             });
             _writingHotkey = AddHotkeyRecorder(
-                shortcutContent, "中译外表达", "打开或唤回表达窗口，保留当前输入");
+                shortcutContent, "外贸沟通助手", "打开或唤回沟通窗口，保留当前输入");
             _translateHotkey = AddHotkeyRecorder(
                 shortcutContent,
                 "选中文字翻译",
@@ -720,7 +717,7 @@ namespace GlobalTranslator
             });
             version.Children.Add(new TextBlock
             {
-                Text = "Windows x64 · 本地优先的全局翻译助手",
+                Text = "Windows x64 · 全局翻译与 AI 视觉助手",
                 Foreground = Muted,
                 FontSize = 11
             });
@@ -930,7 +927,7 @@ namespace GlobalTranslator
             var root = TabBody();
             root.Children.Add(Intro(
                 "截图 OCR",
-                "默认使用 DeepSeek Vision 读取截图；无需下载 Windows 多语言 OCR 包。"));
+                "使用 DeepSeek Vision 读取截图。"));
 
             var aiCard = Card();
             aiCard.Padding = new Thickness(16);
@@ -952,7 +949,7 @@ namespace GlobalTranslator
             });
             _ocrAiFallback = new CheckBox
             {
-                Content = "使用 DeepSeek Vision 作为默认截图识别引擎",
+                Content = "启用 DeepSeek Vision 截图识别",
                 Margin = new Thickness(0, 0, 0, 7),
                 Foreground = Navy,
                 FontSize = 12
@@ -983,355 +980,9 @@ namespace GlobalTranslator
             aiCard.Child = ai;
             root.Children.Add(aiCard);
 
-            var fallbackCard = Card();
-            fallbackCard.Padding = new Thickness(16);
-            fallbackCard.Margin = new Thickness(0, 12, 0, 12);
-            var fallback = new StackPanel();
-            fallback.Children.Add(new TextBlock
-            {
-                Text = "离线回退（可选）",
-                FontSize = 13.5,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
-            });
-            _ocrLocalFallback = new CheckBox
-            {
-                Content = "AI 请求失败时尝试 Windows 本地 OCR（使用已安装语言）",
-                Margin = new Thickness(0, 9, 0, 4),
-                Foreground = Navy,
-                FontSize = 12
-            };
-            fallback.Children.Add(_ocrLocalFallback);
-            fallback.Children.Add(new TextBlock
-            {
-                Text = "本地识别不会自动下载或安装语言包；未安装可用识别器时，将提示配置视觉 API。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10.5
-            });
-            fallbackCard.Child = fallback;
-            root.Children.Add(fallbackCard);
             return Scroll(root);
         }
 
- #if LEGACY_OCR_COMPONENT_UI
-        private Border BuildEnglishOcrCard()
-        {
-            var card = Card();
-            card.Padding = new Thickness(16);
-            card.Margin = new Thickness(0, 14, 0, 0);
-            var content = new StackPanel();
-            content.Children.Add(new TextBlock
-            {
-                Text = "English 语言组件",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
-            });
-
-            content.Children.Add(ComponentStatusRow(
-                "English Basic",
-                "OCR 的基础语言资源，也可能被英文语音、手写等功能使用。",
-                out _englishBasicStatus));
-            content.Children.Add(ComponentStatusRow(
-                "English OCR",
-                "鲨译英文识别必需，避免大小写和断词异常。",
-                out _englishOcrStatus));
-
-            _ocrTaskProgress = new ProgressBar
-            {
-                Height = 7,
-                Minimum = 0,
-                Maximum = 100,
-                Margin = new Thickness(0, 13, 0, 6),
-                Visibility = Visibility.Collapsed
-            };
-            content.Children.Add(_ocrTaskProgress);
-            _ocrTaskStatus = new TextBlock
-            {
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Ocean,
-                FontSize = 11,
-                Visibility = Visibility.Collapsed,
-                Margin = new Thickness(0, 0, 0, 10)
-            };
-            content.Children.Add(_ocrTaskStatus);
-
-            var actions = new WrapPanel
-            {
-                Orientation = Orientation.Horizontal
-            };
-            _installEnglishOcr = PrimaryButton("安装缺失组件");
-            _installEnglishOcr.Width = 142;
-            _installEnglishOcr.Height = 38;
-            _installEnglishOcr.Click += InstallEnglishOcrClick;
-            actions.Children.Add(_installEnglishOcr);
-            _removeEnglishOcr = SecondaryButton("卸载 OCR");
-            _removeEnglishOcr.Margin = new Thickness(9, 0, 0, 0);
-            _removeEnglishOcr.Click += RemoveEnglishOcrClick;
-            actions.Children.Add(_removeEnglishOcr);
-            _removeEnglishAll = SecondaryButton("卸载全部");
-            _removeEnglishAll.Margin = new Thickness(9, 0, 0, 0);
-            _removeEnglishAll.Click += RemoveEnglishAllClick;
-            actions.Children.Add(_removeEnglishAll);
-            _copyEnglishOcrCommand = new Button
-            {
-                Content = "复制命令",
-                Height = 38,
-                Margin = new Thickness(9, 0, 0, 0),
-                Padding = new Thickness(14, 0, 14, 0),
-                Background = Brushes.White,
-                Foreground = Ocean,
-                BorderBrush = Brush("#9BCEDB"),
-                BorderThickness = new Thickness(1),
-                Cursor = Cursors.Hand,
-                FontWeight = FontWeights.SemiBold
-            };
-            _copyEnglishOcrCommand.Click += CopyEnglishOcrCommandClick;
-            actions.Children.Add(_copyEnglishOcrCommand);
-            content.Children.Add(actions);
-            content.Children.Add(new TextBlock
-            {
-                Text = "安装和卸载都会弹出 UAC。任务可以在设置隐藏后继续；为保护 Windows 组件服务，运行中不提供强制取消。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10.5,
-                Margin = new Thickness(0, 9, 0, 0)
-            });
-            card.Child = content;
-            UpdateEnglishOcrStatus();
-            return card;
-        }
-
-        private static Border ComponentStatusRow(
-            string name, string description, out TextBlock status)
-        {
-            var row = new Border
-            {
-                Background = Brush("#F6FAFC"),
-                BorderBrush = Line,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(12, 9, 12, 9),
-                Margin = new Thickness(0, 9, 0, 0)
-            };
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-            grid.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = GridLength.Auto
-            });
-            var copy = new StackPanel();
-            copy.Children.Add(new TextBlock
-            {
-                Text = name,
-                Foreground = Navy,
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 12
-            });
-            copy.Children.Add(new TextBlock
-            {
-                Text = description,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10,
-                Margin = new Thickness(0, 2, 12, 0)
-            });
-            grid.Children.Add(copy);
-            status = new TextBlock
-            {
-                VerticalAlignment = VerticalAlignment.Center,
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 11
-            };
-            Grid.SetColumn(status, 1);
-            grid.Children.Add(status);
-            row.Child = grid;
-            return row;
-        }
-
-        private void UpdateEnglishOcrStatus()
-        {
-            OcrComponentProgress progress =
-                OcrLanguagePackManager.IsRunning
-                    ? OcrLanguagePackManager.CurrentProgress
-                    : OcrLanguagePackManager.GetInstalledSnapshot();
-            ApplyOcrProgress(progress);
-        }
-
-        private async void InstallEnglishOcrClick(
-            object sender, RoutedEventArgs e)
-        {
-            MessageBoxResult consent = MessageBox.Show(
-                "将通过 Windows 可选功能安装 English (United States) Basic 与 OCR 组件。\n\n" +
-                "此操作需要联网、管理员权限，可能持续几分钟，并会弹出 UAC。是否继续？",
-                "安装 English OCR",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-            if (consent != MessageBoxResult.Yes) return;
-
-            OcrPackInstallResult result =
-                await OcrLanguagePackManager.StartAsync(
-                    OcrComponentAction.InstallRequired);
-            if (result.Installed)
-                RefreshOcrLanguagesAndSelectEnglish();
-            UpdateEnglishOcrStatus();
-        }
-
-        private async void RemoveEnglishOcrClick(
-            object sender, RoutedEventArgs e)
-        {
-            if (MessageBox.Show(
-                "将卸载 English OCR。鲨译仍可自动识别其他已安装语言，但英文准确率会下降。是否继续？",
-                "卸载 English OCR",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
-            await OcrLanguagePackManager.StartAsync(
-                OcrComponentAction.RemoveOcr);
-            UpdateEnglishOcrStatus();
-        }
-
-        private async void RemoveEnglishAllClick(
-            object sender, RoutedEventArgs e)
-        {
-            if (MessageBox.Show(
-                "将先卸载 English OCR，再尝试卸载 English Basic。\n\n" +
-                "如果 Basic 仍被语音、手写等英文功能使用，鲨译会保留它并说明原因。是否继续？",
-                "卸载 English 组件",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
-            await OcrLanguagePackManager.StartAsync(
-                OcrComponentAction.RemoveAll);
-            UpdateEnglishOcrStatus();
-        }
-
-        private void OcrProgressChanged(
-            object sender, OcrComponentProgressEventArgs e)
-        {
-            Dispatcher.BeginInvoke(new Action(
-                delegate { ApplyOcrProgress(e.Progress); }));
-        }
-
-        private void ApplyOcrProgress(OcrComponentProgress progress)
-        {
-            if (_englishBasicStatus == null ||
-                _englishOcrStatus == null)
-                return;
-            SetCapabilityStatus(
-                _englishBasicStatus, progress.BasicState,
-                progress.BasicState == OcrCapabilityState.Unknown
-                    ? "待管理员确认"
-                    : null);
-            SetCapabilityStatus(
-                _englishOcrStatus, progress.OcrState, null);
-            bool running = !progress.IsCompleted &&
-                           progress.Stage !=
-                               OcrComponentTaskStage.Idle;
-            _ocrTaskProgress.Visibility = running
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-            _ocrTaskStatus.Visibility = running ||
-                progress.Stage == OcrComponentTaskStage.Failed ||
-                progress.Stage == OcrComponentTaskStage.Cancelled
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-            _ocrTaskProgress.IsIndeterminate =
-                running && progress.Percent < 0;
-            if (progress.Percent >= 0)
-                _ocrTaskProgress.Value = progress.Percent;
-            _ocrTaskStatus.Text = progress.Message +
-                (running
-                    ? "  ·  已用时 " +
-                      FormatElapsed(progress.Elapsed) +
-                      (progress.Percent >= 0
-                          ? "  ·  " + progress.Percent + "%"
-                          : "")
-                    : "");
-            _ocrTaskStatus.Foreground =
-                progress.Stage == OcrComponentTaskStage.Failed
-                    ? Brush("#A33A3A")
-                    : Ocean;
-            _installEnglishOcr.IsEnabled =
-                !running &&
-                progress.OcrState != OcrCapabilityState.Installed;
-            _removeEnglishOcr.IsEnabled =
-                !running &&
-                progress.OcrState == OcrCapabilityState.Installed;
-            _removeEnglishAll.IsEnabled = !running &&
-                (progress.OcrState == OcrCapabilityState.Installed ||
-                 progress.BasicState == OcrCapabilityState.Installed);
-            _copyEnglishOcrCommand.IsEnabled = !running;
-        }
-
-        private static void SetCapabilityStatus(
-            TextBlock target,
-            OcrCapabilityState state,
-            string unknownText)
-        {
-            if (state == OcrCapabilityState.Installed)
-            {
-                target.Text = "✓ 已安装";
-                target.Foreground = Brush("#137A57");
-            }
-            else if (state == OcrCapabilityState.NotInstalled)
-            {
-                target.Text = "未安装";
-                target.Foreground = Brush("#A45B00");
-            }
-            else
-            {
-                target.Text = unknownText ?? "状态未知";
-                target.Foreground = Muted;
-            }
-        }
-
-        private static string FormatElapsed(TimeSpan elapsed)
-        {
-            if (elapsed.TotalHours >= 1)
-                return string.Format(
-                    "{0}:{1:00}:{2:00}",
-                    (int)elapsed.TotalHours,
-                    elapsed.Minutes, elapsed.Seconds);
-            return string.Format(
-                "{0}:{1:00}",
-                (int)elapsed.TotalMinutes, elapsed.Seconds);
-        }
-
-        private void CopyEnglishOcrCommandClick(
-            object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                Clipboard.SetText(
-                    OcrLanguagePackManager.ManualInstallCommand);
-                MessageBox.Show(
-                    "安装命令已复制。\n\n请打开“管理员 Windows PowerShell”粘贴运行，完成后重新打开 OCR 设置页检查。",
-                    "已复制",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    "复制失败：" + ex.Message,
-                    "鲨译",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
-        }
-
-        private void RefreshOcrLanguagesAndSelectEnglish()
-        {
-            _ocrLanguage.ItemsSource = AvailableOcrLanguages();
-            SelectOcrLanguage("en");
-        }
-
- #endif
         private Border BuildFooter()
         {
             var footer = new Border
@@ -1427,8 +1078,6 @@ namespace GlobalTranslator
                 LoadModelDraft(_activeModelVendor);
                 _pendingModelVendor =
                     NormalizeModelVendor(_settings.ModelVendor);
-                if (_ocrLocalFallback != null)
-                    _ocrLocalFallback.IsChecked = _settings.OcrLocalFallback;
                 if (_ocrAiFallback != null)
                     _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
                 if (_ocrVisionModel != null)
@@ -1545,8 +1194,6 @@ namespace GlobalTranslator
             _settings.ModelProtocol = ModelApiProtocols.Normalize(
                 activeConnection.Protocol);
             _settings.OcrAiFallback = enableAiOcr;
-            _settings.OcrLocalFallback = _ocrLocalFallback == null ||
-                _ocrLocalFallback.IsChecked == true;
             _settings.OcrVisionModel = _ocrVisionModel == null
                 ? "deepseek-v4-flash-vision-exp"
                 : _ocrVisionModel.Text.Trim();
@@ -1588,7 +1235,7 @@ namespace GlobalTranslator
             writing = null;
             string error;
             if (!HotkeyGesture.TryParse(_writingHotkey.Text, out writing, out error))
-                return ShowHotkeyError("中译外表达", error, _writingHotkey);
+                return ShowHotkeyError("外贸沟通助手", error, _writingHotkey);
             if (!HotkeyGesture.TryParse(
                 _translateHotkey.Text,
                 out translate,
@@ -2974,62 +2621,6 @@ namespace GlobalTranslator
             };
         }
 
- #if LEGACY_OCR_COMPONENT_UI
-        private static List<OcrLanguageChoice> AvailableOcrLanguages()
-        {
-            var result = new List<OcrLanguageChoice>
-            {
-                new OcrLanguageChoice(
-                    "auto", "自动（按截图内容比较已安装语言）")
-            };
-            string[] tags = { "zh-Hans", "zh-Hant", "en", "ja", "ko" };
-            string[] names = { "简体中文", "繁體中文", "English", "日本語", "한국어" };
-            for (int i = 0; i < tags.Length; i++)
-            {
-                foreach (Language language in OcrEngine.AvailableRecognizerLanguages)
-                {
-                    if (!OcrTagMatches(language.LanguageTag, tags[i])) continue;
-                    result.Add(new OcrLanguageChoice(
-                        language.LanguageTag,
-                        names[i] + "  (" + language.LanguageTag + ")"));
-                    break;
-                }
-            }
-            return result;
-        }
-
-        private void SelectOcrLanguage(string tag)
-        {
-            for (int i = 0; i < _ocrLanguage.Items.Count; i++)
-            {
-                var choice = _ocrLanguage.Items[i] as OcrLanguageChoice;
-                if (choice != null && OcrTagMatches(choice.Tag, tag))
-                {
-                    _ocrLanguage.SelectedIndex = i;
-                    return;
-                }
-            }
-            _ocrLanguage.SelectedIndex = 0;
-        }
-
-        private static bool OcrTagMatches(string available, string requested)
-        {
-            if (string.IsNullOrWhiteSpace(requested) ||
-                string.Equals(requested, "auto", StringComparison.OrdinalIgnoreCase))
-                return string.Equals(
-                    available, "auto", StringComparison.OrdinalIgnoreCase);
-            if (string.Equals(available, requested, StringComparison.OrdinalIgnoreCase))
-                return true;
-            if (requested.StartsWith("zh-", StringComparison.OrdinalIgnoreCase))
-                return available.StartsWith(
-                    requested, StringComparison.OrdinalIgnoreCase);
-            return string.Equals(
-                (available ?? "").Split('-')[0],
-                requested.Split('-')[0],
-                StringComparison.OrdinalIgnoreCase);
-        }
-
- #endif
         private void UpdateTargetRule()
         {
             if (_targetRule == null || _language == null)
@@ -3070,23 +2661,6 @@ namespace GlobalTranslator
         private static SolidColorBrush Brush(string hex)
         {
             return (SolidColorBrush)new BrushConverter().ConvertFromString(hex);
-        }
-
-        private sealed class OcrLanguageChoice
-        {
-            public readonly string Tag;
-            private readonly string _display;
-
-            public OcrLanguageChoice(string tag, string display)
-            {
-                Tag = tag;
-                _display = display;
-            }
-
-            public override string ToString()
-            {
-                return _display;
-            }
         }
 
         private sealed class ModelVendorChoice

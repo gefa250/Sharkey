@@ -329,6 +329,143 @@ namespace GlobalTranslator
             }
         }
 
+        public async Task<CommunicationResult> ComposeCommunicationAsync(
+            CommunicationRequest input, AppSettings settings,
+            CancellationToken token)
+        {
+            if (input == null) throw new ArgumentNullException("input");
+            if (settings == null) throw new ArgumentNullException("settings");
+            token.ThrowIfCancellationRequested();
+            if (string.IsNullOrWhiteSpace(input.Background) &&
+                string.IsNullOrWhiteSpace(input.Intent) &&
+                (input.Images == null || input.Images.Length == 0))
+                throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
+            if (input.Images != null && input.Images.Length > 5)
+                throw new InvalidOperationException("每次沟通最多添加 5 张图片。");
+            ModelConnectionSettings connection =
+                settings.GetModelConnection(settings.ModelVendor);
+            if (string.Equals(settings.Provider, "ModelApi",
+                    StringComparison.OrdinalIgnoreCase))
+                connection = new ModelConnectionSettings
+                {
+                    BaseUrl = settings.ModelBaseUrl,
+                    ApiKey = settings.ModelApiKey,
+                    Model = settings.ModelName,
+                    Protocol = settings.ModelProtocol
+                };
+            if (string.IsNullOrWhiteSpace(connection.BaseUrl) ||
+                string.IsNullOrWhiteSpace(connection.Model) ||
+                !connection.IsUsable(settings.ModelVendor))
+                throw new InvalidOperationException(
+                    "请先在 AI 大模型设置中配置 API 地址、模型和 API Key。");
+            string protocol = ModelApiProtocols.Normalize(connection.Protocol);
+            bool anthropic = ModelApiProtocols.IsAnthropic(protocol);
+            string fullUrl = ModelApiProtocols.BuildEndpoint(
+                connection.BaseUrl.Trim(), protocol);
+            Uri endpoint;
+            if (!Uri.TryCreate(fullUrl, UriKind.Absolute, out endpoint) ||
+                (endpoint.Scheme != Uri.UriSchemeHttp &&
+                 endpoint.Scheme != Uri.UriSchemeHttps))
+                throw new InvalidOperationException("模型 API 地址无效。");
+            bool deepSeek = !anthropic &&
+                (connection.Model.StartsWith("deepseek-",
+                     StringComparison.OrdinalIgnoreCase) ||
+                 endpoint.Host.EndsWith("deepseek.com",
+                     StringComparison.OrdinalIgnoreCase));
+            bool stream = anthropic || deepSeek;
+            string prompt = CommunicationPrompt.Build(input);
+            var body = new StringBuilder();
+            body.Append("{\"model\":\"").Append(EscapeJson(connection.Model))
+                .Append("\",");
+            if (anthropic)
+                body.Append("\"max_tokens\":4096,\"system\":\"")
+                    .Append(EscapeJson(CommunicationPrompt.System))
+                    .Append("\",\"messages\":[{\"role\":\"user\",\"content\":");
+            else
+                body.Append("\"messages\":[{\"role\":\"system\",\"content\":\"")
+                    .Append(EscapeJson(CommunicationPrompt.System))
+                    .Append("\"},{\"role\":\"user\",\"content\":");
+            AppendCommunicationContent(body, prompt, input.Images, anthropic);
+            body.Append("}]");
+            if (deepSeek)
+                body.Append(",\"thinking\":{\"type\":\"disabled\"}");
+            body.Append(",\"stream\":")
+                .Append(stream ? "true" : "false").Append('}');
+
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                ApplyModelAuthentication(request, connection.ApiKey.Trim(),
+                    endpoint, protocol);
+                request.Content = new StringContent(body.ToString(),
+                    Encoding.UTF8, "application/json");
+                using (HttpResponseMessage response = await _http.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, token))
+                {
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        string errorBody = await ReadContentWithTimeoutAsync(
+                            response.Content, token, ModelStreamIdleTimeout);
+                        if (input.Images != null && input.Images.Length > 0 &&
+                            (response.StatusCode == HttpStatusCode.UnsupportedMediaType ||
+                             (((int)response.StatusCode == 400 ||
+                               (int)response.StatusCode == 422) &&
+                              Regex.IsMatch(errorBody ?? "",
+                                  "image|vision|multimodal|图片|视觉|图像",
+                                  RegexOptions.IgnoreCase))))
+                            throw new UnsupportedCommunicationImageException(
+                                "当前 AI 模型不接受图片。请改用支持图片的模型，或手动填写聊天文字。");
+                        throw ApiError("沟通助手", response.StatusCode, errorBody);
+                    }
+                    string raw;
+                    if (anthropic)
+                        raw = (await ReadAnthropicModelStreamAsync(
+                            response, connection.Model, null, token)).Text;
+                    else if (deepSeek)
+                        raw = (await ReadModelStreamAsync(
+                            response, connection.Model, null, token)).Text;
+                    else
+                    {
+                        string json = await ReadContentWithTimeoutAsync(
+                            response.Content, token, ModelStreamIdleTimeout);
+                        var data = Deserialize<ModelApiResponse>(json);
+                        if (data == null || data.Choices == null ||
+                            data.Choices.Length == 0 || data.Choices[0].Message == null)
+                            throw new InvalidOperationException(
+                                "沟通助手未收到可用结果。");
+                        ValidateOpenAiFinishReason(data.Choices[0].FinishReason);
+                        raw = data.Choices[0].Message.Content;
+                    }
+                    token.ThrowIfCancellationRequested();
+                    return CommunicationResult.Parse(raw, input.AdviceOnly);
+                }
+            }
+        }
+
+        private static void AppendCommunicationContent(StringBuilder body,
+            string prompt, byte[][] images, bool anthropic)
+        {
+            if (images == null || images.Length == 0)
+            {
+                body.Append("\"").Append(EscapeJson(prompt)).Append("\"");
+                return;
+            }
+            body.Append("[{\"type\":\"text\",\"text\":\"")
+                .Append(EscapeJson(prompt)).Append("\"}");
+            foreach (byte[] image in images)
+            {
+                if (image == null || image.Length == 0)
+                    throw new InvalidOperationException("截图内容为空。");
+                string base64 = Convert.ToBase64String(image);
+                if (anthropic)
+                    body.Append(", {\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"")
+                        .Append(base64).Append("\"}}");
+                else
+                    body.Append(", {\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,")
+                        .Append(base64).Append("\"}}");
+            }
+            body.Append(']');
+        }
+
         private async Task<TranslationResult> TranslateModelApiAsync(
             string text,
             string targetLanguage,

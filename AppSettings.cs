@@ -101,7 +101,7 @@ namespace GlobalTranslator
         public string Provider = "GoogleFree";
         public string TargetLanguageMode = "Smart";
         public string TargetLanguage = "zh-Hans";
-        public string WritingTargetLanguage = "en";
+        public string CommunicationLanguage = "auto";
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
         public string MicrosoftRegion = "";
@@ -127,14 +127,8 @@ namespace GlobalTranslator
         public string QwenModelApiKey = "";
         public string QwenModelName = "qwen-plus";
         public string QwenModelProtocol = ModelApiProtocols.OpenAI;
-        public string OcrLanguage = "auto";
-        public bool OcrAutoEnhance = true;
-        // Kept under the old field name for settings-file compatibility. It now
-        // means that AI Vision is the preferred OCR engine, with Windows OCR as
-        // an optional offline fallback.
         public bool OcrAiFallback = true;
         public string OcrVisionModel = "deepseek-v4-flash-vision-exp";
-        public bool OcrLocalFallback = true;
         public bool OcrAiConsentGranted = false;
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
@@ -179,7 +173,7 @@ namespace GlobalTranslator
                         case "Provider": settings.Provider = value; break;
                         case "TargetLanguageMode": settings.TargetLanguageMode = value; break;
                         case "TargetLanguage": settings.TargetLanguage = value; break;
-                        case "WritingTargetLanguage": settings.WritingTargetLanguage = value; break;
+                        case "CommunicationLanguage": settings.CommunicationLanguage = value; break;
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
                         case "MicrosoftRegion": settings.MicrosoftRegion = value; break;
@@ -204,11 +198,8 @@ namespace GlobalTranslator
                         case "QwenModelApiKey": settings.QwenModelApiKey = value; hasVendorProfiles = true; break;
                         case "QwenModelName": settings.QwenModelName = value; hasVendorProfiles = true; break;
                         case "QwenModelProtocol": settings.QwenModelProtocol = ModelApiProtocols.Normalize(value); hasVendorProfiles = true; break;
-                        case "OcrLanguage": settings.OcrLanguage = value; break;
-                        case "OcrAutoEnhance": settings.OcrAutoEnhance = value != "false"; break;
                         case "OcrAiFallback": settings.OcrAiFallback = value == "true"; hasOcrAiSetting = true; break;
                         case "OcrVisionModel": settings.OcrVisionModel = value; hasOcrVisionModel = true; break;
-                        case "OcrLocalFallback": settings.OcrLocalFallback = value != "false"; break;
                         case "OcrAiConsentGranted": settings.OcrAiConsentGranted = value == "true"; break;
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
@@ -253,7 +244,7 @@ namespace GlobalTranslator
                 "Provider=" + Encode(Provider) + "\n" +
                 "TargetLanguageMode=" + Encode(TargetLanguageMode) + "\n" +
                 "TargetLanguage=" + Encode(TargetLanguage) + "\n" +
-                "WritingTargetLanguage=" + Encode(WritingTargetLanguage) + "\n" +
+                "CommunicationLanguage=" + Encode(CommunicationLanguage) + "\n" +
                 "GoogleApiKey=" + Encode(GoogleApiKey) + "\n" +
                 "MicrosoftApiKey=" + Encode(MicrosoftApiKey) + "\n" +
                 "MicrosoftRegion=" + Encode(MicrosoftRegion) + "\n" +
@@ -278,11 +269,8 @@ namespace GlobalTranslator
                 "QwenModelApiKey=" + Encode(QwenModelApiKey) + "\n" +
                 "QwenModelName=" + Encode(QwenModelName) + "\n" +
                 "QwenModelProtocol=" + Encode(ModelApiProtocols.Normalize(QwenModelProtocol)) + "\n" +
-                "OcrLanguage=" + Encode(OcrLanguage) + "\n" +
-                "OcrAutoEnhance=" + Encode(OcrAutoEnhance ? "true" : "false") + "\n" +
                 "OcrAiFallback=" + Encode(OcrAiFallback ? "true" : "false") + "\n" +
                 "OcrVisionModel=" + Encode(OcrVisionModel) + "\n" +
-                "OcrLocalFallback=" + Encode(OcrLocalFallback ? "true" : "false") + "\n" +
                 "OcrAiConsentGranted=" + Encode(OcrAiConsentGranted ? "true" : "false") + "\n" +
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +

@@ -51,7 +51,7 @@ internal static class PopupInteractionProbe
             object client = Activator.CreateInstance(clientType, true);
             Type writingType = app.GetType("GlobalTranslator.WritingWindow", true);
             Window writing = (Window)Activator.CreateInstance(writingType, new object[] { settings, client, null });
-            var writingSource = (TextBox)writingType.GetField("_source", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
+            var writingSource = (TextBox)writingType.GetField("_intent", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
             var writingResult = (TextBox)writingType.GetField("_result", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
             var writingCopy = (Button)writingType.GetField("_copy", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
             writingSource.Text = "请确认交期"; writingResult.Text = "Please confirm the delivery date.";
@@ -59,17 +59,38 @@ internal static class PopupInteractionProbe
             writing.Show(); writing.UpdateLayout();
             SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
             writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
-            Require(writingSource.ActualHeight > 35 && writingResult.ActualHeight > 35, "Writing workspace editors collapsed at minimum size.");
+            Require(writingSource.ActualHeight > 35 && writingResult.ActualHeight > 35, "Communication input or result collapsed at minimum size.");
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-small.png", 96);
             writingSource.Text = "请确认数量";
-            Require(writingResult.Text.Length == 0 && !writingCopy.IsEnabled, "Changed source left stale writing result.");
+            Require(writingResult.Text.Length > 0 && writingCopy.IsEnabled, "Changing input erased a successful reply.");
+            var addImage = writingType.GetMethod("AddImage",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var moveImage = writingType.GetMethod("MoveImage",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var images = (System.Collections.IList)writingType.GetField("_images",
+                BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
+            for (int i = 0; i < 6; i++)
+            {
+                using (var bitmap = new System.Drawing.Bitmap(20, 20))
+                using (var stream = new System.IO.MemoryStream())
+                {
+                    bitmap.SetPixel(0, 0, System.Drawing.Color.FromArgb(10 + i, 20, 30));
+                    bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                    addImage.Invoke(writing, new object[] { stream.ToArray() });
+                }
+            }
+            Require(images.Count == 5, "Communication image limit is not five.");
+            object firstImage = images[0];
+            moveImage.Invoke(writing, new object[] { 0, 1 });
+            Require(ReferenceEquals(firstImage, images[1]),
+                "Communication image reorder changed the wrong item.");
             writing.Close();
             object ocrResult = Activator.CreateInstance(ocrResultType, true);
             settingsType.GetField("Provider").SetValue(settings, "Microsoft");
             ocrResultType.GetField("Text").SetValue(
                 ocrResult, "可编辑的 OCR 原文");
             ocrResultType.GetField("Engine").SetValue(
-                ocrResult, "Windows OCR · 本地增强");
+                ocrResult, "AI 视觉识别");
             popupType.GetMethod("TranslateOcr").Invoke(
                 popup, new[] { ocrResult, (object)160, (object)160, settings, client });
             Require(!source.IsReadOnly,
@@ -445,11 +466,6 @@ internal static class PopupInteractionProbe
             Require(visionModel != null &&
                     visionModel.Text == "deepseek-v4-flash-vision-exp",
                 "Default DeepSeek Vision model is missing.");
-            CheckBox localFallback = (CheckBox)settingsWindowType
-                .GetField("_ocrLocalFallback", BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(localFallback != null && localFallback.IsChecked == true,
-                "Optional Windows OCR fallback is not enabled by default.");
             Button copyDiagnostics = (Button)settingsWindowType
                 .GetField(
                     "_copyDiagnostics",
@@ -477,7 +493,7 @@ internal static class PopupInteractionProbe
                     openDiagnosticFolder.Content as string,
                     "打开日志目录") &&
                 supportSummary.IndexOf(
-                    "0.2.3", StringComparison.Ordinal) >= 0 &&
+                    "0.2.4", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
                     "CLR:", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
@@ -485,28 +501,6 @@ internal static class PopupInteractionProbe
                 supportSummary.IndexOf(
                     "mimo-secret", StringComparison.Ordinal) < 0,
                 "Support diagnostics are missing, incomplete, or expose a configured key.");
-            Type ocrServiceType = app.GetType(
-                "GlobalTranslator.OcrService", true);
-            Type ocrOptionsType = app.GetType(
-                "GlobalTranslator.OcrOptions", true);
-            Type applicationType = app.GetType(
-                "GlobalTranslator.TranslatorApplication", true);
-            Require(
-                ocrServiceType.GetMethod(
-                    "RecognizeAsync",
-                    BindingFlags.Instance | BindingFlags.Public,
-                    null,
-                    new[]
-                    {
-                        typeof(System.Drawing.Bitmap),
-                        ocrOptionsType,
-                        typeof(System.Threading.CancellationToken)
-                    },
-                    null) != null &&
-                applicationType.GetField(
-                    "_ocrCancellation",
-                    BindingFlags.Instance | BindingFlags.NonPublic) != null,
-                "OCR cancellation is not connected through the application and local OCR service.");
             Button cancelSettings = (Button)settingsWindowType
                 .GetField(
                     "_cancelSettings",
