@@ -63,5 +63,6 @@ git worktree add ..\Sharkey-checkpoint 62d397d
 正式发布使用不带 `-dev` 的语义化版本号。
 `scripts/Set-Version.ps1` 用来同步程序集、文件和产品版本；同时维护 `CHANGELOG.md`。
 正式发布使用 `scripts/Package-Release.ps1`，要求已提交且干净的工作区，并在发布成功后
-创建本地版本标签。开发版标签不表示已经完成正式发布回归。
+创建本地版本标签。每个版本的资源写入 `dist/vX.Y.Z/`，避免覆盖正在运行的旧版 EXE。
+开发版标签不表示已经完成正式发布回归。
 用户配置和 API 密钥不进入版本库或发布包。源码仓库采用 MIT 许可证；发布包应包含许可证文件。

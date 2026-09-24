@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $versionFile = Join-Path $projectRoot "VersionInfo.cs"
 $changeLog = Join-Path $projectRoot "CHANGELOG.md"
-$dist = Join-Path $projectRoot "dist"
+$dist = Join-Path $projectRoot ("dist\v" + $Version)
 
 if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
     throw "A release version must use x.y.z format, for example 0.1.0."
@@ -99,8 +99,8 @@ try {
         git tag -a "v$Version" -m "Sharkey v$Version"
         if ($LASTEXITCODE -ne 0) { throw "Unable to create the Git tag." }
     }
-    Write-Host "GitHub Release assets created: dist\Sharkey-win-x64.exe, .sha256, RELEASE-NOTES.md"
-    Write-Host "Archive created: dist\Sharkey-v$Version-win-x64.zip"
+    Write-Host "GitHub Release assets created: dist\v$Version\Sharkey-win-x64.exe, .sha256, RELEASE-NOTES.md"
+    Write-Host "Archive created: dist\v$Version\Sharkey-v$Version-win-x64.zip"
     if (-not $SkipTag) { Write-Host "Created local tag v$Version (not pushed)." }
 }
 finally {
