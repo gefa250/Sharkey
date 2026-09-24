@@ -1,8 +1,8 @@
 # Sharkey 本地版本迭代
 
-仓库已有本地提交历史，本轮保留旧版检查点 `62d397d`，阅读体验第一批在
-`codex/reading-experience` 分支开发。没有配置或推送远程仓库。
-`main` 暂时保留旧版；试用满意后再合并功能分支。
+源码公开托管在 [gefa250/Sharkey](https://github.com/gefa250/Sharkey)，`main` 是当前开发主线。
+[Sharkey-Releases](https://github.com/gefa250/Sharkey-Releases) 仅存放发布程序、更新说明和校验文件。
+旧版检查点 `62d397d` 仍保留在提交历史中；开发时从干净的 `main` 创建功能分支。
 
 ## 平时怎么用
 
@@ -44,7 +44,7 @@ git commit -m "feat: describe this iteration"
 ## 对比与安全回退
 
 ```powershell
-git diff main...codex/reading-experience
+git diff 62d397d..HEAD
 git show 62d397d --stat
 ```
 
@@ -59,10 +59,9 @@ git worktree add ..\Sharkey-checkpoint 62d397d
 
 ## 版本与发布
 
-版本唯一来源为 `VersionInfo.cs`，当前正式版为 `0.2.2`，保留旧标签 `v0.2.0-dev` 和 `v0.2.1-dev`。
+版本唯一来源为 `VersionInfo.cs`，当前源码版本为 `0.2.4`，公开下载页的最新版可能稍早。
 正式发布使用不带 `-dev` 的语义化版本号。
 `scripts/Set-Version.ps1` 用来同步程序集、文件和产品版本；同时维护 `CHANGELOG.md`。
 正式发布使用 `scripts/Package-Release.ps1`，要求已提交且干净的工作区，并在发布成功后
 创建本地版本标签。开发版标签不表示已经完成正式发布回归。
-用户配置和 API 密钥不进入版本库或发布包。当前没有远程备份；本地 Git 无法防止整块磁盘损坏。
-公开更新文件发布到 `https://github.com/gefa250/Sharkey-Releases`；该仓库只存放发布说明和二进制资源，不上传本源码仓库。
+用户配置和 API 密钥不进入版本库或发布包。源码仓库采用 MIT 许可证；发布包应包含许可证文件。

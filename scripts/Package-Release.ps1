@@ -53,6 +53,7 @@ try {
         Copy-Item -LiteralPath $exe -Destination $stage
         Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $stage
         Copy-Item -LiteralPath $changeLog -Destination $stage
+        Copy-Item -LiteralPath (Join-Path $projectRoot "LICENSE") -Destination $stage
         $notes = Join-Path $dist "RELEASE-NOTES-v$Version.md"
         $section = [regex]::Match(
             $changeSource,
