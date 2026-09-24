@@ -342,8 +342,9 @@ namespace GlobalTranslator
                 throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
             if (input.Images != null && input.Images.Length > 5)
                 throw new InvalidOperationException("每次沟通最多添加 5 张图片。");
+            string selectedVendor = settings.ModelVendor;
             ModelConnectionSettings connection =
-                settings.GetModelConnection(settings.ModelVendor);
+                settings.GetModelConnection(selectedVendor);
             if (string.Equals(settings.Provider, "ModelApi",
                     StringComparison.OrdinalIgnoreCase))
                 connection = new ModelConnectionSettings
@@ -353,9 +354,22 @@ namespace GlobalTranslator
                     Model = settings.ModelName,
                     Protocol = settings.ModelProtocol
                 };
+            else if (!connection.IsUsable(selectedVendor))
+            {
+                foreach (string vendor in new[]
+                    { "DeepSeek", "MiMo", "Qwen", "Custom" })
+                {
+                    ModelConnectionSettings candidate =
+                        settings.GetModelConnection(vendor);
+                    if (!candidate.IsUsable(vendor)) continue;
+                    connection = candidate;
+                    selectedVendor = vendor;
+                    break;
+                }
+            }
             if (string.IsNullOrWhiteSpace(connection.BaseUrl) ||
                 string.IsNullOrWhiteSpace(connection.Model) ||
-                !connection.IsUsable(settings.ModelVendor))
+                !connection.IsUsable(selectedVendor))
                 throw new InvalidOperationException(
                     "请先在 AI 大模型设置中配置 API 地址、模型和 API Key。");
             string protocol = ModelApiProtocols.Normalize(connection.Protocol);
@@ -394,7 +408,7 @@ namespace GlobalTranslator
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
-                ApplyModelAuthentication(request, connection.ApiKey.Trim(),
+                ApplyModelAuthentication(request, (connection.ApiKey ?? "").Trim(),
                     endpoint, protocol);
                 request.Content = new StringContent(body.ToString(),
                     Encoding.UTF8, "application/json");

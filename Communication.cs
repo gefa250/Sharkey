@@ -46,7 +46,9 @@ namespace GlobalTranslator
                      (string.IsNullOrWhiteSpace(result.Reply) !=
                       string.IsNullOrWhiteSpace(result.MeaningZh))))
                     throw new FormatException();
-                if (adviceOnly && !string.IsNullOrWhiteSpace(result.Reply))
+                if (adviceOnly &&
+                    (!string.IsNullOrWhiteSpace(result.Reply) ||
+                     !string.IsNullOrWhiteSpace(result.MeaningZh)))
                     throw new FormatException();
                 if (!adviceOnly && !string.IsNullOrWhiteSpace(result.Reply) &&
                     string.IsNullOrWhiteSpace(result.MeaningZh))

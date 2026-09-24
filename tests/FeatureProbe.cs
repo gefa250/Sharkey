@@ -76,7 +76,7 @@ internal static class FeatureProbe
         {
             try
             {
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < 4; i++)
                 {
                     var context = listener.GetContext(); string body;
                     using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
@@ -162,7 +162,7 @@ internal static class FeatureProbe
                         context.Response.Close();
                         continue;
                     }
-                    string answer = i == 0
+                    string answer = i == 0 || i == 3
                         ? "{\"reply\":\"Please confirm the quantity.\",\"meaning_zh\":\"请确认数量。\",\"advice_zh\":\"价格待核实。\"}"
                         : "{\"reply\":\"\",\"meaning_zh\":\"\",\"advice_zh\":\"先核实交期。\"}";
                     string response = serializer.Serialize(new
@@ -220,6 +220,19 @@ internal static class FeatureProbe
                 if (Unwrap(error).GetType().Name !=
                     "UnsupportedCommunicationImageException") throw;
             }
+            settingsType.GetField("CustomModelApiKey").SetValue(settings, "");
+            settingsType.GetField("DeepSeekModelBaseUrl").SetValue(settings,
+                "http://127.0.0.1:18944/v1");
+            settingsType.GetField("DeepSeekModelApiKey").SetValue(settings,
+                "probe-secret");
+            settingsType.GetField("DeepSeekModelName").SetValue(settings,
+                "probe-chat");
+            inputType.GetField("Intent").SetValue(input, "请确认数量");
+            inputType.GetField("Images").SetValue(input, new byte[0][]);
+            inputType.GetField("Adjustment").SetValue(input, "");
+            inputType.GetField("Turns").SetValue(input,
+                Array.CreateInstance(turnType, 0));
+            CommunicationResultFor(clientType, client, input, settings);
             if (!server.Wait(10000) || serverError != null)
                 throw serverError ?? new Exception("Communication server timed out.");
             try
