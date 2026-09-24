@@ -76,7 +76,7 @@ internal static class FeatureProbe
         {
             try
             {
-                for (int i = 0; i < 4; i++)
+                for (int i = 0; i < 3; i++)
                 {
                     var context = listener.GetContext(); string body;
                     using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
@@ -135,7 +135,7 @@ internal static class FeatureProbe
         {
             try
             {
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < 4; i++)
                 {
                     HttpListenerContext context = listener.GetContext();
                     string body;
@@ -221,6 +221,8 @@ internal static class FeatureProbe
                     "UnsupportedCommunicationImageException") throw;
             }
             settingsType.GetField("CustomModelApiKey").SetValue(settings, "");
+            settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
+                "https://api.openai.com/v1");
             settingsType.GetField("DeepSeekModelBaseUrl").SetValue(settings,
                 "http://127.0.0.1:18944/v1");
             settingsType.GetField("DeepSeekModelApiKey").SetValue(settings,
@@ -281,6 +283,8 @@ internal static class FeatureProbe
         });
         settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
             "http://127.0.0.1:18945/anthropic");
+        settingsType.GetField("CustomModelApiKey").SetValue(settings,
+            "probe-secret");
         settingsType.GetField("CustomModelProtocol").SetValue(settings,
             "Anthropic");
         client = Activator.CreateInstance(clientType, true);
