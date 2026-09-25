@@ -49,6 +49,21 @@ internal static class PopupInteractionProbe
                 app.GetType("GlobalTranslator.OcrRecognitionResult", true);
             object settings = Activator.CreateInstance(settingsType, true);
             object client = Activator.CreateInstance(clientType, true);
+            Type tableWindowType = app.GetType("GlobalTranslator.ImageTableWindow", true);
+            var tableWindow = (Window)Activator.CreateInstance(tableWindowType, new object[] { settings, client, (Action)delegate { }, null });
+            var tableData = new System.Data.DataTable("费用明细");
+            tableData.Columns.Add("列 1"); tableData.Columns.Add("列 2"); tableData.Columns.Add("列 3");
+            tableData.Rows.Add("项目", "数量", "金额 USD");
+            tableData.Rows.Add("产品 A", "0012", "120.00");
+            tableData.Rows.Add("运费", "1", "15.50");
+            var tablePicker = (ComboBox)Field(tableWindow, "_sheets");
+            tablePicker.ItemsSource = new[] { tableData }; tablePicker.SelectedIndex = 0;
+            tableWindow.Show(); tableWindow.UpdateLayout();
+            Require(((DataGrid)Field(tableWindow, "_grid")).Items.Count == 3, "Table grid lost rows.");
+            SaveWindowPreview(tableWindow, "tmp/tests/image-table.png", 96);
+            tableWindow.Width = 520; tableWindow.Height = 440; tableWindow.UpdateLayout();
+            Require(((DataGrid)Field(tableWindow, "_grid")).ActualHeight > 100, "Small table viewport collapsed.");
+            tableWindow.Close();
             Type writingType = app.GetType("GlobalTranslator.WritingWindow", true);
             Window writing = (Window)Activator.CreateInstance(writingType, new object[] { settings, client, null });
             var writingSource = (TextBox)writingType.GetField("_intent", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
@@ -103,7 +118,7 @@ internal static class PopupInteractionProbe
                 popup, new[] { ocrResult, (object)160, (object)160, settings, client });
             Require(!source.IsReadOnly,
                 "OCR source text was not made editable.");
-            string[] actionFields = { "_copySource", "_retranslate", "_recapture" };
+            string[] actionFields = { "_tableButton", "_retranslate", "_textTools" };
             foreach (string field in actionFields)
             {
                 Button button = (Button)popupType

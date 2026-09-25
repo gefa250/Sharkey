@@ -27,6 +27,7 @@ internal static class FeatureProbe
             TestCommerceToolRoundTrip(app);
             TestCommerceSearch(app);
             TestAiBalance(app);
+            TestImageTables(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
             TestModelStreamReliability(app);
@@ -107,6 +108,59 @@ internal static class FeatureProbe
             Console.WriteLine("AI_BALANCE endpoint/auth/currency/precision/unsupported/error=True");
         }
         finally { ((IDisposable)service).Dispose(); }
+    }
+
+    private static void TestImageTables(Assembly app)
+    {
+        Type docType = app.GetType("GlobalTranslator.TableDocument", true);
+        var parse = docType.GetMethod("Parse");
+        const string tableJson = "{\"tables\":[{\"title\":\"报价\",\"rows\":[[\"型号\",\"金额\"],[\"0012\",\"12.30\"],[\"**原样**\",\"=1+1\"]]}]}";
+        object document = parse.Invoke(null, new object[] { tableJson });
+        var tables = (Array)docType.GetProperty("tables").GetValue(document, null);
+        var table = tables.GetValue(0);
+        var rows = (string[][])table.GetType().GetProperty("rows").GetValue(table, null);
+        if (rows[1][0] != "0012" || rows[1][1] != "12.30") throw new Exception("Table text precision lost.");
+        string csv = (string)docType.GetMethod("Export").Invoke(null, new object[] { rows, ',' });
+        if (!csv.Contains("\"'=1+1\"") || !csv.Contains("\"0012\"")) throw new Exception("Unsafe table export.");
+        string escaped = (string)docType.GetMethod("Export").Invoke(null, new object[] { new[] { new[] { "a,\"b\"\nc", "-12.50" } }, '\t' });
+        if (escaped != "\"a,\"\"b\"\"\nc\"\t\"-12.50\"") throw new Exception("Table quoting failed.");
+        foreach (string invalid in new[] { "{}", "{\"tables\":[{\"rows\":[[\"a\"],[\"b\",\"c\"]]}]}", "{\"tables\":[{\"rows\":[[123]]}]}", "{\"too_large\":true,\"tables\":[]}" })
+        {
+            try { parse.Invoke(null, new object[] { invalid }); throw new Exception("Invalid table accepted."); }
+            catch (TargetInvocationException ex) { if (!(ex.InnerException is InvalidOperationException)) throw; }
+        }
+        var listener = new HttpListener(); listener.Prefixes.Add("http://127.0.0.1:18947/"); listener.Start();
+        var server = Task.Run(delegate
+        {
+            var context = listener.GetContext();
+            string body; using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
+            if (!body.Contains("image_url") || !body.Contains("Extract visible tables") || context.Request.Headers["Authorization"] != "Bearer table-test") throw new Exception("Table image request missing.");
+            var json = new JavaScriptSerializer().Serialize(new { choices = new[] { new { finish_reason = "stop", message = new { content = tableJson } } } });
+            byte[] bytes = Encoding.UTF8.GetBytes(json); context.Response.OutputStream.Write(bytes, 0, bytes.Length); context.Response.Close();
+        });
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        object settings = Activator.CreateInstance(settingsType, true);
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings, "http://127.0.0.1:18947/v1");
+        settingsType.GetField("CustomModelApiKey").SetValue(settings, "table-test");
+        settingsType.GetField("CustomModelName").SetValue(settings, "table-model");
+        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
+        object client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            using (var image = new Bitmap(20, 20))
+            {
+                var task = (Task)clientType.GetMethod("RecognizeTableAsync").Invoke(client, new object[] { image, settings, CancellationToken.None });
+                if (!task.Wait(10000)) throw new Exception("Table request timed out.");
+                var result = task.GetType().GetProperty("Result").GetValue(task, null);
+                var parsed = (Array)docType.GetProperty("tables").GetValue(result, null);
+                var values = (string[][])parsed.GetValue(0).GetType().GetProperty("rows").GetValue(parsed.GetValue(0), null);
+                if (values[2][0] != "**原样**") throw new Exception("OCR cleanup modified table cells.");
+            }
+            if (!server.Wait(10000)) throw new Exception("Table server timed out.");
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); }
+        Console.WriteLine("IMAGE_TABLE api/schema/text/quoting/formula=True");
     }
 
     private static void TestTextToolsAndWriting(Assembly app)

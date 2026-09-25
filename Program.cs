@@ -17,6 +17,27 @@ namespace GlobalTranslator
         private TranslationClient _client;
         private SelectionMonitor _monitor;
         private PopupWindow _popup;
+        private Bitmap _lastOcrImage;
+        private ImageTableWindow _tableWindow;
+
+        private void ShowImageTable(bool useLastScreenshot)
+        {
+            if (_screenshotSelecting) return;
+            _popup.DismissImmediately();
+            if (_tableWindow != null)
+            {
+                if (useLastScreenshot)
+                {
+                    if (System.Windows.MessageBox.Show("打开这张截图将关闭现有表格，请先确认已复制或导出。", "识图转表格", MessageBoxButton.OKCancel) != MessageBoxResult.OK) return;
+                    _tableWindow.Close();
+                }
+                else { _tableWindow.Show(); _tableWindow.Activate(); return; }
+            }
+            _tableWindow = new ImageTableWindow(_settings, _client, EnsureOcrConsent,
+                useLastScreenshot ? _lastOcrImage : null);
+            _tableWindow.Closed += delegate { _tableWindow = null; };
+            _tableWindow.Show();
+        }
         private SettingsWindow _settingsWindow;
         private NotifyIcon _tray;
         private ToolStripMenuItem _settingsMenuItem;
@@ -31,6 +52,10 @@ namespace GlobalTranslator
         private UpdateService _updateService;
         private UpdateWindow _updateWindow;
         private System.Windows.Threading.DispatcherTimer _updateTimer;
+        private System.Windows.Threading.DispatcherTimer _networkDebounce;
+        private bool _networkUpdatePending = true;
+        private DateTime _lastNetworkCheck = DateTime.MinValue;
+        private string _notifiedUpdateVersion;
         private bool _exiting;
         private bool _updateCheckInProgress;
         private bool _screenshotSelecting;
@@ -127,6 +152,7 @@ namespace GlobalTranslator
             _client = new TranslationClient();
             _updateService = new UpdateService();
             _popup = new PopupWindow();
+            _popup.TableRequested += delegate { ShowImageTable(true); };
             _popup.OcrRecaptureRequested += delegate
             {
                 CaptureScreenshotAndTranslate();
@@ -200,8 +226,35 @@ namespace GlobalTranslator
             {
                 Interval = TimeSpan.FromMinutes(1)
             };
-            _updateTimer.Tick += async delegate { await CheckForUpdatesAsync(false); };
+            _updateTimer.Tick += async delegate { await CheckForUpdatesAsync(false, _networkUpdatePending); };
             _updateTimer.Start();
+            _networkDebounce = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _networkDebounce.Tick += async delegate
+            {
+                _networkDebounce.Stop();
+                await CheckForUpdatesAsync(false, true);
+            };
+            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged += NetworkAvailabilityChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += NetworkAddressChanged;
+        }
+
+        private void NetworkAvailabilityChanged(object sender, System.Net.NetworkInformation.NetworkAvailabilityEventArgs e)
+        {
+            QueueNetworkUpdate();
+        }
+
+        private void NetworkAddressChanged(object sender, EventArgs e) { QueueNetworkUpdate(); }
+
+        private void QueueNetworkUpdate()
+        {
+            if (_exiting || Dispatcher.HasShutdownStarted) return;
+            Dispatcher.BeginInvoke(new Action(delegate
+            {
+                if (_exiting) return;
+                _networkUpdatePending = true;
+                _networkDebounce.Stop();
+                _networkDebounce.Start();
+            }));
         }
 
         private async void BeginAutomaticUpdateCheck()
@@ -209,7 +262,7 @@ namespace GlobalTranslator
             try
             {
                 await Task.Delay(1500);
-                await CheckForUpdatesAsync(false);
+                await CheckForUpdatesAsync(false, true);
             }
             catch
             {
@@ -217,10 +270,16 @@ namespace GlobalTranslator
             }
         }
 
-        private async Task CheckForUpdatesAsync(bool manual)
+        private async Task CheckForUpdatesAsync(bool manual, bool networkTriggered = false)
         {
             if (_exiting || _updateCheckInProgress) return;
             if (!manual && _settings.UpdateCheckHours == 0) return;
+            if (!manual && !System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable())
+            {
+                _networkUpdatePending = true;
+                return;
+            }
+            if (!manual && networkTriggered && DateTime.UtcNow - _lastNetworkCheck < TimeSpan.FromMinutes(5)) return;
             if (_updateService == null || !_updateService.IsConfigured)
             {
                 if (manual && _settingsWindow != null)
@@ -231,6 +290,7 @@ namespace GlobalTranslator
             }
 
             _updateCheckInProgress = true;
+            if (networkTriggered) _lastNetworkCheck = DateTime.UtcNow;
             _updateService.AutomaticCheckHours = _settings.UpdateCheckHours;
             if (manual && _settingsWindow != null)
                 _settingsWindow.SetUpdateStatus(
@@ -241,8 +301,9 @@ namespace GlobalTranslator
             try
             {
                 UpdateInfo update = await _updateService.CheckAsync(
-                    manual,
+                    manual || networkTriggered,
                     cancellation.Token);
+                if (manual || networkTriggered) _networkUpdatePending = false;
                 if (update == null)
                 {
                     if (manual && _settingsWindow != null)
@@ -256,7 +317,11 @@ namespace GlobalTranslator
                     _settingsWindow.SetUpdateStatus(
                         "发现新版本 " + update.Version,
                         true);
-                ShowUpdateWindow(update);
+                if (manual || _notifiedUpdateVersion != update.Version)
+                {
+                    _notifiedUpdateVersion = update.Version;
+                    ShowUpdateWindow(update);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -487,6 +552,7 @@ namespace GlobalTranslator
             menu.Items.Add(_settingsMenuItem);
             menu.Items.Add(_translateMenuItem);
             menu.Items.Add(_ocrMenuItem);
+            menu.Items.Add("识图转表格…", null, delegate { ShowImageTable(false); });
             _writingMenuItem = new ToolStripMenuItem("外贸沟通助手", null, delegate { ShowWriting(); });
             menu.Items.Add(_writingMenuItem);
             menu.Items.Add("最近翻译…", null, delegate { new HistoryWindow(_settings, _client).Show(); });
@@ -636,6 +702,8 @@ namespace GlobalTranslator
                 }
                 NativeMethods.POINT point;
                 NativeMethods.GetCursorPos(out point);
+                if (_lastOcrImage != null) _lastOcrImage.Dispose();
+                _lastOcrImage = new Bitmap(image);
                 _popup.TranslateOcrAtBounds(
                     result,
                     screenshotBounds.Right > screenshotBounds.Left
@@ -782,7 +850,12 @@ namespace GlobalTranslator
         protected override void OnExit(ExitEventArgs e)
         {
             _exiting = true;
+            if (_tableWindow != null) _tableWindow.Close();
+            if (_lastOcrImage != null) { _lastOcrImage.Dispose(); _lastOcrImage = null; }
             if (_updateTimer != null) _updateTimer.Stop();
+            if (_networkDebounce != null) _networkDebounce.Stop();
+            System.Net.NetworkInformation.NetworkChange.NetworkAvailabilityChanged -= NetworkAvailabilityChanged;
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged -= NetworkAddressChanged;
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             if (_popup != null) _popup.Close();
             if (_messageWindow != null)

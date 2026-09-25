@@ -39,6 +39,7 @@
     <Reference Include="PresentationFramework" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
@@ -74,6 +75,8 @@
     <Compile Include="NativeMethods.cs" />
     <Compile Include="AppSettings.cs" />
     <Compile Include="AiBalanceService.cs" />
+    <Compile Include="TableDocument.cs" />
+    <Compile Include="ImageTableWindow.cs" />
     <Compile Include="TranslationClient.cs" />
     <Compile Include="SelectionMonitor.cs" />
     <Compile Include="PopupWindow.cs" />

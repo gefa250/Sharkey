@@ -102,6 +102,8 @@ namespace GlobalTranslator
         private Button _retranslate;
         private Button _recapture;
         private Button _textTools;
+        private Button _tableButton;
+        private ContextMenu _textMenu;
         private string _beforeLineCleanup;
         private Button _copyTranslation;
         private FrameworkElement _modelChipHost;
@@ -128,6 +130,7 @@ namespace GlobalTranslator
         private string _ocrMetaSuffix = "";
 
         public event EventHandler OcrRecaptureRequested;
+        public event EventHandler TableRequested;
         public event EventHandler ModelSettingsRequested;
         public event EventHandler SettingsRequested;
         public event EventHandler VisibilityChanged;
@@ -190,7 +193,8 @@ namespace GlobalTranslator
             _outsideMonitor.MouseDown += delegate(object sender, PopupMouseEventArgs args)
             {
                 if (!IsVisible || _isPinned || _modelPopup == null ||
-                    _modelPopup.IsOpen || IsPointInsideWindow(args.X, args.Y))
+                    _modelPopup.IsOpen || (_textMenu != null && _textMenu.IsOpen) ||
+                    (_layoutPopup != null && _layoutPopup.IsOpen) || IsPointInsideWindow(args.X, args.Y))
                     return;
                 Dismiss();
             };
@@ -232,13 +236,25 @@ namespace GlobalTranslator
             };
             PreviewKeyDown += delegate(object sender, KeyEventArgs e)
             {
+                if (e.Key == Key.C && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
+                {
+                    _copyTranslation.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); e.Handled = true; return;
+                }
+                if (_ocrMode && e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.Control)
+                {
+                    _retranslate.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); e.Handled = true; return;
+                }
+                if (e.Key == Key.Escape && _textMenu != null && _textMenu.IsOpen)
+                {
+                    _textMenu.IsOpen = false; e.Handled = true; return;
+                }
                 if (e.Key != Key.Escape) return;
                 if (HandleEscape()) e.Handled = true;
             };
 
             var card = new Border
             {
-                Background = Brush("#F7FCFD"),
+                Background = Brush("#FAFCFE"),
                 CornerRadius = new CornerRadius(18),
                 BorderBrush = Brush("#D2DDE7EA"),
                 BorderThickness = new Thickness(1),
@@ -365,7 +381,7 @@ namespace GlobalTranslator
             };
             var translationContent = new Grid();
             _translation = MakeSelectableTextBox(17, Navy, 29);
-            _translation.FontWeight = FontWeights.Medium;
+            _translation.FontWeight = FontWeights.Normal;
             _translation.Background = Brushes.Transparent;
             // Leave enough space below the last baseline for Latin
             // descenders such as g, j, p, q and y.  The bottom padding is
@@ -1373,6 +1389,8 @@ namespace GlobalTranslator
 
         public bool HandleEscape()
         {
+            if (_textMenu != null && _textMenu.IsOpen) { _textMenu.IsOpen = false; return true; }
+            if (_layoutPopup != null && _layoutPopup.IsOpen) { _layoutPopup.IsOpen = false; return true; }
             if (_modelPopup != null && _modelPopup.IsOpen)
             {
                 _modelPopup.IsOpen = false;
@@ -1433,6 +1451,8 @@ namespace GlobalTranslator
 
         private void FinishDismiss()
         {
+            if (_textMenu != null) _textMenu.IsOpen = false;
+            if (_layoutPopup != null) _layoutPopup.IsOpen = false;
             _isDismissing = false;
             BeginAnimation(OpacityProperty, null);
             Opacity = 1;
@@ -1959,7 +1979,7 @@ namespace GlobalTranslator
         {
             var header = new Border
             {
-                Background = Brush("#F0FAFB"),
+                Background = new LinearGradientBrush(Color.FromRgb(232, 245, 251), Color.FromRgb(247, 251, 253), 0),
                 BorderBrush = Brush("#D5E8EB"),
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 CornerRadius = new CornerRadius(18, 18, 0, 0),
@@ -1969,7 +1989,13 @@ namespace GlobalTranslator
             header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
             {
                 Point point = e.GetPosition(header);
-                if (point.X >= header.ActualWidth - 190) return;
+                DependencyObject hit = e.OriginalSource as DependencyObject;
+                while (hit != null && hit != header)
+                {
+                    if (hit is Button) return;
+                    var contentElement = hit as FrameworkContentElement;
+                    hit = contentElement != null ? contentElement.Parent : VisualTreeHelper.GetParent(hit);
+                }
                 if (e.ClickCount == 2)
                 {
                     ToggleMaximize();
@@ -2303,8 +2329,8 @@ namespace GlobalTranslator
             {
                 if (!string.IsNullOrEmpty(_translatedText))
                 {
-                    Clipboard.SetText(_translatedText);
-                    _copyTranslation.Content = "已复制";
+                    try { Clipboard.SetText(_translatedText); _copyTranslation.Content = "已复制"; }
+                    catch { _copyTranslation.Content = "重试复制"; }
                     var reset = new DispatcherTimer
                     {
                         Interval = TimeSpan.FromSeconds(1.2)
@@ -2318,9 +2344,10 @@ namespace GlobalTranslator
                 }
             };
             DockPanel.SetDock(_copyTranslation, Dock.Right);
+            _copyTranslation.ToolTip = "复制译文 · Ctrl+Shift+C（浮窗内）";
             actions.Children.Add(_copyTranslation);
 
-            var ocrActions = new StackPanel
+            var ocrActions = new WrapPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Left
@@ -2332,6 +2359,7 @@ namespace GlobalTranslator
                     Clipboard.SetText(_source.Text);
             };
             _retranslate = MakeSecondaryButton("重新翻译");
+            _retranslate.ToolTip = "使用修改后的原文翻译 · Ctrl+Enter";
             _retranslate.Click += delegate
             {
                 string edited = (_source.Text ?? "").Trim();
@@ -2348,13 +2376,21 @@ namespace GlobalTranslator
                     false);
             };
             _recapture = MakeSecondaryButton("重新框选");
-            _textTools = MakeSecondaryButton("文本工具");
+            _textTools = MakeSecondaryButton("更多");
             var textMenu = new ContextMenu();
+            _textMenu = textMenu;
             var join = new MenuItem { Header = "整理 PDF 断行" };
             join.Click += delegate { _beforeLineCleanup = _source.Text; _source.Text = TextTools.JoinLines(_source.Text); SetOcrDirty(true); };
             var undo = new MenuItem { Header = "还原断行整理" };
             undo.Click += delegate { if (_beforeLineCleanup != null) { _source.Text = _beforeLineCleanup; _beforeLineCleanup = null; SetOcrDirty(true); } };
             textMenu.Items.Add(join); textMenu.Items.Add(undo);
+            var copyOriginal = new MenuItem { Header = "复制原文" };
+            copyOriginal.Click += delegate { if (!string.IsNullOrEmpty(_source.Text)) { try { Clipboard.SetText(_source.Text); } catch { } } };
+            var recaptureItem = new MenuItem { Header = "重新框选" };
+            recaptureItem.Click += delegate { DismissImmediately(); var action = OcrRecaptureRequested; if (action != null) action(this, EventArgs.Empty); };
+            textMenu.Items.Insert(0, copyOriginal);
+            textMenu.Items.Insert(1, recaptureItem);
+            textMenu.Items.Insert(2, new Separator());
             _textTools.Click += delegate { undo.IsEnabled = _beforeLineCleanup != null; textMenu.PlacementTarget = _textTools; textMenu.IsOpen = true; };
             _recapture.Click += delegate
             {
@@ -2362,9 +2398,11 @@ namespace GlobalTranslator
                 var handler = OcrRecaptureRequested;
                 if (handler != null) handler(this, EventArgs.Empty);
             };
-            ocrActions.Children.Add(_copySource);
             ocrActions.Children.Add(_retranslate);
-            ocrActions.Children.Add(_recapture);
+            _tableButton = MakeSecondaryButton("转表格");
+            _tableButton.ToolTip = "从原截图提取表格，可修改、复制到 Excel 或导出 CSV";
+            _tableButton.Click += delegate { var action = TableRequested; if (action != null) action(this, EventArgs.Empty); };
+            ocrActions.Children.Add(_tableButton);
             ocrActions.Children.Add(_textTools);
             actions.Children.Add(ocrActions);
             return actions;
@@ -2373,10 +2411,11 @@ namespace GlobalTranslator
         private void SetOcrActionsVisible(bool visible)
         {
             Visibility state = visible ? Visibility.Visible : Visibility.Collapsed;
-            _copySource.Visibility = state;
+            _copySource.Visibility = Visibility.Collapsed;
             _retranslate.Visibility = state;
-            _recapture.Visibility = state;
+            _recapture.Visibility = Visibility.Collapsed;
             _textTools.Visibility = state;
+            _tableButton.Visibility = state;
         }
 
         private IntPtr WindowProc(
