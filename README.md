@@ -4,7 +4,7 @@
 
 > [下载可运行版本](https://github.com/gefa250/Sharkey-Releases/releases/latest) · [查看更新记录](CHANGELOG.md) · [报告问题](https://github.com/gefa250/Sharkey/issues)
 
-当前源码版本为 `0.3.0-dev`；公开下载页的正式版仍可能是 `0.2.4`。此仓库存放源码，`Sharkey-Releases` 存放可运行程序及自动更新文件。
+当前源码与公开下载版本为 `0.3.0`。此仓库存放源码，`Sharkey-Releases` 存放可运行程序及自动更新文件。
 
 ## 开始使用
 

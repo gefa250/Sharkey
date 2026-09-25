@@ -9,9 +9,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
@@ -49,7 +51,9 @@ namespace GlobalTranslator
             new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
 
         private Grid _contentHost;
+        private ColumnDefinition _sidebarColumn;
         private StackPanel _navigation;
+        private StackPanel _modelTestRow;
         private TextBlock _pageTitle;
         private TextBlock _headerCurrentEngine;
         private TextBlock _dirtyText;
@@ -119,9 +123,11 @@ namespace GlobalTranslator
             FontFamily = new FontFamily("Microsoft YaHei UI");
             FontSize = 14;
             KeyDown += SettingsWindowKeyDown;
+            SizeChanged += SettingsWindowSizeChanged;
             IsVisibleChanged += SettingsVisibilityChanged;
             _balanceTimer.Tick += async delegate { await RefreshBalanceAsync(); };
 
+            InstallRoundedControlStyles();
             BuildWindow();
             LoadValues();
             ClampToWorkArea();
@@ -171,7 +177,8 @@ namespace GlobalTranslator
         private void BuildWindow()
         {
             var shell = new Grid();
-            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+            _sidebarColumn = new ColumnDefinition { Width = new GridLength(220) };
+            shell.ColumnDefinitions.Add(_sidebarColumn);
             shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             Content = shell;
 
@@ -502,7 +509,7 @@ namespace GlobalTranslator
             fields.Children.Add(_connectionExpander);
             root.Children.Add(form);
 
-            var testRow = new StackPanel
+            _modelTestRow = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 14, 0, 0)
@@ -510,12 +517,12 @@ namespace GlobalTranslator
             _testTextButton = PrimaryButton("测试连接");
             _testTextButton.Padding = new Thickness(18, 8, 18, 8);
             _testTextButton.Click += async delegate { await RunTextTestAsync(); };
-            testRow.Children.Add(_testTextButton);
+            _modelTestRow.Children.Add(_testTextButton);
             _testImageButton = SecondaryButton("测试图片识别");
             _testImageButton.Padding = new Thickness(16, 8, 16, 8);
             _testImageButton.Margin = new Thickness(9, 0, 0, 0);
             _testImageButton.Click += async delegate { await RunImageTestAsync(); };
-            testRow.Children.Add(_testImageButton);
+            _modelTestRow.Children.Add(_testImageButton);
             _modelTestStatus = new TextBlock
             {
                 Text = "未测试", FontSize = 12, Foreground = Subtle,
@@ -523,8 +530,8 @@ namespace GlobalTranslator
                 Margin = new Thickness(12, 0, 0, 0),
                 TextWrapping = TextWrapping.Wrap
             };
-            testRow.Children.Add(_modelTestStatus);
-            root.Children.Add(testRow);
+            _modelTestRow.Children.Add(_modelTestStatus);
+            root.Children.Add(_modelTestRow);
             root.Children.Add(new Border { Height = 12, Background = Brushes.Transparent });
 
             WireModelDraftEvents();
@@ -1551,10 +1558,63 @@ namespace GlobalTranslator
 
         private void ClampToWorkArea()
         {
-            double workHeight = SystemParameters.WorkArea.Height;
-            double workWidth = SystemParameters.WorkArea.Width;
-            Height = Math.Max(MinHeight, Math.Min(Height, workHeight));
-            Width = Math.Max(MinWidth, Math.Min(Width, workWidth));
+            System.Drawing.Rectangle area = System.Windows.Forms.Screen.PrimaryScreen == null
+                ? new System.Drawing.Rectangle(0, 0,
+                    (int)SystemParameters.WorkArea.Width,
+                    (int)SystemParameters.WorkArea.Height)
+                : System.Windows.Forms.Screen.PrimaryScreen.WorkingArea;
+            uint monitorDpi = NativeMethods.GetMonitorDpi(
+                area.Left + area.Width / 2, area.Top + area.Height / 2);
+            double scale = monitorDpi == 0 ? 1 : monitorDpi / 96.0;
+            ApplyWorkAreaBounds(area.Width / scale, area.Height / scale);
+        }
+
+        private void ApplyWorkAreaBounds(double workWidth, double workHeight)
+        {
+            workWidth = Math.Max(1, workWidth);
+            workHeight = Math.Max(1, workHeight);
+            MinWidth = Math.Min(760, workWidth);
+            MinHeight = Math.Min(560, workHeight);
+            MaxWidth = workWidth;
+            MaxHeight = workHeight;
+            Width = Math.Min(960, workWidth);
+            Height = Math.Min(720, workHeight);
+            AdaptCompactLayout();
+        }
+
+        private void SettingsWindowSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            AdaptCompactLayout();
+        }
+
+        private void AdaptCompactLayout()
+        {
+            if (_sidebarColumn == null) return;
+            double currentWidth = ActualWidth > 0 ? ActualWidth : Width;
+            double currentHeight = ActualHeight > 0 ? ActualHeight : Height;
+            bool narrow = currentWidth < 700;
+            bool shortWindow = currentHeight < 500;
+            _sidebarColumn.Width = new GridLength(narrow ? 170 : 220);
+            if (_contentHost != null)
+                _contentHost.Margin = narrow
+                    ? new Thickness(16, 8, 16, 10)
+                    : new Thickness(26, 10, 26, 14);
+            foreach (Button button in _navigationButtons.Values)
+            {
+                button.Height = shortWindow ? 40 : 48;
+                button.Margin = shortWindow
+                    ? new Thickness(0, 1, 0, 2)
+                    : new Thickness(0, 3, 0, 5);
+            }
+            if (_modelTestRow != null)
+            {
+                _modelTestRow.Orientation = narrow
+                    ? Orientation.Vertical : Orientation.Horizontal;
+                _testImageButton.Margin = narrow
+                    ? new Thickness(0, 8, 0, 0) : new Thickness(9, 0, 0, 0);
+                _modelTestStatus.Margin = narrow
+                    ? new Thickness(0, 8, 0, 0) : new Thickness(12, 0, 0, 0);
+            }
         }
 
         private void UpdateHeaderFromDraft() { }
@@ -1833,6 +1893,520 @@ namespace GlobalTranslator
             disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.5));
             template.Triggers.Add(disabled);
             button.Template = template;
+        }
+
+        private void InstallRoundedControlStyles()
+        {
+            Resources.Add(typeof(ComboBox), CreateComboBoxStyle());
+            Resources.Add(typeof(TextBox), CreateTextBoxStyle());
+            Resources.Add(typeof(PasswordBox), CreatePasswordBoxStyle());
+            Resources.Add(typeof(CheckBox), CreateCheckBoxStyle());
+            Resources.Add(typeof(ScrollBar), CreateScrollBarStyle());
+            Resources.Add(typeof(Thumb), CreateScrollThumbStyle());
+        }
+
+        private static Style CreateComboBoxStyle()
+        {
+            var style = new Style(typeof(ComboBox));
+            style.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowBrush : Surface));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ink));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.ActiveBorderBrush : BorderLine));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(11, 7, 38, 7)));
+            style.Setters.Add(new Setter(Control.MinHeightProperty, 40.0));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty,
+                HorizontalAlignment.Stretch));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty,
+                VerticalAlignment.Center));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                CreateComboBoxTemplate()));
+            style.Setters.Add(new Setter(ComboBox.ItemContainerStyleProperty,
+                CreateComboBoxItemStyle()));
+            return style;
+        }
+
+        private static ControlTemplate CreateComboBoxTemplate()
+        {
+            var template = new ControlTemplate(typeof(ComboBox));
+            var root = new FrameworkElementFactory(typeof(Grid));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "Chrome";
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            chrome.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+            chrome.SetBinding(Border.BackgroundProperty, TemplatedBinding("Background"));
+            chrome.SetBinding(Border.BorderBrushProperty, TemplatedBinding("BorderBrush"));
+            chrome.SetBinding(Border.BorderThicknessProperty, TemplatedBinding("BorderThickness"));
+
+            var selected = new FrameworkElementFactory(typeof(ContentPresenter));
+            selected.Name = "SelectionContent";
+            selected.SetBinding(ContentPresenter.ContentProperty,
+                TemplatedBinding("SelectionBoxItem"));
+            selected.SetValue(ContentPresenter.MarginProperty,
+                new Thickness(11, 0, 42, 0));
+            selected.SetValue(ContentPresenter.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            selected.SetValue(ContentPresenter.HorizontalAlignmentProperty,
+                HorizontalAlignment.Left);
+            selected.SetValue(UIElement.IsHitTestVisibleProperty, false);
+            chrome.AppendChild(selected);
+            root.AppendChild(chrome);
+
+            var toggle = new FrameworkElementFactory(typeof(ToggleButton));
+            toggle.Name = "DropDownToggle";
+            toggle.SetValue(FrameworkElement.WidthProperty, 32.0);
+            toggle.SetValue(FrameworkElement.HeightProperty, 30.0);
+            toggle.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 4, 0));
+            toggle.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+            toggle.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            toggle.SetValue(Control.BackgroundProperty, Brushes.Transparent);
+            toggle.SetValue(Control.BorderBrushProperty, Brushes.Transparent);
+            toggle.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+            toggle.SetValue(Control.FocusableProperty, false);
+            toggle.SetValue(ToggleButton.ClickModeProperty, ClickMode.Press);
+            toggle.SetValue(Control.TemplateProperty, CreateDropDownButtonTemplate());
+            toggle.SetBinding(ToggleButton.IsCheckedProperty,
+                new Binding("IsDropDownOpen")
+                {
+                    RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent),
+                    Mode = BindingMode.TwoWay
+                });
+            var arrow = new FrameworkElementFactory(typeof(ShapePath));
+            arrow.SetValue(ShapePath.DataProperty,
+                Geometry.Parse("M 1,1 L 5,5 L 9,1"));
+            arrow.SetValue(ShapePath.StrokeProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Subtle);
+            arrow.SetValue(ShapePath.StrokeThicknessProperty, 1.7);
+            arrow.SetValue(ShapePath.StrokeStartLineCapProperty, PenLineCap.Round);
+            arrow.SetValue(ShapePath.StrokeEndLineCapProperty, PenLineCap.Round);
+            arrow.SetValue(FrameworkElement.WidthProperty, 10.0);
+            arrow.SetValue(FrameworkElement.HeightProperty, 6.0);
+            arrow.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            arrow.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            toggle.AppendChild(arrow);
+            root.AppendChild(toggle);
+
+            var popup = new FrameworkElementFactory(typeof(Popup));
+            popup.Name = "PART_Popup";
+            popup.SetValue(Popup.AllowsTransparencyProperty, !SystemParameters.HighContrast);
+            popup.SetValue(Popup.FocusableProperty, false);
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+            popup.SetValue(Popup.VerticalOffsetProperty, 5.0);
+            popup.SetValue(Popup.PopupAnimationProperty,
+                SystemParameters.HighContrast ? PopupAnimation.None : PopupAnimation.Fade);
+            popup.SetValue(Popup.StaysOpenProperty, false);
+            popup.SetBinding(Popup.PlacementTargetProperty,
+                TemplatedSelfBinding());
+            popup.SetValue(Popup.IsOpenProperty,
+                new TemplateBindingExtension(ComboBox.IsDropDownOpenProperty));
+
+            var dropDown = new FrameworkElementFactory(typeof(Border));
+            dropDown.Name = "DropDownChrome";
+            dropDown.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            dropDown.SetValue(Border.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowBrush : Surface);
+            dropDown.SetValue(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.ActiveBorderBrush : BorderLine);
+            dropDown.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            dropDown.SetValue(Border.PaddingProperty, new Thickness(4));
+            dropDown.SetValue(FrameworkElement.MinWidthProperty, 180.0);
+            if (!SystemParameters.HighContrast)
+                dropDown.SetValue(Border.EffectProperty, new DropShadowEffect
+                {
+                    Color = Color.FromRgb(23, 50, 74),
+                    BlurRadius = 14,
+                    ShadowDepth = 3,
+                    Opacity = 0.13
+                });
+            dropDown.SetBinding(FrameworkElement.MinWidthProperty,
+                TemplatedBinding("ActualWidth"));
+            var listScroll = new FrameworkElementFactory(typeof(ScrollViewer));
+            listScroll.Name = "DropDownScrollViewer";
+            listScroll.SetValue(ScrollViewer.MaxHeightProperty, 280.0);
+            listScroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Auto);
+            listScroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty,
+                ScrollBarVisibility.Disabled);
+            listScroll.SetValue(ScrollViewer.CanContentScrollProperty, true);
+            listScroll.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));
+            dropDown.AppendChild(listScroll);
+            popup.AppendChild(dropDown);
+            root.AppendChild(popup);
+            template.VisualTree = root;
+
+            var hover = new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#B7D2DF"),
+                "Chrome"));
+            template.Triggers.Add(hover);
+            var focused = new Trigger
+            {
+                Property = UIElement.IsKeyboardFocusWithinProperty,
+                Value = true
+            };
+            focused.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent,
+                "Chrome"));
+            template.Triggers.Add(focused);
+            var disabled = new Trigger
+            {
+                Property = UIElement.IsEnabledProperty,
+                Value = false
+            };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.58));
+            template.Triggers.Add(disabled);
+            return template;
+        }
+
+        private static ControlTemplate CreateDropDownButtonTemplate()
+        {
+            var template = new ControlTemplate(typeof(ToggleButton));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "ToggleChrome";
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            chrome.SetBinding(Border.BackgroundProperty,
+                TemplatedBinding("Background"));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty,
+                HorizontalAlignment.Center);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty,
+                VerticalAlignment.Center);
+            presenter.SetBinding(ContentPresenter.ContentProperty,
+                TemplatedBinding("Content"));
+            chrome.AppendChild(presenter);
+            template.VisualTree = chrome;
+            var hover = new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#EDF6FA"),
+                "ToggleChrome"));
+            template.Triggers.Add(hover);
+            return template;
+        }
+
+        private static Style CreateComboBoxItemStyle()
+        {
+            var style = new Style(typeof(ComboBoxItem));
+            style.Setters.Add(new Setter(Control.PaddingProperty,
+                new Thickness(10, 7, 10, 7)));
+            style.Setters.Add(new Setter(Control.MarginProperty,
+                new Thickness(1, 1, 1, 1)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ink));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                CreateComboBoxItemTemplate()));
+            var hover = new Trigger
+            {
+                Property = ComboBoxItem.IsHighlightedProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#F0F8FB")));
+            hover.Setters.Add(new Setter(Control.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#F0F8FB")));
+            hover.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Ink));
+            style.Triggers.Add(hover);
+            var selected = new Trigger
+            {
+                Property = ComboBoxItem.IsSelectedProperty,
+                Value = true
+            };
+            selected.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#E6F4F9")));
+            selected.Setters.Add(new Setter(Control.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#D4EBF4")));
+            selected.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Ink));
+            style.Triggers.Add(selected);
+            return style;
+        }
+
+        private static ControlTemplate CreateComboBoxItemTemplate()
+        {
+            var template = new ControlTemplate(typeof(ComboBoxItem));
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "ItemChrome";
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(7));
+            border.SetBinding(Border.BackgroundProperty,
+                TemplatedBinding("Background"));
+            border.SetBinding(Border.BorderBrushProperty,
+                TemplatedBinding("BorderBrush"));
+            border.SetBinding(Border.BorderThicknessProperty,
+                TemplatedBinding("BorderThickness"));
+            var content = new FrameworkElementFactory(typeof(ContentPresenter));
+            content.SetBinding(ContentPresenter.ContentProperty,
+                TemplatedBinding("Content"));
+            content.SetBinding(ContentPresenter.ContentTemplateProperty,
+                TemplatedBinding("ContentTemplate"));
+            content.SetValue(ContentPresenter.MarginProperty,
+                new Thickness(1, 0, 1, 0));
+            content.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            border.AppendChild(content);
+            template.VisualTree = border;
+            return template;
+        }
+
+        private static Style CreateTextBoxStyle()
+        {
+            var style = new Style(typeof(TextBox));
+            style.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowBrush : Surface));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ink));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.ActiveBorderBrush : BorderLine));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 7, 10, 7)));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                CreateTextInputTemplate(typeof(TextBox))));
+            return style;
+        }
+
+        private static Style CreatePasswordBoxStyle()
+        {
+            var style = new Style(typeof(PasswordBox));
+            style.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowBrush : Surface));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ink));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.ActiveBorderBrush : BorderLine));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 7, 10, 7)));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                CreateTextInputTemplate(typeof(PasswordBox))));
+            return style;
+        }
+
+        private static ControlTemplate CreateTextInputTemplate(Type type)
+        {
+            var template = new ControlTemplate(type);
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "Chrome";
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            chrome.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+            chrome.SetBinding(Border.BackgroundProperty,
+                TemplatedBinding("Background"));
+            chrome.SetBinding(Border.BorderBrushProperty,
+                TemplatedBinding("BorderBrush"));
+            chrome.SetBinding(Border.BorderThicknessProperty,
+                TemplatedBinding("BorderThickness"));
+            var contentHost = new FrameworkElementFactory(typeof(ScrollViewer));
+            contentHost.Name = "PART_ContentHost";
+            contentHost.SetValue(FrameworkElement.MarginProperty, new Thickness(0));
+            contentHost.SetValue(Control.FocusableProperty, false);
+            chrome.AppendChild(contentHost);
+            template.VisualTree = chrome;
+            var hover = new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#B7D2DF"),
+                "Chrome"));
+            template.Triggers.Add(hover);
+            var focused = new Trigger
+            {
+                Property = UIElement.IsKeyboardFocusWithinProperty,
+                Value = true
+            };
+            focused.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent,
+                "Chrome"));
+            template.Triggers.Add(focused);
+            return template;
+        }
+
+        private static Style CreateCheckBoxStyle()
+        {
+            var style = new Style(typeof(CheckBox));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ink));
+            style.Setters.Add(new Setter(Control.FontSizeProperty, 13.0));
+            style.Setters.Add(new Setter(Control.TemplateProperty,
+                CreateCheckBoxTemplate()));
+            return style;
+        }
+
+        private static Style CreateScrollBarStyle()
+        {
+            var style = new Style(typeof(ScrollBar));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.ForegroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Brush("#A9C2CD")));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(Control.FocusableProperty, false));
+            var vertical = new Trigger
+            {
+                Property = ScrollBar.OrientationProperty,
+                Value = Orientation.Vertical
+            };
+            vertical.Setters.Add(new Setter(FrameworkElement.WidthProperty, 10.0));
+            style.Triggers.Add(vertical);
+            var horizontal = new Trigger
+            {
+                Property = ScrollBar.OrientationProperty,
+                Value = Orientation.Horizontal
+            };
+            horizontal.Setters.Add(new Setter(FrameworkElement.HeightProperty, 10.0));
+            style.Triggers.Add(horizontal);
+            return style;
+        }
+
+        private static Style CreateScrollThumbStyle()
+        {
+            var style = new Style(typeof(Thumb));
+            style.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#BFD3DC")));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            var template = new ControlTemplate(typeof(Thumb));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "ThumbChrome";
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            chrome.SetBinding(Border.BackgroundProperty, TemplatedBinding("Background"));
+            template.VisualTree = chrome;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            var hover = new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#8FB5C5")));
+            style.Triggers.Add(hover);
+            var dragging = new Trigger
+            {
+                Property = Thumb.IsDraggingProperty,
+                Value = true
+            };
+            dragging.Setters.Add(new Setter(Control.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent));
+            style.Triggers.Add(dragging);
+            return style;
+        }
+
+        private static ControlTemplate CreateCheckBoxTemplate()
+        {
+            var template = new ControlTemplate(typeof(CheckBox));
+            var root = new FrameworkElementFactory(typeof(DockPanel));
+            root.SetValue(UIElement.SnapsToDevicePixelsProperty, true);
+            root.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+
+            var box = new FrameworkElementFactory(typeof(Border));
+            box.Name = "CheckChrome";
+            box.SetValue(Border.WidthProperty, 18.0);
+            box.SetValue(Border.HeightProperty, 18.0);
+            box.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            box.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            box.SetValue(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.ActiveBorderBrush : BorderLine);
+            box.SetValue(Border.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.WindowBrush : Surface);
+            box.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            box.SetValue(DockPanel.DockProperty, Dock.Left);
+            var check = new FrameworkElementFactory(typeof(ShapePath));
+            check.Name = "CheckMark";
+            check.SetValue(ShapePath.DataProperty,
+                Geometry.Parse("M 3,9 L 7,13 L 15,4"));
+            check.SetValue(ShapePath.StrokeProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Brushes.White);
+            check.SetValue(ShapePath.StrokeThicknessProperty, 2.1);
+            check.SetValue(ShapePath.StrokeStartLineCapProperty, PenLineCap.Round);
+            check.SetValue(ShapePath.StrokeEndLineCapProperty, PenLineCap.Round);
+            check.SetValue(ShapePath.StrokeLineJoinProperty, PenLineJoin.Round);
+            check.SetValue(FrameworkElement.WidthProperty, 14.0);
+            check.SetValue(FrameworkElement.HeightProperty, 12.0);
+            check.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            box.AppendChild(check);
+            root.AppendChild(box);
+
+            var label = new FrameworkElementFactory(typeof(ContentPresenter));
+            label.Name = "ContentSite";
+            label.SetBinding(ContentPresenter.ContentProperty,
+                TemplatedBinding("Content"));
+            label.SetBinding(ContentPresenter.ContentTemplateProperty,
+                TemplatedBinding("ContentTemplate"));
+            label.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            label.SetValue(FrameworkElement.MarginProperty, new Thickness(9, 0, 0, 0));
+            label.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            label.SetValue(DockPanel.DockProperty, Dock.Left);
+            root.AppendChild(label);
+            template.VisualTree = root;
+
+            var hover = new Trigger
+            {
+                Property = UIElement.IsMouseOverProperty,
+                Value = true
+            };
+            hover.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#8FBCCF"),
+                "CheckChrome"));
+            template.Triggers.Add(hover);
+            var checkedState = new Trigger
+            {
+                Property = ToggleButton.IsCheckedProperty,
+                Value = true
+            };
+            checkedState.Setters.Add(new Setter(Border.BackgroundProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent,
+                "CheckChrome"));
+            checkedState.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent,
+                "CheckChrome"));
+            checkedState.Setters.Add(new Setter(UIElement.VisibilityProperty,
+                Visibility.Visible, "CheckMark"));
+            template.Triggers.Add(checkedState);
+            var focused = new Trigger
+            {
+                Property = UIElement.IsKeyboardFocusWithinProperty,
+                Value = true
+            };
+            focused.Setters.Add(new Setter(Border.BorderBrushProperty,
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Accent,
+                "CheckChrome"));
+            focused.Setters.Add(new Setter(Border.BorderThicknessProperty,
+                new Thickness(2), "CheckChrome"));
+            template.Triggers.Add(focused);
+            var disabled = new Trigger
+            {
+                Property = UIElement.IsEnabledProperty,
+                Value = false
+            };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.58));
+            template.Triggers.Add(disabled);
+            return template;
+        }
+
+        private static Binding TemplatedBinding(string path)
+        {
+            return new Binding(path)
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            };
+        }
+
+        private static Binding TemplatedSelfBinding()
+        {
+            return new Binding
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
+            };
         }
 
         private static SolidColorBrush Brush(string hex)

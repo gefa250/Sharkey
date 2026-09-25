@@ -6,6 +6,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 internal static class PopupInteractionProbe
 {
@@ -509,7 +510,21 @@ internal static class PopupInteractionProbe
                 Field(window, "_updateStatus") != null,
                 "Fixed footer, update controls, or cancel action is missing.");
             window.Show();
+            PumpDispatcher();
             window.UpdateLayout();
+            modelName.ApplyTemplate();
+            apiKey.ApplyTemplate();
+            Require(modelName.Template.FindName("Chrome", modelName) is Border &&
+                apiKey.Template.FindName("PART_ContentHost", apiKey) is ScrollViewer,
+                "Rounded text and password input templates were not applied.");
+            ScrollViewer modelContent = modelName.Template.FindName(
+                "PART_ContentHost", modelName) as ScrollViewer;
+            ScrollViewer keyContent = apiKey.Template.FindName(
+                "PART_ContentHost", apiKey) as ScrollViewer;
+            Require(modelContent != null && keyContent != null &&
+                modelContent.Margin == new Thickness(0) &&
+                keyContent.Margin == new Thickness(0),
+                "Rounded text input template applies padding twice and clips field contents.");
             SaveWindowPreview(window, "tmp/tests/settings-ai-100.png", 96);
             SaveWindowPreview(window, "tmp/tests/settings-ai-150.png", 144);
             SaveWindowPreview(window, "tmp/tests/settings-ai-200.png", 192);
@@ -535,6 +550,34 @@ internal static class PopupInteractionProbe
                     page.Visibility == Visibility.Visible) assistantVisible = true;
             }
             Require(assistantVisible, "Assistant page content did not become visible.");
+            PumpDispatcher();
+            ComboBox language = (ComboBox)Field(window, "_language");
+            language.ApplyTemplate();
+            Popup languagePopup = language.Template.FindName("PART_Popup", language) as Popup;
+            Require(languagePopup != null,
+                "Rounded language selector is missing its accessible popup part.");
+            Require(!languagePopup.StaysOpen,
+                "Rounded language selector must dismiss when focus moves outside it.");
+            ToggleButton dropDownToggle = language.Template.FindName(
+                "DropDownToggle", language) as ToggleButton;
+            Require(dropDownToggle != null,
+                "Rounded language selector arrow toggle is missing.");
+            dropDownToggle.IsChecked = true;
+            PumpDispatcher();
+            window.UpdateLayout();
+            Require(language.IsDropDownOpen && languagePopup.IsOpen &&
+                language.Template.FindName("DropDownChrome", language) is Border,
+                "Rounded language selector popup failed to open.");
+            SaveWindowPreview(window,
+                "tmp/tests/settings-assistant-dropdown-100.png", 96);
+            language.IsDropDownOpen = false;
+            PumpDispatcher();
+            window.UpdateLayout();
+            CheckBox ocrEnabled = (CheckBox)Field(window, "_ocrAiFallback");
+            ocrEnabled.ApplyTemplate();
+            Require(ocrEnabled.Template.FindName("CheckChrome", ocrEnabled) is Border &&
+                ocrEnabled.Template.FindName("CheckMark", ocrEnabled) is Path,
+                "Rounded checkbox template was not applied.");
             Rect assistantCancelBounds = cancel.TransformToAncestor(window)
                 .TransformBounds(new Rect(cancel.RenderSize));
             Button save = (Button)Field(window, "_saveButton");
@@ -546,12 +589,43 @@ internal static class PopupInteractionProbe
                 assistantCancelBounds.Height >= 38 && assistantSaveBounds.Height >= 38,
                 "Fixed settings actions disappeared or were clipped after navigating to assistant preferences.");
             SaveWindowPreview(window, "tmp/tests/settings-assistant-100.png", 96);
+            SaveWindowPreview(window, "tmp/tests/settings-assistant-150.png", 144);
+            SaveWindowPreview(window, "tmp/tests/settings-assistant-200.png", 192);
+            MethodInfo constrainWindow = type.GetMethod("ApplyWorkAreaBounds",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            constrainWindow.Invoke(window, new object[] { 640.0, 420.0 });
+            PumpDispatcher();
+            window.UpdateLayout();
+            Rect compactCancelBounds = cancel.TransformToAncestor(window)
+                .TransformBounds(new Rect(cancel.RenderSize));
+            Rect compactSaveBounds = save.TransformToAncestor(window)
+                .TransformBounds(new Rect(save.RenderSize));
+            StackPanel modelTestRow = (StackPanel)Field(window, "_modelTestRow");
+            Require(window.ActualWidth <= 641 && window.ActualHeight <= 421 &&
+                compactCancelBounds.Bottom <= window.ActualHeight + 1 &&
+                compactSaveBounds.Bottom <= window.ActualHeight + 1 &&
+                modelTestRow.Orientation == Orientation.Vertical,
+                "Settings controls or fixed actions were clipped at a compact work area.");
+            SaveWindowPreview(window, "tmp/tests/settings-assistant-compact.png", 96);
+            constrainWindow.Invoke(window, new object[] { 1920.0, 1080.0 });
+            PumpDispatcher();
+            window.UpdateLayout();
             Invoke(window, "ShowModelSettings");
             Require((string)Field(window, "_selectedPage") == "Model",
                 "Model settings shortcut did not navigate to AI model page.");
 
+            Invoke(window, "Navigate", "Shortcuts");
+            PumpDispatcher();
+            window.UpdateLayout();
             TextBox writing = (TextBox)Field(window, "_writingHotkey");
             Require(writing.Text == "F7", "Writing shortcut default was not loaded.");
+            writing.ApplyTemplate();
+            ScrollViewer hotkeyContent = writing.Template.FindName(
+                "PART_ContentHost", writing) as ScrollViewer;
+            Require(hotkeyContent != null && hotkeyContent.Margin == new Thickness(0) &&
+                writing.ActualHeight >= 36 && writing.FontSize >= 12,
+                "Hotkey text is inset or clipped by the rounded input template.");
+            SaveWindowPreview(window, "tmp/tests/settings-shortcuts-100.png", 96);
             MethodInfo validate = type.GetMethod("ValidateHotkeys",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             writing.Text = "Ctrl+Shift+J";
@@ -598,6 +672,14 @@ internal static class PopupInteractionProbe
         using (var output =
             System.IO.File.Create(path))
             encoder.Save(output);
+    }
+
+    private static void PumpDispatcher()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,
+            new Action(delegate { frame.Continue = false; }));
+        Dispatcher.PushFrame(frame);
     }
 
     private static object Field(object instance, string name)
