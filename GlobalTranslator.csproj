@@ -60,6 +60,7 @@
     <Compile Include="VersionInfo.cs" />
     <Compile Include="TextTools.cs" />
     <Compile Include="Communication.cs" />
+    <Compile Include="CommerceTools.cs" />
     <Compile Include="CommerceWindow.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="HotkeyGesture.cs" />

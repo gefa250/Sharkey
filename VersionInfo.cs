@@ -14,8 +14,8 @@ namespace GlobalTranslator
 {
     internal static class VersionInfo
     {
-        public const string SemanticVersion = "0.2.4";
-        public const string AssemblyVersion = "0.2.4.0";
-        public const string FileVersion = "0.2.4.0";
+        public const string SemanticVersion = "0.3.0-dev";
+        public const string AssemblyVersion = "0.3.0.0";
+        public const string FileVersion = "0.3.0.0";
     }
 }

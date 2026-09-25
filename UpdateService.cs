@@ -31,8 +31,9 @@ namespace GlobalTranslator
         internal const string ExeAssetName = "Sharkey-win-x64.exe";
         internal const string HashAssetName = "Sharkey-win-x64.exe.sha256";
 
-        private static readonly TimeSpan AutomaticCheckInterval =
-            TimeSpan.FromHours(24);
+        public int AutomaticCheckHours = 24;
+        private DateTime _lastAttemptUtc = DateTime.MinValue;
+        private DateTime _lastSuccessUtc = DateTime.MinValue;
         private static readonly string StatePath = Path.Combine(
             Environment.GetFolderPath(
                 Environment.SpecialFolder.LocalApplicationData),
@@ -85,6 +86,7 @@ namespace GlobalTranslator
             if (!force && !AutomaticCheckIsDue())
                 return null;
 
+            _lastAttemptUtc = DateTime.UtcNow;
             string json = await ReadStringAsync(
                 _latestReleaseUrl,
                 token);
@@ -92,6 +94,7 @@ namespace GlobalTranslator
                 json,
                 VersionInfo.SemanticVersion);
             RecordSuccessfulCheck();
+            _lastSuccessUtc = DateTime.UtcNow;
             return info;
         }
 
@@ -384,23 +387,33 @@ namespace GlobalTranslator
                    value is bool && (bool)value;
         }
 
-        private static bool AutomaticCheckIsDue()
+        internal static bool IsCheckDue(DateTime now, DateTime lastSuccess,
+            DateTime lastAttempt, int hours)
         {
+            hours = AppSettings.NormalizeUpdateCheckHours(hours);
+            if (hours == 0) return false;
+            if (lastAttempt <= now && now - lastAttempt < TimeSpan.FromMinutes(30))
+                return false;
+            return lastSuccess > now || now - lastSuccess >= TimeSpan.FromHours(hours);
+        }
+
+        private bool AutomaticCheckIsDue()
+        {
+            DateTime checkedUtc = _lastSuccessUtc;
             try
             {
-                DateTime checkedUtc;
-                if (!File.Exists(StatePath) ||
-                    !DateTime.TryParse(
+                DateTime savedUtc;
+                if (File.Exists(StatePath) && DateTime.TryParse(
                         File.ReadAllText(StatePath),
                         CultureInfo.InvariantCulture,
                         DateTimeStyles.AdjustToUniversal |
                         DateTimeStyles.AssumeUniversal,
-                        out checkedUtc))
-                    return true;
-                return DateTime.UtcNow - checkedUtc.ToUniversalTime() >=
-                       AutomaticCheckInterval;
+                        out savedUtc) && checkedUtc == DateTime.MinValue)
+                    checkedUtc = savedUtc.ToUniversalTime();
             }
-            catch { return true; }
+            catch { }
+            return IsCheckDue(DateTime.UtcNow, checkedUtc, _lastAttemptUtc,
+                AutomaticCheckHours);
         }
 
         private static void RecordSuccessfulCheck()

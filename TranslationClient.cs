@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.Serialization;
@@ -136,11 +137,13 @@ namespace GlobalTranslator
             if (settings != null && string.Equals(
                     settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
             {
+                ModelConnectionSettings active =
+                    settings.GetActiveAiConnection();
                 builder.Append('\u001f').Append(settings.ModelVendor ?? "");
-                builder.Append('\u001f').Append(settings.ModelName ?? "");
-                builder.Append('\u001f').Append(settings.ModelBaseUrl ?? "");
+                builder.Append('\u001f').Append(active.Model ?? "");
+                builder.Append('\u001f').Append(active.BaseUrl ?? "");
                 builder.Append('\u001f').Append(
-                    ModelApiProtocols.Normalize(settings.ModelProtocol));
+                    ModelApiProtocols.Normalize(active.Protocol));
             }
             else if (settings != null && string.Equals(
                          settings.Provider, "Microsoft", StringComparison.OrdinalIgnoreCase))
@@ -219,26 +222,12 @@ namespace GlobalTranslator
             Bitmap image, AppSettings settings, CancellationToken token)
         {
             if (image == null) throw new ArgumentNullException("image");
-            ModelConnectionSettings visionConnection = null;
-            string model = (settings.OcrVisionModel ?? "").Trim();
-            if (string.Equals(
-                model,
-                "deepseek-v4-flash-vision-exp",
-                StringComparison.OrdinalIgnoreCase))
-                visionConnection = settings.GetModelConnection("DeepSeek");
-            string baseUrl = (visionConnection == null
-                ? settings.ModelBaseUrl
-                : visionConnection.BaseUrl ?? "").Trim();
+            ModelConnectionSettings visionConnection =
+                settings.GetActiveAiConnection();
+            string model = visionConnection.Model.Trim();
+            string baseUrl = visionConnection.BaseUrl.Trim();
             string protocol = ModelApiProtocols.Normalize(
-                visionConnection == null
-                    ? settings.ModelProtocol
-                    : visionConnection.Protocol);
-            if (string.IsNullOrWhiteSpace(baseUrl))
-                throw new InvalidOperationException(
-                    "请先在“AI 大模型”设置中填写 API 地址。");
-            if (string.IsNullOrWhiteSpace(model))
-                throw new InvalidOperationException(
-                    "请先在 OCR 设置中填写视觉模型名称。");
+                visionConnection.Protocol);
 
             string fullUrl = ModelApiProtocols.BuildEndpoint(
                 baseUrl, protocol);
@@ -294,9 +283,7 @@ namespace GlobalTranslator
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
-                string apiKey = (visionConnection == null
-                    ? settings.ModelApiKey
-                    : visionConnection.ApiKey ?? "").Trim();
+                string apiKey = (visionConnection.ApiKey ?? "").Trim();
                 ApplyModelAuthentication(
                     request, apiKey, endpoint, protocol);
                 request.Content = new StringContent(
@@ -334,6 +321,122 @@ namespace GlobalTranslator
             CancellationToken token)
         {
             if (input == null) throw new ArgumentNullException("input");
+            var work = new CommunicationRequest
+            {
+                Background = input.Background,
+                Intent = input.Intent,
+                Adjustment = input.Adjustment,
+                Language = input.Language,
+                AdviceOnly = input.AdviceOnly,
+                Images = input.Images,
+                Turns = input.Turns,
+                ApproveSensitiveSearch = input.ApproveSensitiveSearch
+            };
+            var details = new List<string>();
+            var sources = new List<string>();
+            int calculations = 0;
+            int searches = 0;
+            using (var search = new CommerceSearch())
+            {
+                for (int round = 0; round < 8; round++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    CommunicationResult answer = await
+                        ComposeCommunicationOnceAsync(work, settings, token);
+                    if (answer.ToolRequests.Length == 0)
+                    {
+                        answer.CalculationDetails = string.Join("\n\n",
+                            details.Where(x => x.StartsWith("本地计算", StringComparison.Ordinal)));
+                        answer.Sources = string.Join("\n", sources.Distinct());
+                        return answer;
+                    }
+                    var results = new List<string>();
+                    foreach (CommerceToolRequest request in answer.ToolRequests)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        CommerceToolOutcome outcome;
+                        try
+                        {
+                            if (string.Equals(request.Tool, "calculate",
+                                StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (++calculations > 10)
+                                    throw new InvalidOperationException(
+                                        "本次计算已达上限，请继续下一轮沟通。");
+                                if (searches > 0 &&
+                                    !string.Equals(request.Operation,
+                                        "arithmetic",
+                                        StringComparison.OrdinalIgnoreCase))
+                                    throw new InvalidOperationException(
+                                        "搜索得到的报价参数、运价或汇率需要用户确认后才能计算。");
+                                outcome = CommerceCalculator.Execute(request);
+                            }
+                            else if (string.Equals(request.Tool, "search",
+                                StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (++searches > 3)
+                                    throw new InvalidOperationException(
+                                        "本次搜索已达上限，请继续下一轮沟通。");
+                                if (!settings.CommerceSearchEnabled)
+                                    throw new InvalidOperationException(
+                                        "联网搜索未启用，请提供数据或在设置中启用。");
+                                if (SensitiveCommerceSearch(request.Query) &&
+                                    (work.ApproveSensitiveSearch == null ||
+                                     !work.ApproveSensitiveSearch(request.Query)))
+                                    throw new InvalidOperationException(
+                                        "搜索词包含可能敏感的信息，未获得确认。");
+                                outcome = await search.SearchAsync(request.Query,
+                                    settings.CommerceSearchApiKey, token);
+                            }
+                            else throw new InvalidOperationException(
+                                "不支持的助手工具。");
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception error)
+                        {
+                            outcome = new CommerceToolOutcome
+                            {
+                                Title = "工具未完成",
+                                Detail = error.Message
+                            };
+                        }
+                        string entry = outcome.Title + "\n" + outcome.Detail;
+                        results.Add(entry);
+                        if (string.Equals(request.Tool, "calculate",
+                            StringComparison.OrdinalIgnoreCase))
+                            details.Add(entry);
+                        if (!string.IsNullOrWhiteSpace(outcome.Sources))
+                            sources.Add(outcome.Sources);
+                    }
+                    work.ToolResults = (work.ToolResults + "\n" +
+                        string.Join("\n\n", results)).Trim();
+                }
+            }
+            return new CommunicationResult
+            {
+                ToolLimitReached = true,
+                AdviceZh = "本次工具调用次数已达上限。可核对现有计算和来源，" +
+                    "再补充明确参数继续沟通。",
+                CalculationDetails = string.Join("\n\n",
+                    details.Where(x => x.StartsWith("本地计算",
+                        StringComparison.Ordinal))),
+                Sources = string.Join("\n", sources.Distinct())
+            };
+        }
+
+        private static bool SensitiveCommerceSearch(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return false;
+            return Regex.IsMatch(query,
+                @"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:\+?\d[\d\s-]{8,}\d)\b|订单号|客户姓名|\b(?:PO|order)[-\s#:]*\d{4,}",
+                RegexOptions.IgnoreCase);
+        }
+
+        private async Task<CommunicationResult> ComposeCommunicationOnceAsync(
+            CommunicationRequest input, AppSettings settings,
+            CancellationToken token)
+        {
+            if (input == null) throw new ArgumentNullException("input");
             if (settings == null) throw new ArgumentNullException("settings");
             token.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(input.Background) &&
@@ -342,36 +445,8 @@ namespace GlobalTranslator
                 throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
             if (input.Images != null && input.Images.Length > 5)
                 throw new InvalidOperationException("每次沟通最多添加 5 张图片。");
-            string selectedVendor = settings.ModelVendor;
             ModelConnectionSettings connection =
-                settings.GetModelConnection(selectedVendor);
-            if (string.Equals(settings.Provider, "ModelApi",
-                    StringComparison.OrdinalIgnoreCase))
-                connection = new ModelConnectionSettings
-                {
-                    BaseUrl = settings.ModelBaseUrl,
-                    ApiKey = settings.ModelApiKey,
-                    Model = settings.ModelName,
-                    Protocol = settings.ModelProtocol
-                };
-            else if (!connection.IsUsable(selectedVendor))
-            {
-                foreach (string vendor in new[]
-                    { "DeepSeek", "MiMo", "Qwen", "Custom" })
-                {
-                    ModelConnectionSettings candidate =
-                        settings.GetModelConnection(vendor);
-                    if (!candidate.IsUsable(vendor)) continue;
-                    connection = candidate;
-                    selectedVendor = vendor;
-                    break;
-                }
-            }
-            if (string.IsNullOrWhiteSpace(connection.BaseUrl) ||
-                string.IsNullOrWhiteSpace(connection.Model) ||
-                !connection.IsUsable(selectedVendor))
-                throw new InvalidOperationException(
-                    "请先在 AI 大模型设置中配置 API 地址、模型和 API Key。");
+                settings.GetActiveAiConnection();
             string protocol = ModelApiProtocols.Normalize(connection.Protocol);
             bool anthropic = ModelApiProtocols.IsAnthropic(protocol);
             string fullUrl = ModelApiProtocols.BuildEndpoint(
@@ -393,11 +468,13 @@ namespace GlobalTranslator
                 .Append("\",");
             if (anthropic)
                 body.Append("\"max_tokens\":4096,\"system\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.System))
+                    .Append(EscapeJson(CommunicationPrompt.System +
+                        CommunicationPrompt.Tools))
                     .Append("\",\"messages\":[{\"role\":\"user\",\"content\":");
             else
                 body.Append("\"messages\":[{\"role\":\"system\",\"content\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.System))
+                    .Append(EscapeJson(CommunicationPrompt.System +
+                        CommunicationPrompt.Tools))
                     .Append("\"},{\"role\":\"user\",\"content\":");
             AppendCommunicationContent(body, prompt, input.Images, anthropic);
             body.Append("}]");
@@ -487,15 +564,12 @@ namespace GlobalTranslator
             CancellationToken token,
             Action<string> progress, string requirements = null, bool rewrite = false)
         {
-            string baseUrl = (settings.ModelBaseUrl ?? "").Trim();
-            string model = (settings.ModelName ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(baseUrl))
-                throw new InvalidOperationException("请先在设置中填写模型 API 地址。");
-            if (string.IsNullOrWhiteSpace(model))
-                throw new InvalidOperationException("请先在设置中填写模型名称。");
-
+            ModelConnectionSettings connection =
+                settings.GetActiveAiConnection();
+            string baseUrl = connection.BaseUrl.Trim();
+            string model = connection.Model.Trim();
             string protocol = ModelApiProtocols.Normalize(
-                settings.ModelProtocol);
+                connection.Protocol);
             bool isAnthropic = ModelApiProtocols.IsAnthropic(protocol);
             Uri endpoint;
             string fullUrl = ModelApiProtocols.BuildEndpoint(
@@ -547,7 +621,7 @@ namespace GlobalTranslator
             }
 
             var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-            string apiKey = (settings.ModelApiKey ?? "").Trim();
+            string apiKey = (connection.ApiKey ?? "").Trim();
             ApplyModelAuthentication(
                 request, apiKey, endpoint, protocol);
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");

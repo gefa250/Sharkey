@@ -30,6 +30,8 @@ namespace GlobalTranslator
         private CancellationTokenSource _updateCancellation;
         private UpdateService _updateService;
         private UpdateWindow _updateWindow;
+        private System.Windows.Threading.DispatcherTimer _updateTimer;
+        private bool _exiting;
         private bool _updateCheckInProgress;
         private bool _screenshotSelecting;
         private WritingWindow _writingWindow;
@@ -45,6 +47,7 @@ namespace GlobalTranslator
                     ShowModelSettings);
                 _writingWindow.Closed += delegate { _writingWindow = null; };
             }
+            _writingWindow.RefreshModelSummary();
             if (_writingWindow.WindowState == WindowState.Minimized)
                 _writingWindow.WindowState = WindowState.Normal;
             _writingWindow.Show();
@@ -147,6 +150,10 @@ namespace GlobalTranslator
                 RefreshDismissHotkey();
                 UpdateTrayLabels();
                 RefreshStartupMenu();
+                if (_writingWindow != null)
+                    _writingWindow.RefreshModelSummary();
+                if (_updateService != null)
+                    _updateService.AutomaticCheckHours = _settings.UpdateCheckHours;
             };
             _settingsWindow.UpdateCheckRequested += async delegate
             {
@@ -189,6 +196,12 @@ namespace GlobalTranslator
                 _settingsWindow.Show();
             }
             BeginAutomaticUpdateCheck();
+            _updateTimer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromMinutes(1)
+            };
+            _updateTimer.Tick += async delegate { await CheckForUpdatesAsync(false); };
+            _updateTimer.Start();
         }
 
         private async void BeginAutomaticUpdateCheck()
@@ -206,7 +219,8 @@ namespace GlobalTranslator
 
         private async Task CheckForUpdatesAsync(bool manual)
         {
-            if (_updateCheckInProgress) return;
+            if (_exiting || _updateCheckInProgress) return;
+            if (!manual && _settings.UpdateCheckHours == 0) return;
             if (_updateService == null || !_updateService.IsConfigured)
             {
                 if (manual && _settingsWindow != null)
@@ -217,6 +231,7 @@ namespace GlobalTranslator
             }
 
             _updateCheckInProgress = true;
+            _updateService.AutomaticCheckHours = _settings.UpdateCheckHours;
             if (manual && _settingsWindow != null)
                 _settingsWindow.SetUpdateStatus(
                     "正在检查更新…",
@@ -288,13 +303,9 @@ namespace GlobalTranslator
         {
             if (_settings.Provider == "GoogleFree" || _settings.Provider == "MicrosoftFree") return true;
             if (_settings.Provider == "ModelApi")
-                return new ModelConnectionSettings
-                {
-                    BaseUrl = _settings.ModelBaseUrl,
-                    Model = _settings.ModelName,
-                    ApiKey = _settings.ModelApiKey,
-                    Protocol = _settings.ModelProtocol
-                }.IsUsable(_settings.ModelVendor);
+                return _settings.GetModelConnection(
+                    _settings.ModelVendor).IsUsable(
+                        _settings.ModelVendor);
             return _settings.Provider == "Google"
                 ? !string.IsNullOrWhiteSpace(_settings.GoogleApiKey)
                 : !string.IsNullOrWhiteSpace(_settings.MicrosoftApiKey);
@@ -482,7 +493,7 @@ namespace GlobalTranslator
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_startupMenuItem);
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("退出鲨译", null, delegate { Shutdown(); });
+            menu.Items.Add("退出鲨译", null, delegate { ExitApplication(); });
             _tray.ContextMenuStrip = menu;
             _tray.DoubleClick += delegate { ShowSettings(); };
             UpdateTrayLabels();
@@ -597,12 +608,15 @@ namespace GlobalTranslator
                     throw new InvalidOperationException(
                         "请在 OCR 设置中启用 AI 视觉识别。");
 
+                EnsureOcrConsent();
+
                 string aiText = await _client.RecognizeImageAsync(
                     image, _settings, activeCancellation.Token);
                 var result = new OcrRecognitionResult
                 {
                     Text = aiText,
-                    Engine = "AI 视觉 · " + _settings.OcrVisionModel,
+                    Engine = "AI · " + _settings.ModelVendor + " · " +
+                        _settings.GetActiveAiConnection().Model,
                 };
 
                 if (requestId != _ocrRequestId) return;
@@ -704,6 +718,26 @@ namespace GlobalTranslator
             ShowSettings();
         }
 
+        private void EnsureOcrConsent()
+        {
+            string target = _settings.GetOcrConsentTarget();
+            if (_settings.OcrAiConsentGranted &&
+                string.Equals(_settings.OcrConsentTarget, target,
+                    StringComparison.Ordinal))
+                return;
+            MessageBoxResult consent = System.Windows.MessageBox.Show(
+                "截图将发送到 " + _settings.ModelVendor +
+                " 的 AI 服务进行识别。截图可能包含私人信息。\n\n" +
+                "允许上传本次和以后发往该服务的截图吗？",
+                "确认截图上传", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (consent != MessageBoxResult.Yes)
+                throw new OperationCanceledException();
+            _settings.OcrAiConsentGranted = true;
+            _settings.OcrConsentTarget = target;
+            _settings.Save();
+        }
+
         private void ShowModelSettings()
         {
             _settingsWindow.ShowModelSettings();
@@ -738,8 +772,17 @@ namespace GlobalTranslator
         [DllImport("user32.dll")]
         private static extern bool DestroyIcon(IntPtr handle);
 
+        internal void ExitApplication()
+        {
+            if (_writingWindow != null)
+                _writingWindow.CloseForExit();
+            Shutdown();
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
+            _exiting = true;
+            if (_updateTimer != null) _updateTimer.Stop();
             if (_tray != null) { _tray.Visible = false; _tray.Dispose(); }
             if (_popup != null) _popup.Close();
             if (_messageWindow != null)

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net;
@@ -22,6 +23,9 @@ internal static class FeatureProbe
             TestSmartTargetResolver(app);
             TestTextToolsAndWriting(app);
             TestCommunicationApi(app);
+            TestCommerceTools(app);
+            TestCommerceToolRoundTrip(app);
+            TestCommerceSearch(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
             TestModelStreamReliability(app);
@@ -68,9 +72,9 @@ internal static class FeatureProbe
         settingsType.GetField("Provider").SetValue(settings, "ModelApi");
         settingsType.GetField("TargetLanguageMode").SetValue(settings, "Fixed");
         settingsType.GetField("TargetLanguage").SetValue(settings, "en");
-        settingsType.GetField("ModelName").SetValue(settings, "probe-model");
+        settingsType.GetField("CustomModelName").SetValue(settings, "probe-model");
         var listener = new HttpListener(); listener.Prefixes.Add("http://127.0.0.1:18939/"); listener.Start();
-        settingsType.GetField("ModelBaseUrl").SetValue(settings, "http://127.0.0.1:18939/v1");
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings, "http://127.0.0.1:18939/v1");
         Exception serverError = null;
         var server = Task.Run(delegate
         {
@@ -234,6 +238,13 @@ internal static class FeatureProbe
             inputType.GetField("Adjustment").SetValue(input, "");
             inputType.GetField("Turns").SetValue(input,
                 Array.CreateInstance(turnType, 0));
+            try
+            {
+                CommunicationResultFor(clientType, client, input, settings);
+                throw new Exception("An invalid current AI model was silently replaced.");
+            }
+            catch (InvalidOperationException) { }
+            settingsType.GetField("ModelVendor").SetValue(settings, "DeepSeek");
             CommunicationResultFor(clientType, client, input, settings);
             if (!server.Wait(10000) || serverError != null)
                 throw serverError ?? new Exception("Communication server timed out.");
@@ -283,6 +294,7 @@ internal static class FeatureProbe
         });
         settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
             "http://127.0.0.1:18945/anthropic");
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
         settingsType.GetField("CustomModelApiKey").SetValue(settings,
             "probe-secret");
         settingsType.GetField("CustomModelProtocol").SetValue(settings,
@@ -303,6 +315,225 @@ internal static class FeatureProbe
             Console.WriteLine("COMMUNICATION openai/anthropic/images/advice/adjustment=True");
         }
         finally { anthropic.Close(); ((IDisposable)client).Dispose(); }
+    }
+
+    private static void TestCommerceTools(Assembly app)
+    {
+        Type requestType = app.GetType(
+            "GlobalTranslator.CommerceToolRequest", true);
+        Type calculator = app.GetType(
+            "GlobalTranslator.CommerceCalculator", true);
+        object request = Activator.CreateInstance(requestType, true);
+        requestType.GetField("Operation").SetValue(request, "quote");
+        requestType.GetField("Inputs").SetValue(request,
+            new Dictionary<string, string>
+            {
+                { "quantity", "100" }, { "unit_price", "12.5" },
+                { "discount_percent", "10" }, { "fee", "25" }
+            });
+        MethodInfo execute = calculator.GetMethod("Execute",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        object quote = execute.Invoke(null, new[] { request });
+        string detail = (string)quote.GetType().GetField("Detail")
+            .GetValue(quote);
+        if (!detail.Contains("1,150.00"))
+            throw new Exception("Quote calculation lost its exact amount.");
+        requestType.GetField("Operation").SetValue(request, "margin");
+        requestType.GetField("Inputs").SetValue(request,
+            new Dictionary<string, string>
+            {
+                { "revenue", "125" }, { "cost", "100" }
+            });
+        object margin = execute.Invoke(null, new[] { request });
+        detail = (string)margin.GetType().GetField("Detail")
+            .GetValue(margin);
+        if (!detail.Contains("20.00%"))
+            throw new Exception("Margin calculation is incorrect.");
+        requestType.GetField("Operation").SetValue(request, "boxes");
+        requestType.GetField("Inputs").SetValue(request,
+            new Dictionary<string, string>
+            {
+                { "quantity", "101" }, { "units_per_box", "20" }
+            });
+        object boxes = execute.Invoke(null, new[] { request });
+        detail = (string)boxes.GetType().GetField("Detail")
+            .GetValue(boxes);
+        if (!detail.Contains("6 箱") || !detail.Contains("尾箱 1 件"))
+            throw new Exception("Box count or remainder is incorrect.");
+        requestType.GetField("Operation").SetValue(request, "convert");
+        requestType.GetField("Inputs").SetValue(request,
+            new Dictionary<string, string>
+            {
+                { "value", "100" }, { "from_unit", "cm" },
+                { "to_unit", "m" }
+            });
+        object converted = execute.Invoke(null, new[] { request });
+        detail = (string)converted.GetType().GetField("Detail")
+            .GetValue(converted);
+        if (!detail.Contains("1.0000 m"))
+            throw new Exception("Unit conversion is incorrect.");
+        requestType.GetField("Operation").SetValue(request, "freight");
+        requestType.GetField("Inputs").SetValue(request,
+            new Dictionary<string, string>
+            {
+                { "actual_kg", "5" }, { "length_cm", "30" },
+                { "width_cm", "40" }, { "height_cm", "50" },
+                { "box_count", "2" }, { "divisor", "6000" },
+                { "rate_per_kg", "2" },
+                { "rounding_increment_kg", "0.5" }, { "fee", "3" }
+            });
+        object freight = execute.Invoke(null, new[] { request });
+        detail = (string)freight.GetType().GetField("Detail")
+            .GetValue(freight);
+        if (!detail.Contains("20.00 kg") ||
+            !detail.Contains("43.00"))
+            throw new Exception("Freight weight or fee is incorrect.");
+        requestType.GetField("Operation").SetValue(request, "fx");
+        AssertInvocationFailure(delegate { execute.Invoke(null,
+            new[] { request }); }, typeof(InvalidOperationException),
+            "缺少有效参数");
+        Type resultType = app.GetType(
+            "GlobalTranslator.CommunicationResult", true);
+        object parsed = resultType.GetMethod("Parse").Invoke(null,
+            new object[]
+            {
+                "{\"tool_requests\":[{\"tool\":\"calculate\"," +
+                "\"operation\":\"quote\",\"inputs\":{\"quantity\":100}}]}",
+                false
+            });
+        Array requests = (Array)resultType.GetField("ToolRequests")
+            .GetValue(parsed);
+        if (requests.Length != 1)
+            throw new Exception("Assistant tool request was not parsed.");
+        Console.WriteLine("COMMERCE_TOOLS decimal/validation/structured=True");
+    }
+
+    private static void TestCommerceToolRoundTrip(Assembly app)
+    {
+        var listener = new HttpListener();
+        listener.Prefixes.Add("http://127.0.0.1:18948/");
+        listener.Start();
+        Exception serverError = null;
+        var serializer = new JavaScriptSerializer();
+        var server = Task.Run(delegate
+        {
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    HttpListenerContext context = listener.GetContext();
+                    string body;
+                    using (var reader = new StreamReader(
+                        context.Request.InputStream))
+                        body = reader.ReadToEnd();
+                    if (i == 1 && !body.Contains("1,150.00"))
+                        throw new Exception("Verified local calculation was not supplied to the model.");
+                    if (i == 2 && !body.Contains("联网搜索未启用"))
+                        throw new Exception("Disabled search did not stay offline.");
+                    string answer = i == 0
+                        ? "{\"tool_requests\":[{\"tool\":\"calculate\"," +
+                          "\"operation\":\"quote\",\"inputs\":{\"quantity\":100," +
+                          "\"unit_price\":12.5,\"discount_percent\":10,\"fee\":25}}]}"
+                        : i == 1
+                        ? "{\"tool_requests\":[{\"tool\":\"search\"," +
+                          "\"query\":\"current tariff\"}]}"
+                        : "{\"reply\":\"Total is 1150.\",\"meaning_zh\":\"合计1150。\"," +
+                          "\"advice_zh\":\"请核对币种和报价条款。\"}";
+                    byte[] response = Encoding.UTF8.GetBytes(
+                        serializer.Serialize(new
+                        {
+                            choices = new[] { new
+                            {
+                                message = new { content = answer },
+                                finish_reason = "stop"
+                            } }
+                        }));
+                    context.Response.ContentType = "application/json";
+                    context.Response.OutputStream.Write(response, 0,
+                        response.Length);
+                    context.Response.Close();
+                }
+            }
+            catch (Exception error) { serverError = error; }
+        });
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        Type inputType = app.GetType("GlobalTranslator.CommunicationRequest", true);
+        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
+        object settings = Activator.CreateInstance(settingsType, true);
+        object input = Activator.CreateInstance(inputType, true);
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
+            "http://127.0.0.1:18948/v1");
+        settingsType.GetField("CustomModelApiKey").SetValue(settings,
+            "probe-secret");
+        settingsType.GetField("CustomModelName").SetValue(settings,
+            "probe-chat");
+        inputType.GetField("Intent").SetValue(input, "计算报价");
+        object client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            object answer = CommunicationResultFor(clientType, client,
+                input, settings);
+            string calculations = (string)answer.GetType()
+                .GetField("CalculationDetails").GetValue(answer);
+            if (!calculations.Contains("1,150.00"))
+                throw new Exception("Local calculation was not returned to the workbench.");
+            if (!server.Wait(10000) || serverError != null)
+                throw serverError ?? new Exception("Tool round trip timed out.");
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); }
+        Console.WriteLine("COMMERCE_ROUNDTRIP calculate/offline/model=True");
+    }
+
+    private sealed class SearchProbeHandler : HttpMessageHandler
+    {
+        internal string Body;
+        internal string Authorization;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Body = request.Content.ReadAsStringAsync().GetAwaiter()
+                .GetResult();
+            Authorization = request.Headers.Authorization.ToString();
+            return Task.FromResult(new HttpResponseMessage(
+                System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"results\":[{\"title\":\"Reference\"," +
+                    "\"url\":\"https://example.test/source\"," +
+                    "\"content\":\"Published tariff data\"}]}"
+                )
+            });
+        }
+    }
+
+    private static void TestCommerceSearch(Assembly app)
+    {
+        Type searchType = app.GetType("GlobalTranslator.CommerceSearch", true);
+        var handler = new SearchProbeHandler();
+        object search = Activator.CreateInstance(searchType,
+            BindingFlags.Instance | BindingFlags.NonPublic |
+            BindingFlags.Public, null, new object[] { handler }, null);
+        try
+        {
+            MethodInfo method = searchType.GetMethod("SearchAsync",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var task = (Task)method.Invoke(search,
+                new object[] { "current tariff", "probe-search-key",
+                    CancellationToken.None });
+            task.GetAwaiter().GetResult();
+            object outcome = task.GetType().GetProperty("Result")
+                .GetValue(task);
+            string sources = (string)outcome.GetType().GetField("Sources")
+                .GetValue(outcome);
+            if (handler.Authorization != "Bearer probe-search-key" ||
+                !handler.Body.Contains("\"search_depth\":\"basic\"") ||
+                !handler.Body.Contains("\"max_results\":5") ||
+                !sources.Contains("https://example.test/source"))
+                throw new Exception("Search request or source display is incorrect.");
+        }
+        finally { ((IDisposable)search).Dispose(); }
+        Console.WriteLine("COMMERCE_SEARCH bearer/basic/sources=True");
     }
 
     private static object CommunicationResultFor(Type clientType, object client,
@@ -513,9 +744,9 @@ internal static class FeatureProbe
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
             settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
-            settingsType.GetField("ModelBaseUrl").SetValue(settings, prefix + "v1");
-            settingsType.GetField("ModelApiKey").SetValue(settings, "probe-secret");
-            settingsType.GetField("ModelName").SetValue(settings, "probe-model");
+            settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
+            settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
+            settingsType.GetField("CustomModelName").SetValue(settings, "probe-model");
 
             Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
             object client = Activator.CreateInstance(clientType, true);
@@ -624,12 +855,12 @@ internal static class FeatureProbe
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
             settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
-            settingsType.GetField("ModelProtocol").SetValue(settings, "Anthropic");
-            settingsType.GetField("ModelBaseUrl").SetValue(
+            settingsType.GetField("CustomModelProtocol").SetValue(settings, "Anthropic");
+            settingsType.GetField("CustomModelBaseUrl").SetValue(
                 settings, prefix + "anthropic");
-            settingsType.GetField("ModelApiKey").SetValue(
+            settingsType.GetField("CustomModelApiKey").SetValue(
                 settings, "anthropic-probe-secret");
-            settingsType.GetField("ModelName").SetValue(
+            settingsType.GetField("CustomModelName").SetValue(
                 settings, "anthropic-probe");
 
             Type clientType = app.GetType(
@@ -965,10 +1196,10 @@ internal static class FeatureProbe
                 "GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
-            settingsType.GetField("ModelProtocol").SetValue(settings, "OpenAI");
-            settingsType.GetField("ModelBaseUrl").SetValue(settings, prefix + "v1");
-            settingsType.GetField("ModelApiKey").SetValue(settings, "probe-secret");
-            settingsType.GetField("ModelName").SetValue(settings, "deepseek-cache-probe");
+            settingsType.GetField("CustomModelProtocol").SetValue(settings, "OpenAI");
+            settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
+            settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
+            settingsType.GetField("CustomModelName").SetValue(settings, "deepseek-cache-probe");
 
             Type clientType = app.GetType(
                 "GlobalTranslator.TranslationClient", true);
@@ -1018,6 +1249,22 @@ internal static class FeatureProbe
     {
         Type serviceType = app.GetType(
             "GlobalTranslator.UpdateService", true);
+        MethodInfo due = serviceType.GetMethod("IsCheckDue",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        DateTime now = new DateTime(2026, 9, 25, 8, 0, 0,
+            DateTimeKind.Utc);
+        Func<DateTime, DateTime, int, bool> isDue =
+            (success, attempt, hours) => (bool)due.Invoke(null,
+                new object[] { now, success, attempt, hours });
+        if (isDue(now.AddHours(-23), DateTime.MinValue, 24) ||
+            !isDue(now.AddHours(-24), DateTime.MinValue, 24) ||
+            !isDue(now.AddHours(-6), DateTime.MinValue, 6) ||
+            isDue(now.AddDays(-8), now.AddMinutes(-10), 24) ||
+            !isDue(now.AddDays(-8), now.AddMinutes(-30), 24) ||
+            isDue(DateTime.MinValue, DateTime.MinValue, 0) ||
+            !isDue(DateTime.MinValue, DateTime.MinValue, 24))
+            throw new InvalidOperationException(
+                "Automatic update interval or retry backoff is incorrect.");
         MethodInfo parse = serviceType.GetMethod(
             "ParseLatestReleaseJson",
             BindingFlags.Static | BindingFlags.NonPublic);
@@ -1401,9 +1648,9 @@ internal static class FeatureProbe
         {
             Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
-            settingsType.GetField("ModelBaseUrl").SetValue(settings, prefix + "v1");
-            settingsType.GetField("ModelApiKey").SetValue(settings, "vision-secret");
-            settingsType.GetField("OcrVisionModel").SetValue(settings, "probe-vision");
+            settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
+            settingsType.GetField("CustomModelApiKey").SetValue(settings, "vision-secret");
+            settingsType.GetField("CustomModelName").SetValue(settings, "probe-vision");
             Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
             object client = Activator.CreateInstance(clientType, true);
             try
@@ -1493,12 +1740,14 @@ internal static class FeatureProbe
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
             settingsType.GetField("ModelProtocol").SetValue(settings, "Anthropic");
-            settingsType.GetField("ModelBaseUrl").SetValue(
+            settingsType.GetField("CustomModelBaseUrl").SetValue(
                 settings, prefix + "anthropic");
-            settingsType.GetField("ModelApiKey").SetValue(
+            settingsType.GetField("CustomModelApiKey").SetValue(
                 settings, "anthropic-vision-secret");
-            settingsType.GetField("OcrVisionModel").SetValue(
+            settingsType.GetField("CustomModelName").SetValue(
                 settings, "anthropic-vision");
+            settingsType.GetField("CustomModelProtocol").SetValue(
+                settings, "Anthropic");
 
             Type clientType = app.GetType(
                 "GlobalTranslator.TranslationClient", true);

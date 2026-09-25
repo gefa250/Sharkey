@@ -59,7 +59,15 @@ internal static class PopupInteractionProbe
             writing.Show(); writing.UpdateLayout();
             SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
             writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
-            Require(writingSource.ActualHeight > 35 && writingResult.ActualHeight > 35, "Communication input or result collapsed at minimum size.");
+            Require(writingSource.ActualHeight > 35,
+                "Communication input collapsed at minimum size.");
+            writingType.GetField("_showingReply", BindingFlags.Instance |
+                BindingFlags.NonPublic).SetValue(writing, true);
+            writingType.GetMethod("UpdateWorkbenchLayout", BindingFlags.Instance |
+                BindingFlags.NonPublic).Invoke(writing, null);
+            writing.UpdateLayout();
+            Require(writingResult.ActualHeight > 35,
+                "Communication result collapsed in narrow layout.");
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-small.png", 96);
             writingSource.Text = "请确认数量";
             Require(writingResult.Text.Length > 0 && writingCopy.IsEnabled, "Changing input erased a successful reply.");
@@ -237,7 +245,7 @@ internal static class PopupInteractionProbe
             TabControl tabs = (TabControl)settingsWindowType
                 .GetField("_tabs", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            Require(tabs.Items.Count == 4,
+            Require(tabs.Items.Count == 5,
                 "Translation, OCR, shortcut or general settings tab is missing.");
             Require(tabs.TabStripPlacement == Dock.Left,
                 "Settings navigation is not placed on the left.");
@@ -320,12 +328,8 @@ internal static class PopupInteractionProbe
                 "Explicit set-current action did not update the pending provider.");
             settingsWindowType.GetMethod("ShowModelSettings")
                 .Invoke(settingsWindow, null);
-            Require(tabs.SelectedIndex == 0,
-                "Model settings shortcut did not select the translation tab.");
-            Require(
-                (string)activeConfigField.GetValue(settingsWindow) ==
-                    "Model",
-                "Model settings shortcut did not open the AI configuration section.");
+            Require(tabs.SelectedIndex == 1,
+                "Model settings shortcut did not select the AI model tab.");
             Require(
                 (string)pendingProviderField.GetValue(settingsWindow) ==
                     "Google",
@@ -336,8 +340,11 @@ internal static class PopupInteractionProbe
                     "_providerBrowseButtons",
                     BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            Require(browseButtons.Count == 4,
-                "AI model category does not expose four provider choices.");
+            ComboBox aiVendors = (ComboBox)settingsWindowType
+                .GetField("_modelVendor", BindingFlags.Instance |
+                    BindingFlags.NonPublic).GetValue(settingsWindow);
+            Require(aiVendors.Items.Count == 4,
+                "AI model tab does not expose four provider choices.");
             TextBlock headerEngine = (TextBlock)
                 settingsWindowType.GetField(
                     "_headerCurrentEngine",
@@ -458,14 +465,14 @@ internal static class PopupInteractionProbe
             CheckBox aiOcr = (CheckBox)settingsWindowType
                 .GetField("_ocrAiFallback", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
-            TextBox visionModel = (TextBox)settingsWindowType
-                .GetField("_ocrVisionModel", BindingFlags.Instance | BindingFlags.NonPublic)
+            TextBlock visionModel = (TextBlock)settingsWindowType
+                .GetField("_ocrModelSummary", BindingFlags.Instance | BindingFlags.NonPublic)
                 .GetValue(settingsWindow);
             Require(aiOcr != null && aiOcr.IsChecked == true,
-                "DeepSeek Vision is not enabled by default.");
+                "AI screenshot recognition is not enabled by default.");
             Require(visionModel != null &&
-                    visionModel.Text == "deepseek-v4-flash-vision-exp",
-                "Default DeepSeek Vision model is missing.");
+                    visionModel.Text.Contains("当前 AI"),
+                "Current AI model summary is missing.");
             Button copyDiagnostics = (Button)settingsWindowType
                 .GetField(
                     "_copyDiagnostics",
@@ -493,7 +500,10 @@ internal static class PopupInteractionProbe
                     openDiagnosticFolder.Content as string,
                     "打开日志目录") &&
                 supportSummary.IndexOf(
-                    "0.2.4", StringComparison.Ordinal) >= 0 &&
+                    (string)app.GetType("GlobalTranslator.VersionInfo", true)
+                        .GetField("SemanticVersion", BindingFlags.Static |
+                            BindingFlags.Public | BindingFlags.NonPublic)
+                        .GetRawConstantValue(), StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
                     "CLR:", StringComparison.Ordinal) >= 0 &&
                 supportSummary.IndexOf(
@@ -534,11 +544,12 @@ internal static class PopupInteractionProbe
             string savedModelBaseUrl = modelBaseUrl.Text;
             modelBaseUrl.Text = "unsaved-probe-value";
             settingsWindow.Show();
-            Invoke(settingsWindow, "SelectConfigSection", "Model");
-            Invoke(settingsWindow, "BrowseProvider", "ModelApi:DeepSeek");
+            tabs.SelectedIndex = 1;
             settingsWindow.Height = 480;
             settingsWindow.UpdateLayout();
-            var settingsScroll = (ScrollViewer)translationTab.Content;
+            SaveWindowPreview(settingsWindow,
+                "tmp/tests/model-settings-preview.png", 96);
+            var settingsScroll = (ScrollViewer)((TabItem)tabs.Items[1]).Content;
             Require(settingsScroll.ScrollableHeight > 0,
                 "Short settings window does not expose overflowing model fields through scrolling.");
             settingsScroll.ScrollToBottom();
@@ -566,6 +577,8 @@ internal static class PopupInteractionProbe
             Require(revealedKey.Visibility == Visibility.Collapsed &&
                 (string)revealKey.ToolTip == "显示完整 API Key",
                 "API Key reveal button did not restore password masking.");
+            keyInput.BringIntoView();
+            settingsWindow.UpdateLayout();
             Rect keyBounds = keyInput.TransformToAncestor(settingsScroll)
                 .TransformBounds(new Rect(keyInput.RenderSize));
             Require(keyBounds.Top >= 0 && keyBounds.Bottom <= settingsScroll.ActualHeight + 1,
@@ -755,6 +768,7 @@ internal static class PopupInteractionProbe
             catch { message = "(message unavailable)"; }
             Console.Error.WriteLine(
                 "FAILED: " + ex.GetType().FullName + ": " + message);
+            Console.Error.WriteLine(ex.StackTrace);
             return 1;
         }
         finally

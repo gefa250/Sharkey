@@ -102,6 +102,8 @@ namespace GlobalTranslator
         public string TargetLanguageMode = "Smart";
         public string TargetLanguage = "zh-Hans";
         public string CommunicationLanguage = "auto";
+        public bool CommerceSearchEnabled = false;
+        public string CommerceSearchApiKey = "";
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
         public string MicrosoftRegion = "";
@@ -128,8 +130,10 @@ namespace GlobalTranslator
         public string QwenModelName = "qwen-plus";
         public string QwenModelProtocol = ModelApiProtocols.OpenAI;
         public bool OcrAiFallback = true;
+        // Read legacy configurations only; recognition uses ModelVendor now.
         public string OcrVisionModel = "deepseek-v4-flash-vision-exp";
         public bool OcrAiConsentGranted = false;
+        public string OcrConsentTarget = "";
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
         public string WritingHotkey = "F7";
@@ -138,6 +142,13 @@ namespace GlobalTranslator
         public bool StartWithWindows = StartupManager.IsEnabled();
         public string PopupFontSize = "Standard";
         public string OcrLayoutMode = OcrLayoutModes.Auto;
+        public int UpdateCheckHours = 24;
+
+        internal static int NormalizeUpdateCheckHours(int hours)
+        {
+            return hours == 0 || hours == 6 || hours == 12 || hours == 24 ||
+                hours == 72 || hours == 168 ? hours : 24;
+        }
 
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("GlobalTranslator.Settings.v1");
         private static readonly string Folder = Path.Combine(
@@ -171,9 +182,16 @@ namespace GlobalTranslator
                     switch (name)
                     {
                         case "Provider": settings.Provider = value; break;
+                        case "UpdateCheckHours":
+                            int hours;
+                            settings.UpdateCheckHours = int.TryParse(value, out hours)
+                                ? NormalizeUpdateCheckHours(hours) : 24;
+                            break;
                         case "TargetLanguageMode": settings.TargetLanguageMode = value; break;
                         case "TargetLanguage": settings.TargetLanguage = value; break;
                         case "CommunicationLanguage": settings.CommunicationLanguage = value; break;
+                        case "CommerceSearchEnabled": settings.CommerceSearchEnabled = value == "true"; break;
+                        case "CommerceSearchApiKey": settings.CommerceSearchApiKey = value; break;
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
                         case "MicrosoftRegion": settings.MicrosoftRegion = value; break;
@@ -201,6 +219,7 @@ namespace GlobalTranslator
                         case "OcrAiFallback": settings.OcrAiFallback = value == "true"; hasOcrAiSetting = true; break;
                         case "OcrVisionModel": settings.OcrVisionModel = value; hasOcrVisionModel = true; break;
                         case "OcrAiConsentGranted": settings.OcrAiConsentGranted = value == "true"; break;
+                        case "OcrConsentTarget": settings.OcrConsentTarget = value; break;
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
                         case "WritingHotkey": settings.WritingHotkey = value; break;
@@ -230,7 +249,7 @@ namespace GlobalTranslator
                     string.IsNullOrWhiteSpace(settings.OcrVisionModel))
                     settings.OcrVisionModel =
                         "deepseek-v4-flash-vision-exp";
-                if (!hasOcrAiSetting || !hasOcrVisionModel)
+                if (!hasOcrAiSetting)
                     settings.OcrAiFallback = true;
             }
             catch { return new AppSettings(); }
@@ -242,9 +261,12 @@ namespace GlobalTranslator
             Directory.CreateDirectory(Folder);
             string data =
                 "Provider=" + Encode(Provider) + "\n" +
+                "UpdateCheckHours=" + Encode(NormalizeUpdateCheckHours(UpdateCheckHours).ToString()) + "\n" +
                 "TargetLanguageMode=" + Encode(TargetLanguageMode) + "\n" +
                 "TargetLanguage=" + Encode(TargetLanguage) + "\n" +
                 "CommunicationLanguage=" + Encode(CommunicationLanguage) + "\n" +
+                "CommerceSearchEnabled=" + Encode(CommerceSearchEnabled ? "true" : "false") + "\n" +
+                "CommerceSearchApiKey=" + Encode(CommerceSearchApiKey) + "\n" +
                 "GoogleApiKey=" + Encode(GoogleApiKey) + "\n" +
                 "MicrosoftApiKey=" + Encode(MicrosoftApiKey) + "\n" +
                 "MicrosoftRegion=" + Encode(MicrosoftRegion) + "\n" +
@@ -270,8 +292,8 @@ namespace GlobalTranslator
                 "QwenModelName=" + Encode(QwenModelName) + "\n" +
                 "QwenModelProtocol=" + Encode(ModelApiProtocols.Normalize(QwenModelProtocol)) + "\n" +
                 "OcrAiFallback=" + Encode(OcrAiFallback ? "true" : "false") + "\n" +
-                "OcrVisionModel=" + Encode(OcrVisionModel) + "\n" +
                 "OcrAiConsentGranted=" + Encode(OcrAiConsentGranted ? "true" : "false") + "\n" +
+                "OcrConsentTarget=" + Encode(OcrConsentTarget) + "\n" +
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
                 "WritingHotkey=" + Encode(WritingHotkey) + "\n" +
@@ -323,6 +345,22 @@ namespace GlobalTranslator
                         Protocol = CustomModelProtocol
                     };
             }
+        }
+
+        public ModelConnectionSettings GetActiveAiConnection()
+        {
+            ModelConnectionSettings connection = GetModelConnection(ModelVendor);
+            if (!connection.IsUsable(ModelVendor))
+                throw new InvalidOperationException(
+                    "当前 AI 模型尚未配置完整。请在设置中检查模型、地址和密钥。");
+            return connection.Copy();
+        }
+
+        public string GetOcrConsentTarget()
+        {
+            ModelConnectionSettings connection = GetActiveAiConnection();
+            return ModelVendor.ToLowerInvariant() + "|" +
+                connection.BaseUrl.Trim().TrimEnd('/').ToLowerInvariant();
         }
 
         public void SetModelConnection(

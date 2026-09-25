@@ -151,7 +151,9 @@ namespace GlobalTranslator
                     _cancellation.Token);
                 _status.Text = "校验完成，正在重启…";
                 UpdateService.LaunchUpdater(downloaded);
-                Application.Current.Shutdown();
+                var sharkey = Application.Current as TranslatorApplication;
+                if (sharkey != null) sharkey.ExitApplication();
+                else Application.Current.Shutdown();
             }
             catch (OperationCanceledException)
             {

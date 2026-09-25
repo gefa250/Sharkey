@@ -46,7 +46,11 @@ namespace GlobalTranslator
         private Button _openDiagnosticFolder;
         private Button _checkUpdate;
         private TextBlock _updateStatus;
-        private TextBox _ocrVisionModel;
+        private TextBlock _ocrModelSummary;
+        private TextBlock _aiModelSelectionStatus;
+        private UIElement _modelConfigurationPanel;
+        private CheckBox _commerceSearchEnabled;
+        private PasswordBox _commerceSearchKey;
         private Button _cancelSettings;
         private TextBox _translateHotkey;
         private TextBox _writingHotkey;
@@ -54,6 +58,8 @@ namespace GlobalTranslator
         private TextBox _settingsHotkey;
         private CheckBox _startWithWindows;
         private ComboBox _popupFontSize;
+        private ComboBox _updateInterval;
+        private static readonly int[] UpdateIntervals = { 6, 12, 24, 72, 168, 0 };
         private bool _loadingValues;
         private string _pendingProvider = "GoogleFree";
         private string _pendingModelVendor = "Custom";
@@ -81,6 +87,7 @@ namespace GlobalTranslator
                 new Dictionary<string, ModelConnectionSettings>(
                     StringComparer.OrdinalIgnoreCase);
         private string _activeModelVendor = "";
+        private string _currentModelProtocol = ModelApiProtocols.OpenAI;
 
         public event EventHandler SettingsSaved;
         public event EventHandler UpdateCheckRequested;
@@ -145,15 +152,12 @@ namespace GlobalTranslator
         public void ShowOcrSettings()
         {
             _tabs.SelectedIndex = 1;
+            if (_ocrAiFallback != null) _ocrAiFallback.Focus();
         }
 
         public void ShowModelSettings()
         {
-            _tabs.SelectedIndex = 0;
-            SelectConfigSection("Model");
-            BrowseProvider(
-                "ModelApi:" + NormalizeModelVendor(
-                    _pendingModelVendor));
+            _tabs.SelectedIndex = 1;
             if (_modelBaseUrl != null) _modelBaseUrl.Focus();
         }
 
@@ -291,7 +295,8 @@ namespace GlobalTranslator
                 Padding = new Thickness(0)
             };
             tabs.Items.Add(Tab("翻译", BuildTranslationTab()));
-            tabs.Items.Add(Tab("OCR", BuildOcrTab()));
+            tabs.Items.Add(Tab("AI 模型", BuildModelTab()));
+            tabs.Items.Add(Tab("外贸助手", BuildCommerceTab()));
             tabs.Items.Add(Tab("快捷键", BuildShortcutTab()));
             tabs.Items.Add(Tab("常规", BuildGeneralTab()));
             return tabs;
@@ -527,9 +532,12 @@ namespace GlobalTranslator
             _modelVendor = new ComboBox
             {
                 ItemsSource = ModelVendors(),
-                Visibility = Visibility.Collapsed
+                Height = 36,
+                Margin = new Thickness(24, 5, 0, 10),
+                VerticalContentAlignment = VerticalAlignment.Center
             };
             _modelVendor.SelectionChanged += ModelVendorChanged;
+            AddFieldLabel(content, "供应商");
             content.Children.Add(_modelVendor);
             _modelBaseUrl = AddText(
                 content, "API 基础地址", "例如 https://api.openai.com/v1；也可填完整接口地址");
@@ -557,6 +565,40 @@ namespace GlobalTranslator
                 content, "模型名称", "例如 gpt-5.6-sol / deepseek-chat");
             _modelApiKey = AddPassword(
                 content, "API Key", "本地 Ollama 可留空");
+            var selectAi = SecondaryButton("设为当前 AI 模型");
+            selectAi.Margin = new Thickness(24, 9, 0, 4);
+            selectAi.Click += delegate
+            {
+                SaveActiveModelDraft();
+                ModelConnectionSettings draft;
+                if (!_modelDrafts.TryGetValue(_activeModelVendor, out draft) ||
+                    !draft.IsUsable(_activeModelVendor))
+                {
+                    MessageBox.Show("请先填写当前 AI 模型的地址、模型和密钥。",
+                        "无法选择模型", MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                    return;
+                }
+                _pendingModelVendor = _activeModelVendor;
+                _aiModelSelectionStatus.Text = "当前 AI：" +
+                    _pendingModelVendor + " · " + draft.Model;
+                if (_ocrModelSummary != null)
+                    _ocrModelSummary.Text = _aiModelSelectionStatus.Text;
+                if (_activeConfigSection == "Model")
+                {
+                    _browsedProvider = "ModelApi:" +
+                        _pendingModelVendor;
+                    SelectConfigSection("Model");
+                }
+                UpdateProviderSelection();
+            };
+            content.Children.Add(selectAi);
+            _aiModelSelectionStatus = new TextBlock
+            {
+                Foreground = Muted, FontSize = 12,
+                Margin = new Thickness(24, 3, 0, 0)
+            };
+            content.Children.Add(_aiModelSelectionStatus);
             _modelBaseUrl.TextChanged += delegate
             {
                 UpdateModelEndpointHint();
@@ -579,10 +621,21 @@ namespace GlobalTranslator
                 ProviderConfigPanel("Microsoft Translator", "需要订阅密钥", microsoftContent);
             _providerConfigViews["Google"] =
                 ProviderConfigPanel("Google Cloud Translation", "需要 API Key", googleContent);
+            _modelConfigurationPanel = ProviderConfigPanel(
+                "AI 模型配置", "", content);
+            var modelShortcut = new StackPanel();
+            modelShortcut.Children.Add(new TextBlock
+            {
+                Text = "AI 翻译使用“AI 模型”页选定的当前模型。",
+                FontSize = 12, Foreground = Muted,
+                TextWrapping = TextWrapping.Wrap
+            });
+            var manage = SecondaryButton("管理 AI 模型");
+            manage.Margin = new Thickness(0, 9, 0, 0);
+            manage.Click += delegate { ShowModelSettings(); };
+            modelShortcut.Children.Add(manage);
             UIElement modelPanel = ProviderConfigPanel(
-                "AI 模型",
-                "OpenAI / Anthropic 兼容接口",
-                content);
+                "AI 翻译", "", modelShortcut);
             foreach (ModelVendorChoice vendor in ModelVendors())
                 _providerConfigViews[
                     "ModelApi:" + vendor.Code] = modelPanel;
@@ -717,7 +770,7 @@ namespace GlobalTranslator
             });
             version.Children.Add(new TextBlock
             {
-                Text = "Windows x64 · 全局翻译与 AI 视觉助手",
+                Text = "Windows x64 · 翻译与外贸助手",
                 Foreground = Muted,
                 FontSize = 11
             });
@@ -726,6 +779,20 @@ namespace GlobalTranslator
                 Orientation = Orientation.Horizontal,
                 Margin = new Thickness(0, 12, 0, 0)
             };
+            version.Children.Add(new TextBlock
+            {
+                Text = "自动检查更新", Margin = new Thickness(0, 12, 0, 5),
+                Foreground = Navy, FontSize = 12
+            });
+            _updateInterval = new ComboBox
+            {
+                ItemsSource = new[] { "每 6 小时", "每 12 小时", "每 24 小时（推荐）",
+                    "每 3 天", "每周", "关闭自动检查" },
+                MinHeight = 32, Width = 200,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                ToolTip = "保存后生效。程序运行期间定期检查，发现新版本时弹出更新窗口；不会自动安装。"
+            };
+            version.Children.Add(_updateInterval);
             _checkUpdate = SecondaryButton("检查更新");
             _checkUpdate.Width = 102;
             _checkUpdate.Click += delegate
@@ -738,7 +805,7 @@ namespace GlobalTranslator
             updateActions.Children.Add(_checkUpdate);
             _updateStatus = new TextBlock
             {
-                Text = "启动后每天自动检查一次",
+                Text = "发现新版本时提醒，不自动安装",
                 Foreground = Muted,
                 FontSize = 10.5,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -924,17 +991,20 @@ namespace GlobalTranslator
 
         private UIElement BuildOcrTab()
         {
-            var root = TabBody();
+            var root = new StackPanel
+            {
+                Margin = new Thickness(0, 16, 0, 0)
+            };
             root.Children.Add(Intro(
-                "截图 OCR",
-                "使用 DeepSeek Vision 读取截图。"));
+                "截图识别",
+                "使用当前 AI 模型读取截图。"));
 
             var aiCard = Card();
             aiCard.Padding = new Thickness(16);
             var ai = new StackPanel();
             ai.Children.Add(new TextBlock
             {
-                Text = "DeepSeek Vision",
+                Text = "当前 AI 模型",
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
                 Foreground = Navy
@@ -949,37 +1019,99 @@ namespace GlobalTranslator
             });
             _ocrAiFallback = new CheckBox
             {
-                Content = "启用 DeepSeek Vision 截图识别",
+                Content = "启用 AI 截图识别",
                 Margin = new Thickness(0, 0, 0, 7),
                 Foreground = Navy,
                 FontSize = 12
             };
             ai.Children.Add(_ocrAiFallback);
-            _ocrVisionModel = AddText(
-                ai, "视觉模型名称", "deepseek-v4-flash-vision-exp");
-            ai.Children.Add(new TextBlock
+            _ocrModelSummary = new TextBlock
             {
-                Text = "API 地址和 Key 复用“AI 模型”页的 DeepSeek 配置；截图只在内存中编码。",
+                Text = "截图只在内存中编码；模型和密钥在 AI 模型配置中管理。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brush("#397080"),
-                FontSize = 10.5,
+                FontSize = 12,
                 Margin = new Thickness(24, 0, 0, 0)
-            });
-            var configureDeepSeek = SecondaryButton("配置 DeepSeek API");
-            configureDeepSeek.Width = 142;
-            configureDeepSeek.Height = 34;
-            configureDeepSeek.Margin = new Thickness(24, 10, 0, 0);
-            configureDeepSeek.Click += delegate
+            };
+            ai.Children.Add(_ocrModelSummary);
+            var configureAi = SecondaryButton("管理 AI 模型");
+            configureAi.Height = 34;
+            configureAi.Margin = new Thickness(24, 10, 0, 0);
+            configureAi.Click += delegate
             {
-                _tabs.SelectedIndex = 0;
-                SelectConfigSection("Model");
-                BrowseProvider("ModelApi:DeepSeek");
+                _tabs.SelectedIndex = 1;
                 if (_modelApiKey != null) _modelApiKey.Focus();
             };
-            ai.Children.Add(configureDeepSeek);
+            ai.Children.Add(configureAi);
             aiCard.Child = ai;
             root.Children.Add(aiCard);
 
+            return root;
+        }
+
+        private UIElement BuildModelTab()
+        {
+            var root = TabBody();
+            var intro = Intro("AI 模型",
+                "AI 翻译、截图识别与外贸助手使用同一个当前模型。");
+            intro.Margin = new Thickness(0, 0, 0, 16);
+            root.Children.Add(intro);
+            var configuration = Card();
+            configuration.Padding = new Thickness(15, 10, 15, 14);
+            configuration.Child = _modelConfigurationPanel;
+            root.Children.Add(configuration);
+            root.Children.Add(BuildOcrTab());
+            return Scroll(root);
+        }
+
+        private UIElement BuildCommerceTab()
+        {
+            var root = TabBody();
+            root.Children.Add(Intro("外贸助手",
+                "F7 使用当前 AI 模型。计算由鲨译本地执行，联网资料会显示来源。"));
+            var card = Card();
+            card.Padding = new Thickness(16);
+            card.Margin = new Thickness(0, 12, 0, 0);
+            var content = new StackPanel();
+            _commerceSearchEnabled = new CheckBox
+            {
+                Content = "允许外贸助手按需联网查资料",
+                FontSize = 12, Foreground = Navy,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            content.Children.Add(_commerceSearchEnabled);
+            _commerceSearchKey = AddPassword(content, "Tavily 搜索 API Key",
+                "仅用于检索公开资料；缺少 Key 时仍可计算和拟写回复");
+            var testSearch = SecondaryButton("测试搜索连接");
+            testSearch.Margin = new Thickness(24, 7, 0, 0);
+            testSearch.Click += async delegate
+            {
+                testSearch.IsEnabled = false;
+                try
+                {
+                    using (var search = new CommerceSearch())
+                        await search.SearchAsync("international trade",
+                            _commerceSearchKey.Password,
+                            System.Threading.CancellationToken.None);
+                    MessageBox.Show("搜索连接成功。", "外贸助手",
+                        MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                catch (Exception error)
+                {
+                    MessageBox.Show(error.Message, "搜索连接失败",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+                finally { testSearch.IsEnabled = true; }
+            };
+            content.Children.Add(testSearch);
+            content.Children.Add(new TextBlock
+            {
+                Text = "价格、汇率、运价和规则应核对来源；搜索结果不会自动变成报价参数。",
+                TextWrapping = TextWrapping.Wrap, FontSize = 12,
+                Foreground = Muted, Margin = new Thickness(0, 8, 0, 0)
+            });
+            card.Child = content;
+            root.Children.Add(card);
             return Scroll(root);
         }
 
@@ -1078,10 +1210,26 @@ namespace GlobalTranslator
                 LoadModelDraft(_activeModelVendor);
                 _pendingModelVendor =
                     NormalizeModelVendor(_settings.ModelVendor);
+                if (_aiModelSelectionStatus != null)
+                {
+                    ModelConnectionSettings activeAi =
+                        _settings.GetModelConnection(
+                            _pendingModelVendor);
+                    _aiModelSelectionStatus.Text = "当前 AI：" +
+                        _pendingModelVendor + " · " +
+                        activeAi.Model +
+                        (activeAi.IsUsable(_pendingModelVendor)
+                            ? "" : " · 待配置");
+                }
                 if (_ocrAiFallback != null)
                     _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
-                if (_ocrVisionModel != null)
-                    _ocrVisionModel.Text = _settings.OcrVisionModel;
+                if (_ocrModelSummary != null)
+                    _ocrModelSummary.Text =
+                        _aiModelSelectionStatus.Text;
+                _commerceSearchEnabled.IsChecked =
+                    _settings.CommerceSearchEnabled;
+                _commerceSearchKey.Password =
+                    _settings.CommerceSearchApiKey;
                 _translateHotkey.Text =
                     NormalizeHotkey(_settings.TranslateHotkey, "F8");
                 _writingHotkey.Text = NormalizeHotkey(_settings.WritingHotkey, "F7");
@@ -1092,6 +1240,8 @@ namespace GlobalTranslator
                 _startWithWindows.IsChecked =
                     StartupManager.IsEnabled();
                 _popupFontSize.SelectedIndex = _settings.PopupFontSize == "Small" ? 0 : _settings.PopupFontSize == "Large" ? 2 : 1;
+                _updateInterval.SelectedIndex = Array.IndexOf(UpdateIntervals,
+                    AppSettings.NormalizeUpdateCheckHours(_settings.UpdateCheckHours));
                 _pendingProvider =
                     IsKnownProvider(_settings.Provider)
                         ? _settings.Provider
@@ -1124,27 +1274,34 @@ namespace GlobalTranslator
                 out settingsGesture, out writingGesture))
                 return;
 
+            if (_commerceSearchEnabled.IsChecked == true &&
+                string.IsNullOrWhiteSpace(_commerceSearchKey.Password))
+            {
+                _tabs.SelectedIndex = 2;
+                MessageBox.Show("开启联网搜索需要先填写 Tavily API Key。",
+                    "外贸助手", MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                _commerceSearchKey.Focus();
+                return;
+            }
+
             bool enableAiOcr = _ocrAiFallback != null &&
                 _ocrAiFallback.IsChecked == true;
             bool grantOcrConsent = false;
-            if (enableAiOcr &&
-                string.IsNullOrWhiteSpace(
-                    _ocrVisionModel == null
-                        ? ""
-                        : _ocrVisionModel.Text))
-            {
-                _tabs.SelectedIndex = 1;
-                MessageBox.Show(
-                    "请填写视觉模型名称；DeepSeek API 地址和 Key 在“AI 模型 → DeepSeek”中配置。",
-                    "鲨译", MessageBoxButton.OK, MessageBoxImage.Information);
-                return;
-            }
-            if (enableAiOcr && !_settings.OcrAiConsentGranted)
+            SaveActiveModelDraft();
+            ModelConnectionSettings pendingAi =
+                _modelDrafts[_pendingModelVendor];
+            string consentTarget = _pendingModelVendor.ToLowerInvariant() +
+                "|" + (pendingAi.BaseUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant();
+            if (enableAiOcr && pendingAi.IsUsable(_pendingModelVendor) &&
+                (!_settings.OcrAiConsentGranted ||
+                 _settings.OcrConsentTarget != consentTarget))
             {
                 MessageBoxResult consent = MessageBox.Show(
-                    "开启后，所选截图会发送到你配置的 DeepSeek Vision 服务。\n\n" +
+                    "开启后，所选截图会发送到 " +
+                    _pendingModelVendor + " 的 AI 服务。\n\n" +
                     "截图可能包含隐私信息。确定允许上传吗？",
-                    "启用 AI 视觉 OCR",
+                    "启用截图识别",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Warning);
                 if (consent != MessageBoxResult.Yes) return;
@@ -1154,13 +1311,14 @@ namespace GlobalTranslator
             SaveActiveModelDraft();
             if (!IsProviderReady(_pendingProvider))
             {
-                _tabs.SelectedIndex = 0;
-                SelectConfigSection(
-                    ConfigSectionForProvider(_pendingProvider));
-                BrowseProvider(
-                    _pendingProvider == "ModelApi"
-                        ? "ModelApi:" + _pendingModelVendor
-                        : _pendingProvider);
+                _tabs.SelectedIndex = _pendingProvider == "ModelApi"
+                    ? 1 : 0;
+                if (_pendingProvider != "ModelApi")
+                {
+                    SelectConfigSection(
+                        ConfigSectionForProvider(_pendingProvider));
+                    BrowseProvider(_pendingProvider);
+                }
                 MessageBox.Show(
                     ProviderDisplayName(_pendingProvider) +
                     " 的必要配置尚未填写完整。请补充配置，或选择其他可用服务。",
@@ -1194,9 +1352,10 @@ namespace GlobalTranslator
             _settings.ModelProtocol = ModelApiProtocols.Normalize(
                 activeConnection.Protocol);
             _settings.OcrAiFallback = enableAiOcr;
-            _settings.OcrVisionModel = _ocrVisionModel == null
-                ? "deepseek-v4-flash-vision-exp"
-                : _ocrVisionModel.Text.Trim();
+            _settings.CommerceSearchEnabled =
+                _commerceSearchEnabled.IsChecked == true;
+            _settings.CommerceSearchApiKey =
+                _commerceSearchKey.Password.Trim();
             _settings.AutoTranslate = false;
             _settings.TranslateHotkey = translateGesture.Display;
             _settings.WritingHotkey = writingGesture.Display;
@@ -1205,12 +1364,17 @@ namespace GlobalTranslator
             _settings.StartWithWindows =
                 _startWithWindows.IsChecked == true;
             _settings.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" : _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
+            _settings.UpdateCheckHours = _updateInterval.SelectedIndex < 0 ? 24
+                : UpdateIntervals[_updateInterval.SelectedIndex];
             try
             {
                 StartupManager.SetEnabled(
                     _settings.StartWithWindows);
                 if (grantOcrConsent)
+                {
                     _settings.OcrAiConsentGranted = true;
+                    _settings.OcrConsentTarget = consentTarget;
+                }
                 _settings.Save();
                 var handler = SettingsSaved;
                 if (handler != null) handler(this, EventArgs.Empty);
@@ -1267,7 +1431,7 @@ namespace GlobalTranslator
         private bool ShowHotkeyError(
             string name, string error, Control focus)
         {
-            _tabs.SelectedIndex = 2;
+            _tabs.SelectedIndex = 3;
             MessageBox.Show(
                 name + "：" + error,
                 "快捷键设置",
@@ -1318,7 +1482,7 @@ namespace GlobalTranslator
                 _modelDrafts.TryGetValue(vendor.Code, out draft))
             {
                 string oldProtocol = ModelApiProtocols.Normalize(
-                    draft.Protocol);
+                    _currentModelProtocol);
                 string currentBase = (_modelBaseUrl == null
                     ? ""
                     : _modelBaseUrl.Text).Trim();
@@ -1338,6 +1502,7 @@ namespace GlobalTranslator
                     _modelBaseUrl != null)
                     _modelBaseUrl.Text = newRecommended;
             }
+            _currentModelProtocol = choice.Code;
             UpdateModelEndpointHint();
             UpdateProviderSelection();
         }
@@ -1396,10 +1561,17 @@ namespace GlobalTranslator
             if (!_modelDrafts.TryGetValue(
                 vendor, out draft))
                 return;
-            _modelBaseUrl.Text = draft.BaseUrl;
-            _modelName.Text = draft.Model;
-            _modelApiKey.Password = draft.ApiKey;
-            SelectModelProtocol(draft.Protocol);
+            bool wasLoading = _loadingValues;
+            _loadingValues = true;
+            try
+            {
+                _modelBaseUrl.Text = draft.BaseUrl;
+                _modelName.Text = draft.Model;
+                _modelApiKey.Password = draft.ApiKey;
+                _currentModelProtocol = draft.Protocol;
+                SelectModelProtocol(draft.Protocol);
+            }
+            finally { _loadingValues = wasLoading; }
             UpdateModelEndpointHint();
         }
 
@@ -1922,13 +2094,8 @@ namespace GlobalTranslator
             else if (section == "Model")
             {
                 choices.Add(new KeyValuePair<string, string>(
-                    "ModelApi:DeepSeek", "DeepSeek"));
-                choices.Add(new KeyValuePair<string, string>(
-                    "ModelApi:MiMo", "MiMo"));
-                choices.Add(new KeyValuePair<string, string>(
-                    "ModelApi:Qwen", "Qwen"));
-                choices.Add(new KeyValuePair<string, string>(
-                    "ModelApi:Custom", "自定义"));
+                    "ModelApi:" + NormalizeModelVendor(
+                        _pendingModelVendor), "当前 AI 模型"));
             }
             else
             {
@@ -2167,9 +2334,17 @@ namespace GlobalTranslator
             }
             _pendingProvider = provider;
             if (provider == "ModelApi")
+            {
                 _pendingModelVendor =
                     ModelVendorFromBrowse(
                         _browsedProvider);
+                if (_aiModelSelectionStatus != null)
+                    _aiModelSelectionStatus.Text = "当前 AI：" +
+                        _pendingModelVendor + " · " +
+                        _modelDrafts[_pendingModelVendor].Model;
+                if (_ocrModelSummary != null)
+                    _ocrModelSummary.Text = _aiModelSelectionStatus.Text;
+            }
             UpdateProviderSelection();
             e.Handled = true;
         }
