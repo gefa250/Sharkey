@@ -95,11 +95,13 @@ namespace GlobalTranslator
         private PasswordBox _commerceSearchKey;
         private TextBlock _searchStatus;
         private TextBox _writingHotkey;
+        private TextBox _assistantCaptureHotkey;
         private TextBox _translateHotkey;
         private TextBox _ocrHotkey;
         private TextBox _settingsHotkey;
         private CheckBox _startWithWindows;
         private ComboBox _updateInterval;
+        private ComboBox _searchBackend;
         private Button _checkUpdate;
         private TextBlock _updateStatus;
         private Button _copyDiagnostics;
@@ -652,7 +654,16 @@ namespace GlobalTranslator
                 FontSize = 14, Margin = new Thickness(0, 0, 0, 10)
             };
             searchFields.Children.Add(_commerceSearchEnabled);
-            _commerceSearchKey = AddPassword(searchFields, "Tavily API Key", "仅用于外贸助手按需检索公开资料");
+            _searchBackend = new ComboBox { Margin = new Thickness(0, 0, 0, 8) };
+            _searchBackend.Items.Add("优先 DeepSeek 原生搜索（使用模型账户，可能增加费用）");
+            _searchBackend.Items.Add("Tavily（独立搜索账户）");
+            _searchBackend.SelectedIndex = 0;
+            _searchBackend.SelectionChanged += delegate { MarkDirty(); };
+            searchFields.Children.Add(_searchBackend);
+            var advancedSearch = new StackPanel();
+            _commerceSearchKey = AddPassword(advancedSearch, "Tavily API Key", "可选；非 DeepSeek 官方服务需要独立搜索密钥，不要填写模型密钥");
+            searchFields.Children.Add(new Expander { Header = "高级 · 独立搜索服务", Content = advancedSearch,
+                Margin = new Thickness(0, 0, 0, 8) });
             var testSearch = SecondaryButton("测试搜索连接");
             testSearch.HorizontalAlignment = HorizontalAlignment.Left;
             testSearch.Click += async delegate { await TestSearchAsync(testSearch); };
@@ -690,6 +701,7 @@ namespace GlobalTranslator
             var list = new StackPanel();
             card.Child = list;
             _writingHotkey = AddHotkeyRecorder(list, "外贸助手", "打开 AI 沟通与计算工作台");
+            _assistantCaptureHotkey = AddHotkeyRecorder(list, "截图到外贸助手", "将当前屏幕框选为会话附件，不自动发送");
             _translateHotkey = AddHotkeyRecorder(list, "选中翻译", "读取当前选中文字并显示译文");
             _ocrHotkey = AddHotkeyRecorder(list, "截图翻译", "框选屏幕区域进行识别和翻译");
             _settingsHotkey = AddHotkeyRecorder(list, "打开设置", "唤起此设置窗口");
@@ -700,6 +712,7 @@ namespace GlobalTranslator
             defaults.Click += delegate
             {
                 _writingHotkey.Text = "F7";
+                _assistantCaptureHotkey.Text = "Ctrl+Alt+A";
                 _translateHotkey.Text = "F8";
                 _ocrHotkey.Text = "F9";
                 _settingsHotkey.Text = "F10";
@@ -1084,20 +1097,18 @@ namespace GlobalTranslator
 
         private async Task TestSearchAsync(Button button)
         {
-            if (string.IsNullOrWhiteSpace(_commerceSearchKey.Password))
-            {
-                _searchStatus.Text = "请先填写 Tavily API Key。";
-                _searchStatus.Foreground = Brush("#B25A28");
-                return;
-            }
+            AppSettings searchDraft = _draft.Copy();
+            searchDraft.ModelVendor = _pendingModelVendor;
+            searchDraft.SetModelConnection(_pendingModelVendor, ActiveModelDraft().Copy());
+            searchDraft.CommerceSearchApiKey = _commerceSearchKey.Password.Trim();
+            searchDraft.CommerceSearchBackend = _searchBackend.SelectedIndex == 1 ? "Tavily" : "Auto";
             button.IsEnabled = false;
             _searchStatus.Text = "正在测试…";
             _searchStatus.Foreground = Subtle;
             try
             {
                 using (var search = new CommerceSearch())
-                    await search.SearchAsync("international trade",
-                        _commerceSearchKey.Password.Trim(), CancellationToken.None);
+                    await search.SearchConfiguredAsync("international trade", searchDraft, CancellationToken.None);
                 _searchStatus.Text = "搜索连接通过";
                 _searchStatus.Foreground = Brush("#27805A");
             }
@@ -1260,7 +1271,9 @@ namespace GlobalTranslator
                 RefreshConsentPreview();
                 _commerceSearchEnabled.IsChecked = _settings.CommerceSearchEnabled;
                 _commerceSearchKey.Password = _settings.CommerceSearchApiKey;
+                _searchBackend.SelectedIndex = _settings.CommerceSearchBackend == "Tavily" ? 1 : 0;
                 _writingHotkey.Text = NormalizeHotkey(_settings.WritingHotkey, "F7");
+                _assistantCaptureHotkey.Text = NormalizeHotkey(_settings.AssistantCaptureHotkey, "Ctrl+Alt+A");
                 _translateHotkey.Text = NormalizeHotkey(_settings.TranslateHotkey, "F8");
                 _ocrHotkey.Text = NormalizeHotkey(_settings.OcrHotkey, "F9");
                 _settingsHotkey.Text = NormalizeHotkey(_settings.SettingsHotkey, "F10");
@@ -1298,10 +1311,11 @@ namespace GlobalTranslator
                 return;
             }
             if (_commerceSearchEnabled.IsChecked == true &&
-                string.IsNullOrWhiteSpace(_commerceSearchKey.Password))
+                string.IsNullOrWhiteSpace(_commerceSearchKey.Password) &&
+                (_searchBackend.SelectedIndex == 1 || !CommerceSearch.CanUseNative(_pendingModelVendor, active)))
             {
                 Navigate("Assistant");
-                MessageBox.Show("启用联网搜索需要先填写 Tavily API Key。", "助手偏好",
+                MessageBox.Show("当前服务不支持已接入的原生搜索，请在高级搜索设置填写 Tavily API Key，或关闭搜索。", "助手偏好",
                     MessageBoxButton.OK, MessageBoxImage.Information);
                 _commerceSearchKey.Focus();
                 return;
@@ -1322,10 +1336,12 @@ namespace GlobalTranslator
             candidate.OcrAiFallback = _ocrAiFallback.IsChecked == true;
             candidate.CommerceSearchEnabled = _commerceSearchEnabled.IsChecked == true;
             candidate.CommerceSearchApiKey = _commerceSearchKey.Password.Trim();
+            candidate.CommerceSearchBackend = _searchBackend.SelectedIndex == 1 ? "Tavily" : "Auto";
             candidate.TranslateHotkey = translate.Display;
             candidate.OcrHotkey = ocr.Display;
             candidate.SettingsHotkey = settingsHotkey.Display;
             candidate.WritingHotkey = writing.Display;
+            candidate.AssistantCaptureHotkey = NormalizeHotkey(_assistantCaptureHotkey.Text, "Ctrl+Alt+A");
             candidate.StartWithWindows = _startWithWindows.IsChecked == true;
             candidate.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" :
                 _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
@@ -1383,9 +1399,11 @@ namespace GlobalTranslator
             if (!ParseHotkey(_ocrHotkey, "截图翻译", out ocr)) return false;
             if (!ParseHotkey(_settingsHotkey, "打开设置", out settings)) return false;
             if (!ParseHotkey(_writingHotkey, "外贸助手", out writing)) return false;
+            HotkeyGesture assistantCapture;
+            if (!ParseHotkey(_assistantCaptureHotkey, "截图到外贸助手", out assistantCapture)) return false;
             var all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            HotkeyGesture[] gestures = { translate, ocr, settings, writing };
-            string[] labels = { "选中翻译", "截图翻译", "打开设置", "外贸助手" };
+            HotkeyGesture[] gestures = { translate, ocr, settings, writing, assistantCapture };
+            string[] labels = { "选中翻译", "截图翻译", "打开设置", "外贸助手", "截图到外贸助手" };
             for (int i = 0; i < gestures.Length; i++)
             {
                 string prior;
@@ -1905,7 +1923,7 @@ namespace GlobalTranslator
             Resources.Add(typeof(Thumb), CreateScrollThumbStyle());
         }
 
-        private static Style CreateComboBoxStyle()
+        internal static Style CreateComboBoxStyle()
         {
             var style = new Style(typeof(ComboBox));
             style.Setters.Add(new Setter(Control.BackgroundProperty,
@@ -1953,6 +1971,20 @@ namespace GlobalTranslator
             selected.SetValue(UIElement.IsHitTestVisibleProperty, false);
             chrome.AppendChild(selected);
             root.AppendChild(chrome);
+
+            var editable = new FrameworkElementFactory(typeof(TextBox));
+            editable.Name = "PART_EditableTextBox";
+            editable.SetValue(FrameworkElement.MarginProperty, new Thickness(11, 0, 40, 0));
+            editable.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            editable.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+            editable.SetValue(Control.BackgroundProperty, Brushes.Transparent);
+            editable.SetValue(Control.PaddingProperty, new Thickness(0));
+            editable.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            root.AppendChild(editable);
+            var editTrigger = new Trigger { Property = ComboBox.IsEditableProperty, Value = true };
+            editTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "PART_EditableTextBox"));
+            editTrigger.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "SelectionContent"));
+            template.Triggers.Add(editTrigger);
 
             var toggle = new FrameworkElementFactory(typeof(ToggleButton));
             toggle.Name = "DropDownToggle";

@@ -463,7 +463,7 @@ namespace GlobalTranslator
                                 if (++searches > 3)
                                     throw new InvalidOperationException(
                                         "本次搜索已达上限，请继续下一轮沟通。");
-                                if (!settings.CommerceSearchEnabled)
+                                if (!modelSnapshot.CommerceSearchEnabled)
                                     throw new InvalidOperationException(
                                         "联网搜索未启用，请提供数据或在设置中启用。");
                                 if (SensitiveCommerceSearch(request.Query) &&
@@ -471,8 +471,8 @@ namespace GlobalTranslator
                                      !work.ApproveSensitiveSearch(request.Query)))
                                     throw new InvalidOperationException(
                                         "搜索词包含可能敏感的信息，未获得确认。");
-                                outcome = await search.SearchAsync(request.Query,
-                                    settings.CommerceSearchApiKey, token);
+                                outcome = await search.SearchConfiguredAsync(request.Query,
+                                    modelSnapshot, token);
                             }
                             else throw new InvalidOperationException(
                                 "不支持的助手工具。");

@@ -19,6 +19,9 @@ internal static class PopupInteractionProbe
         try
         {
             Assembly app = Assembly.LoadFrom(args[0]);
+            app.GetType("GlobalTranslator.ConversationStore", true)
+                .GetField("DirectoryPath", BindingFlags.Static | BindingFlags.NonPublic)
+                .SetValue(null, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Sharkey-tests-" + Guid.NewGuid().ToString("N")));
             Type popupType = app.GetType("GlobalTranslator.PopupWindow", true);
             popup = (Window)Activator.CreateInstance(popupType, true);
             TextBox source = (TextBox)popupType
@@ -74,6 +77,8 @@ internal static class PopupInteractionProbe
             Require(writingCopy.IsEnabled, "Completed writing result cannot be copied.");
             writing.Show(); writing.UpdateLayout();
             SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace-150.png", 144);
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace-200.png", 192);
             writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
             Require(writingSource.ActualHeight > 35,
                 "Communication input collapsed at minimum size.");
@@ -108,6 +113,7 @@ internal static class PopupInteractionProbe
             moveImage.Invoke(writing, new object[] { 0, 1 });
             Require(ReferenceEquals(firstImage, images[1]),
                 "Communication image reorder changed the wrong item.");
+            ProbeAssistantExperience(app, writing, writingType, settings, client);
             writing.Close();
             object ocrResult = Activator.CreateInstance(ocrResultType, true);
             settingsType.GetField("Provider").SetValue(settings, "Microsoft");
@@ -944,6 +950,71 @@ internal static class PopupInteractionProbe
             Console.WriteLine("READING font=3 presets pin=isolated divider=preserved fit=rendered toolbar=compact");
         }
         finally { window.Close(); }
+    }
+
+    private static void ProbeAssistantExperience(Assembly app, Window writing, Type writingType, object settings, object client)
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        Type clipboard = app.GetType("GlobalTranslator.ClipboardImages", true);
+        var encode = clipboard.GetMethod("Encode", hidden);
+        byte[] pixels = { 20, 40, 200, 0 };
+        BitmapSource transparent = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, pixels, 4);
+        byte[] original = (byte[])encode.Invoke(null, new object[] { transparent, false });
+        byte[] repaired = (byte[])encode.Invoke(null, new object[] { transparent, true });
+        using (var stream = new System.IO.MemoryStream(repaired))
+        {
+            var frame = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            byte[] decoded = new byte[4]; bgra.CopyPixels(decoded, 4, 0);
+            Require(decoded[3] == 255 && decoded[2] == 200, "CF_BITMAP alpha repair lost color.");
+        }
+        var data = new DataObject(); data.SetData("PNG", new System.IO.MemoryStream(original));
+        var read = (System.Collections.IList)clipboard.GetMethod("Read", hidden).Invoke(null, new object[] { data });
+        using (var stream = new System.IO.MemoryStream((byte[])read[0]))
+        {
+            var frame = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            byte[] decoded = new byte[4]; bgra.CopyPixels(decoded, 4, 0);
+            Require(decoded[3] == 0, "PNG transparency should be preserved.");
+        }
+        const BindingFlags instance = BindingFlags.Instance | BindingFlags.NonPublic;
+        var language = (ComboBox)Field(writing, "_language");
+        language.SelectedIndex = -1; language.Text = "巴西葡萄牙语";
+        Require((string)writingType.GetMethod("SelectedLanguage", instance).Invoke(writing, null) == "巴西葡萄牙语",
+            "Custom reply language lost.");
+        Require((bool)writingType.GetMethod("SaveConversation", instance).Invoke(writing, null), "Conversation save failed.");
+        Type store = app.GetType("GlobalTranslator.ConversationStore", true);
+        string[] paths = (string[])store.GetMethod("Files", hidden).Invoke(null, null);
+        Require(paths.Length == 1, "Conversation did not persist.");
+        Require(!System.Text.Encoding.UTF8.GetString(System.IO.File.ReadAllBytes(paths[0])).Contains("请确认数量"),
+            "Conversation stored plaintext.");
+        object saved = store.GetMethod("Load", hidden).Invoke(null, new object[] { paths[0] });
+        writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+        Require(((TextBox)Field(writing, "_intent")).Text.Length == 0, "New conversation did not reset editor.");
+        Require(System.IO.File.Exists(paths[0]), "New conversation deleted prior session.");
+        writingType.GetMethod("RestoreConversation", instance).Invoke(writing, new[] { saved });
+        Require(((TextBox)Field(writing, "_intent")).Text == "请确认数量", "Saved material did not restore.");
+        var directoryField = store.GetField("DirectoryPath", hidden);
+        object actualDirectory = directoryField.GetValue(null);
+        directoryField.SetValue(null, paths[0]); // Existing file cannot serve as a directory.
+        try
+        {
+            writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+            Require(((TextBox)Field(writing, "_intent")).Text == "请确认数量", "Failed save discarded material.");
+        }
+        finally { directoryField.SetValue(null, actualDirectory); }
+        Require(((System.Collections.IList)Field(writing, "_images")).Count == 5, "Saved attachments did not restore.");
+        Require((string)writingType.GetMethod("SelectedLanguage", instance).Invoke(writing, null) == "巴西葡萄牙语",
+            "Saved custom language did not restore.");
+        Type search = app.GetType("GlobalTranslator.CommerceSearch", true);
+        var parse = search.GetMethod("ParseNativeResult", hidden);
+        bool rejected = false;
+        try { parse.Invoke(null, new object[] { "{\"content\":[{\"type\":\"text\",\"text\":\"pretend search\"}]}" }); }
+        catch (TargetInvocationException) { rejected = true; }
+        Require(rejected, "Native search accepted ungrounded text as search.");
+        object outcome = parse.Invoke(null, new object[] { "{\"content\":[{\"type\":\"web_search_tool_result\",\"content\":[{\"title\":\"Source\",\"url\":\"https://example.com\"}]},{\"type\":\"text\",\"text\":\"Evidence\"}]}" });
+        Require(outcome.GetType().GetField("Sources").GetValue(outcome).ToString().Contains("https://example.com"), "Native search dropped source.");
+        Console.WriteLine("ASSISTANT_EXPERIENCE clipboard/alpha/sessions/encryption/custom-language/native-search=True");
     }
 
     private static void Require(bool condition, string message)
