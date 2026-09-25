@@ -220,6 +220,10 @@ internal static class PopupInteractionProbe
                 "Popup usable-model menu is missing, unfiltered, or not synchronized.");
             settingsType.GetField("CustomModelBaseUrl")
                 .SetValue(settings, "http://127.0.0.1:11434/v1");
+            settingsType.GetField("ModelVendor")
+                .SetValue(settings, "Custom");
+            settingsType.GetField("CustomModelName")
+                .SetValue(settings, "popup-local-model");
             popupType.GetMethod(
                 "RefreshModelSelector",
                 BindingFlags.Instance | BindingFlags.NonPublic)
@@ -249,366 +253,11 @@ internal static class PopupInteractionProbe
             settingsType.GetField("DeepSeekModelName")
                 .SetValue(settings, "deepseek-v4-flash");
 
-            Type settingsWindowType =
-                app.GetType("GlobalTranslator.SettingsWindow", true);
-            settingsWindow = (Window)Activator.CreateInstance(
-                settingsWindowType,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new[] { settings },
-                null);
-            TabControl tabs = (TabControl)settingsWindowType
-                .GetField("_tabs", BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(tabs.Items.Count == 5,
-                "Translation, OCR, shortcut or general settings tab is missing.");
-            Require(tabs.TabStripPlacement == Dock.Left,
-                "Settings navigation is not placed on the left.");
-            TabItem translationTab =
-                (TabItem)tabs.Items[0];
-            Require(
-                translationTab.Content is ScrollViewer,
-                "Translation settings must scroll when the window is short.");
-            Require(settingsWindow.ResizeMode == ResizeMode.CanResize,
-                "Settings window cannot be resized.");
-            Grid providerPicker = (Grid)settingsWindowType
-                .GetField(
-                    "_providerPickerGrid",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                providerPicker.ColumnDefinitions.Count == 3 &&
-                providerPicker.Children.Count == 3,
-                "Translation engine types are not presented as three top-level choices.");
-            FieldInfo pendingProviderField = settingsWindowType.GetField(
-                "_pendingProvider",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            FieldInfo activeConfigField = settingsWindowType.GetField(
-                "_activeConfigSection",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "ModelApi",
-                "Saved provider was not loaded as the single pending provider.");
-            ComboBox targetLanguage = (ComboBox)settingsWindowType
-                .GetField(
-                    "_language",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                targetLanguage.SelectedIndex == 0,
-                "Smart target is not the default target mode.");
-            Button officialConfigButton = (Button)settingsWindowType
-                .GetField(
-                    "_officialConfigButton",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            officialConfigButton.RaiseEvent(
-                new RoutedEventArgs(Button.ClickEvent));
-            Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "ModelApi" &&
-                (string)activeConfigField.GetValue(settingsWindow) ==
-                    "Official",
-                "Browsing a configuration section changed the pending provider.");
-            Button googleOfficial = (Button)settingsWindowType
-                .GetField(
-                    "_googleOfficial",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            googleOfficial.RaiseEvent(
-                new RoutedEventArgs(Button.ClickEvent));
-            Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "ModelApi",
-                "Browsing Google Cloud changed the pending provider.");
-            PasswordBox googleKey = (PasswordBox)
-                settingsWindowType.GetField(
-                    "_googleKey",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            googleKey.Password = "probe-google-key";
-            Button activateProvider = (Button)settingsWindowType
-                .GetField(
-                    "_activateProviderButton",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(activateProvider.IsEnabled,
-                "Configured Google Cloud service cannot be activated.");
-            activateProvider.RaiseEvent(
-                new RoutedEventArgs(Button.ClickEvent));
-            Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "Google",
-                "Explicit set-current action did not update the pending provider.");
-            settingsWindowType.GetMethod("ShowModelSettings")
-                .Invoke(settingsWindow, null);
-            Require(tabs.SelectedIndex == 1,
-                "Model settings shortcut did not select the AI model tab.");
-            Require(
-                (string)pendingProviderField.GetValue(settingsWindow) ==
-                    "Google",
-                "Model settings shortcut changed the pending provider.");
-            var browseButtons =
-                (System.Collections.IDictionary)
-                settingsWindowType.GetField(
-                    "_providerBrowseButtons",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            ComboBox aiVendors = (ComboBox)settingsWindowType
-                .GetField("_modelVendor", BindingFlags.Instance |
-                    BindingFlags.NonPublic).GetValue(settingsWindow);
-            Require(aiVendors.Items.Count == 4,
-                "AI model tab does not expose four provider choices.");
-            TextBlock headerEngine = (TextBlock)
-                settingsWindowType.GetField(
-                    "_headerCurrentEngine",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(!string.IsNullOrWhiteSpace(headerEngine.Text),
-                "Current engine summary is empty.");
-            TextBox translateHotkey = (TextBox)settingsWindowType
-                .GetField(
-                    "_translateHotkey",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBox ocrHotkey = (TextBox)settingsWindowType
-                .GetField(
-                    "_ocrHotkey",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBox settingsHotkey = (TextBox)settingsWindowType
-                .GetField(
-                    "_settingsHotkey",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                !string.IsNullOrWhiteSpace(translateHotkey.Text) &&
-                !string.IsNullOrWhiteSpace(ocrHotkey.Text) &&
-                !string.IsNullOrWhiteSpace(settingsHotkey.Text),
-                "One or more hotkey recorders are empty.");
-            TextBox writingHotkey = (TextBox)settingsWindowType.GetField("_writingHotkey", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(settingsWindow);
-            Require(writingHotkey != null && writingHotkey.Text == "F7", "Writing hotkey default was not loaded.");
-            var validateKeys = settingsWindowType.GetMethod("ValidateHotkeys", BindingFlags.Instance | BindingFlags.NonPublic);
-            writingHotkey.Text = "Ctrl+Shift+J";
-            Require((bool)validateKeys.Invoke(settingsWindow, new object[] { null, null, null, null }), "Custom writing hotkey failed validation.");
-            writingHotkey.Text = "F7";
-            ComboBox modelVendor = (ComboBox)settingsWindowType
-                .GetField(
-                    "_modelVendor",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(modelVendor.Items.Count >= 4,
-                "AI vendor presets are incomplete.");
-            modelVendor.SelectedIndex = 1;
-            TextBox modelName = (TextBox)settingsWindowType
-                .GetField(
-                    "_modelName",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBox modelBase = (TextBox)settingsWindowType
-                .GetField(
-                    "_modelBaseUrl",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            PasswordBox modelApiKey = (PasswordBox)
-                settingsWindowType.GetField(
-                    "_modelApiKey",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            ComboBox modelProtocol = (ComboBox)
-                settingsWindowType.GetField(
-                    "_modelProtocol",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBlock modelEndpointHint = (TextBlock)
-                settingsWindowType.GetField(
-                    "_modelEndpointHint",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                modelProtocol != null && modelProtocol.Items.Count == 2 &&
-                modelProtocol.SelectedIndex == 0 &&
-                modelEndpointHint != null &&
-                modelEndpointHint.Text.IndexOf(
-                    "/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0,
-                "OpenAI protocol is not the default model configuration.");
-            Require(
-                modelBase.Text == "https://api.deepseek.com" &&
-                modelName.Text == "deepseek-v4-flash",
-                "DeepSeek vendor preset did not populate defaults.");
-            modelProtocol.SelectedIndex = 1;
-            Require(
-                modelBase.Text == "https://api.deepseek.com/anthropic" &&
-                modelEndpointHint.Text.IndexOf(
-                    "/v1/messages", StringComparison.OrdinalIgnoreCase) >= 0,
-                "Anthropic protocol did not update the DeepSeek endpoint hint.");
-            modelProtocol.SelectedIndex = 0;
-            Require(
-                modelBase.Text == "https://api.deepseek.com" &&
-                modelEndpointHint.Text.IndexOf(
-                    "/chat/completions", StringComparison.OrdinalIgnoreCase) >= 0,
-                "Switching back to OpenAI did not restore the default endpoint.");
-            modelApiKey.Password = "deepseek-secret";
-            modelVendor.SelectedIndex = 2;
-            Require(
-                modelBase.Text ==
-                    "https://api.xiaomimimo.com/v1" &&
-                modelName.Text == "mimo-v2.5" &&
-                modelApiKey.Password == "",
-                "MiMo vendor preset did not populate defaults.");
-            modelApiKey.Password = "mimo-secret";
-            modelVendor.SelectedIndex = 1;
-            Require(
-                modelApiKey.Password == "deepseek-secret",
-                "DeepSeek API key was not restored independently.");
-            modelVendor.SelectedIndex = 2;
-            Require(
-                modelApiKey.Password == "mimo-secret",
-                "MiMo API key was not restored independently.");
-            modelVendor.SelectedIndex = 3;
-            Require(
-                modelBase.Text ==
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1" &&
-                modelName.Text == "qwen-plus" &&
-                modelApiKey.Password == "",
-                "Qwen vendor preset did not populate defaults.");
-            settingsWindowType.GetMethod(
-                "LoadValues",
-                BindingFlags.Instance | BindingFlags.NonPublic)
-                .Invoke(settingsWindow, null);
-            CheckBox aiOcr = (CheckBox)settingsWindowType
-                .GetField("_ocrAiFallback", BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBlock visionModel = (TextBlock)settingsWindowType
-                .GetField("_ocrModelSummary", BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(aiOcr != null && aiOcr.IsChecked == true,
-                "AI screenshot recognition is not enabled by default.");
-            Require(visionModel != null &&
-                    visionModel.Text.Contains("当前 AI"),
-                "Current AI model summary is missing.");
-            Button copyDiagnostics = (Button)settingsWindowType
-                .GetField(
-                    "_copyDiagnostics",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Button openDiagnosticFolder = (Button)settingsWindowType
-                .GetField(
-                    "_openDiagnosticFolder",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Type diagnosticType = app.GetType(
-                "GlobalTranslator.DiagnosticLog", true);
-            string supportSummary = (string)diagnosticType
-                .GetMethod(
-                    "BuildSupportSummary",
-                    BindingFlags.Static | BindingFlags.NonPublic)
-                .Invoke(null, null);
-            Require(
-                copyDiagnostics != null &&
-                string.Equals(
-                    copyDiagnostics.Content as string,
-                    "复制诊断信息") &&
-                openDiagnosticFolder != null &&
-                string.Equals(
-                    openDiagnosticFolder.Content as string,
-                    "打开日志目录") &&
-                supportSummary.IndexOf(
-                    (string)app.GetType("GlobalTranslator.VersionInfo", true)
-                        .GetField("SemanticVersion", BindingFlags.Static |
-                            BindingFlags.Public | BindingFlags.NonPublic)
-                        .GetRawConstantValue(), StringComparison.Ordinal) >= 0 &&
-                supportSummary.IndexOf(
-                    "CLR:", StringComparison.Ordinal) >= 0 &&
-                supportSummary.IndexOf(
-                    "deepseek-secret", StringComparison.Ordinal) < 0 &&
-                supportSummary.IndexOf(
-                    "mimo-secret", StringComparison.Ordinal) < 0,
-                "Support diagnostics are missing, incomplete, or expose a configured key.");
-            Button cancelSettings = (Button)settingsWindowType
-                .GetField(
-                    "_cancelSettings",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                string.Equals(cancelSettings.Content as string, "取消"),
-                "Settings cancel button is missing.");
-            Button checkUpdate = (Button)settingsWindowType
-                .GetField(
-                    "_checkUpdate",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            TextBlock updateStatus = (TextBlock)settingsWindowType
-                .GetField(
-                    "_updateStatus",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            Require(
-                checkUpdate != null &&
-                string.Equals(
-                    checkUpdate.Content as string,
-                    "检查更新") &&
-                updateStatus != null,
-                "General settings update controls are missing.");
-            TextBox modelBaseUrl = (TextBox)settingsWindowType
-                .GetField(
-                    "_modelBaseUrl",
-                    BindingFlags.Instance | BindingFlags.NonPublic)
-                .GetValue(settingsWindow);
-            string savedModelBaseUrl = modelBaseUrl.Text;
-            modelBaseUrl.Text = "unsaved-probe-value";
-            settingsWindow.Show();
-            tabs.SelectedIndex = 1;
-            settingsWindow.Height = 480;
-            settingsWindow.UpdateLayout();
-            SaveWindowPreview(settingsWindow,
-                "tmp/tests/model-settings-preview.png", 96);
-            var settingsScroll = (ScrollViewer)((TabItem)tabs.Items[1]).Content;
-            Require(settingsScroll.ScrollableHeight > 0,
-                "Short settings window does not expose overflowing model fields through scrolling.");
-            settingsScroll.ScrollToBottom();
-            settingsWindow.UpdateLayout();
-            var keyInput = (PasswordBox)Field(settingsWindow, "_modelApiKey");
-            keyInput.Password = "probe-api-key";
-            Grid keyHost = keyInput.Parent as Grid;
-            Button revealKey = null;
-            TextBox revealedKey = null;
-            foreach (UIElement child in keyHost.Children)
-            {
-                var button = child as Button;
-                if (button != null) revealKey = button;
-                var textBox = child as TextBox;
-                if (textBox != null) revealedKey = textBox;
-            }
-            Require(revealKey != null && revealedKey != null,
-                "API Key visibility toggle is missing.");
-            revealKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            Require(revealedKey.Visibility == Visibility.Visible &&
-                revealedKey.Text == "probe-api-key" &&
-                (string)revealKey.ToolTip == "隐藏 API Key",
-                "API Key reveal button did not show the complete value.");
-            revealKey.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-            Require(revealedKey.Visibility == Visibility.Collapsed &&
-                (string)revealKey.ToolTip == "显示完整 API Key",
-                "API Key reveal button did not restore password masking.");
-            keyInput.BringIntoView();
-            settingsWindow.UpdateLayout();
-            Rect keyBounds = keyInput.TransformToAncestor(settingsScroll)
-                .TransformBounds(new Rect(keyInput.RenderSize));
-            Require(keyBounds.Top >= 0 && keyBounds.Bottom <= settingsScroll.ActualHeight + 1,
-                "API Key input is not fully reachable at the bottom of the settings scroll view.");
-            Rect cancelBounds = cancelSettings.TransformToAncestor(settingsWindow)
-                .TransformBounds(new Rect(cancelSettings.RenderSize));
-            Require(cancelBounds.Bottom <= settingsWindow.ActualHeight,
-                "Settings footer is outside the resized window.");
-            settingsWindow.Height = 820;
-            cancelSettings.RaiseEvent(
-                new RoutedEventArgs(Button.ClickEvent));
-            Require(!settingsWindow.IsVisible,
-                "Settings cancel button did not hide the window.");
-            Require(modelBaseUrl.Text == savedModelBaseUrl,
-                "Settings cancel button did not discard unsaved changes.");
+            object settingsForSettingsWindow = settingsType.GetMethod("Copy")
+                .Invoke(settings, null);
+            settingsType.GetField("ModelVendor")
+                .SetValue(settingsForSettingsWindow, "DeepSeek");
+            TestModernSettingsWindow(app, settingsForSettingsWindow);
 
             popup.Left = 120;
             popup.Top = 120;
@@ -741,8 +390,16 @@ internal static class PopupInteractionProbe
             }
             if (args.Length >= 4)
             {
+                Type settingsWindowType = app.GetType(
+                    "GlobalTranslator.SettingsWindow", true);
+                settingsWindow = (Window)Activator.CreateInstance(
+                    settingsWindowType,
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null,
+                    new[] { settings },
+                    null);
                 settingsWindow.Show();
-                tabs.SelectedIndex = 0;
+                Invoke(settingsWindow, "ShowModelSettings");
                 settingsWindow.Width = 760;
                 settingsWindow.Height = 820;
                 settingsWindow.UpdateLayout();
@@ -791,6 +448,130 @@ internal static class PopupInteractionProbe
             if (settingsWindow != null) settingsWindow.Hide();
             if (popup != null) popup.Close();
         }
+    }
+
+    private static void TestModernSettingsWindow(Assembly app, object settings)
+    {
+        Type type = app.GetType("GlobalTranslator.SettingsWindow", true);
+        Window window = (Window)Activator.CreateInstance(type,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            null, new[] { settings }, null);
+        try
+        {
+            Require(window.ResizeMode == ResizeMode.CanResize &&
+                Math.Abs(window.Width - 960) < 1 && Math.Abs(window.Height - 720) < 1,
+                "Modern settings default size or resize behavior is incorrect.");
+            StackPanel navigation = (StackPanel)Field(window, "_navigation");
+            Require(navigation.Children.Count == 4,
+                "Settings navigation must contain AI model, assistant preference, shortcuts, and general.");
+            Require((string)Field(window, "_selectedPage") == "Model",
+                "Settings do not open on the AI model page.");
+            ComboBox target = (ComboBox)Field(window, "_language");
+            Require(target.SelectedIndex == 0,
+                "Smart translation target is not the default.");
+            ComboBox vendors = (ComboBox)Field(window, "_modelVendor");
+            Require(vendors.Items.Count == 4,
+                "Four independent AI provider profiles are missing.");
+            var vendorButtons =
+                (System.Collections.Generic.Dictionary<string, Button>)Field(window, "_vendorButtons");
+            Require(vendorButtons.Count == 4,
+                "Visible segmented provider selector is incomplete.");
+            Require((string)Field(window, "_pendingModelVendor") == "DeepSeek",
+                "Current AI profile was not loaded.");
+
+            TextBox modelName = (TextBox)Field(window, "_modelName");
+            TextBox baseUrl = (TextBox)Field(window, "_modelBaseUrl");
+            PasswordBox apiKey = (PasswordBox)Field(window, "_modelApiKey");
+            string savedModelName = modelName.Text;
+            string savedModelKey = apiKey.Password;
+            Require(modelName.Text == "deepseek-v4-flash" &&
+                baseUrl.Text == "https://api.deepseek.com",
+                "Saved DeepSeek profile was not loaded into the draft.");
+            apiKey.Password = "probe-deepseek-key";
+            vendorButtons["MiMo"].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(baseUrl.Text == "https://api.xiaomimimo.com/v1" &&
+                modelName.Text.Length == 0 && apiKey.Password.Length == 0,
+                "MiMo draft did not remain independent from DeepSeek.");
+            modelName.Text = "mimo-probe";
+            apiKey.Password = "probe-mimo-key";
+            vendorButtons["Qwen"].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(baseUrl.Text == "https://dashscope.aliyuncs.com/compatible-mode/v1" &&
+                apiKey.Password.Length == 0,
+                "Qwen default connection profile was not isolated.");
+            vendorButtons["DeepSeek"].RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(apiKey.Password == "probe-deepseek-key",
+                "Switching provider overwrote the independent DeepSeek draft.");
+
+            Button cancel = (Button)Field(window, "_cancelSettings");
+            Button checkUpdate = (Button)Field(window, "_checkUpdate");
+            Require((string)cancel.Content == "取消" &&
+                (string)checkUpdate.Content == "检查更新" &&
+                Field(window, "_updateStatus") != null,
+                "Fixed footer, update controls, or cancel action is missing.");
+            window.Show();
+            window.UpdateLayout();
+            SaveWindowPreview(window, "tmp/tests/settings-ai-100.png", 96);
+            SaveWindowPreview(window, "tmp/tests/settings-ai-150.png", 144);
+            SaveWindowPreview(window, "tmp/tests/settings-ai-200.png", 192);
+            window.Height = 560;
+            window.UpdateLayout();
+            Rect cancelBounds = cancel.TransformToAncestor(window)
+                .TransformBounds(new Rect(cancel.RenderSize));
+            Require(cancelBounds.Bottom <= window.ActualHeight + 1,
+                "Settings footer is not visible at the minimum window height.");
+
+            window.Height = 720;
+            window.UpdateLayout();
+            Invoke(window, "ShowOcrSettings");
+            Require((string)Field(window, "_selectedPage") == "Assistant",
+                "OCR guidance did not navigate to assistant preferences.");
+            window.UpdateLayout();
+            Grid contentHost = (Grid)Field(window, "_contentHost");
+            bool assistantVisible = false;
+            foreach (UIElement child in contentHost.Children)
+            {
+                FrameworkElement page = child as FrameworkElement;
+                if (page != null && (string)page.Tag == "Assistant" &&
+                    page.Visibility == Visibility.Visible) assistantVisible = true;
+            }
+            Require(assistantVisible, "Assistant page content did not become visible.");
+            Rect assistantCancelBounds = cancel.TransformToAncestor(window)
+                .TransformBounds(new Rect(cancel.RenderSize));
+            Button save = (Button)Field(window, "_saveButton");
+            Rect assistantSaveBounds = save.TransformToAncestor(window)
+                .TransformBounds(new Rect(save.RenderSize));
+            Require(cancel.IsVisible && save.IsVisible &&
+                assistantCancelBounds.Bottom <= window.ActualHeight + 1 &&
+                assistantSaveBounds.Bottom <= window.ActualHeight + 1 &&
+                assistantCancelBounds.Height >= 38 && assistantSaveBounds.Height >= 38,
+                "Fixed settings actions disappeared or were clipped after navigating to assistant preferences.");
+            SaveWindowPreview(window, "tmp/tests/settings-assistant-100.png", 96);
+            Invoke(window, "ShowModelSettings");
+            Require((string)Field(window, "_selectedPage") == "Model",
+                "Model settings shortcut did not navigate to AI model page.");
+
+            TextBox writing = (TextBox)Field(window, "_writingHotkey");
+            Require(writing.Text == "F7", "Writing shortcut default was not loaded.");
+            MethodInfo validate = type.GetMethod("ValidateHotkeys",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            writing.Text = "Ctrl+Shift+J";
+            Require((bool)validate.Invoke(window,
+                new object[] { null, null, null, null }),
+                "Custom writing shortcut failed validation.");
+            cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Require(!window.IsVisible && modelName.Text == savedModelName &&
+                apiKey.Password == savedModelKey && writing.Text == "F7" &&
+                (string)Field(window, "_pendingModelVendor") == "DeepSeek",
+                "Cancel did not discard model/profile and shortcut drafts.");
+            object fresh = Activator.CreateInstance(
+                app.GetType("GlobalTranslator.AppSettings", true), true);
+            Require((string)fresh.GetType().GetField("ModelVendor").GetValue(fresh) == "DeepSeek" &&
+                (string)fresh.GetType().GetField("DeepSeekModelName").GetValue(fresh) == "",
+                "A new profile must open on DeepSeek without an unverified example model.");
+            Require(type.GetField("_googleKey", BindingFlags.Instance | BindingFlags.NonPublic) == null,
+                "Removed Google/Microsoft provider form fields are still present.");
+        }
+        finally { window.Hide(); }
     }
 
     private static void SaveWindowPreview(
@@ -871,6 +652,7 @@ internal static class PopupInteractionProbe
             settings.GetType().GetField("Provider").SetValue(settings, "ModelApi");
             settings.GetType().GetField("ModelVendor").SetValue(settings, "DeepSeek");
             settings.GetType().GetField("DeepSeekModelApiKey").SetValue(settings, "test-only-no-request");
+            settings.GetType().GetField("DeepSeekModelName").SetValue(settings, "reading-probe-model");
             Invoke(window, "RefreshModelSelector", settings);
             Invoke(window, "SetPinned", true);
             Invoke(window, "SetOcrDirty", true);
@@ -1010,9 +792,15 @@ internal static class PopupInteractionProbe
             try
             {
                 settings.GetType().GetField("Provider").SetValue(settings, "Microsoft");
+                settings.GetType().GetField("DeepSeekModelBaseUrl").SetValue(settings, "not-a-valid-endpoint");
                 object bounds = Activator.CreateInstance(app.GetType("GlobalTranslator.NativeMethods+RECT"), true);
                 Invoke(window, "SetOcrDirty", true);
                 Invoke(window, "BeginTranslation", "edited words", 100, 100, bounds, settings, client, true, "", false);
+                var errorFrame = new System.Windows.Threading.DispatcherFrame();
+                var errorTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
+                errorTimer.Tick += delegate { errorTimer.Stop(); errorFrame.Continue = false; };
+                errorTimer.Start();
+                System.Windows.Threading.Dispatcher.PushFrame(errorFrame);
                 Require((bool)Field(window, "_editProtected"), "Failed retranslation cleared edit protection.");
                 Require(((StackPanel)Field(window, "_errorPanel")).Visibility == Visibility.Visible, "Missing key did not enter an error state.");
                 SetField(window, "_translatedText", "partial translation");

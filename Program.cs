@@ -366,14 +366,11 @@ namespace GlobalTranslator
 
         private bool HasConfiguredProvider()
         {
-            if (_settings.Provider == "GoogleFree" || _settings.Provider == "MicrosoftFree") return true;
-            if (_settings.Provider == "ModelApi")
-                return _settings.GetModelConnection(
-                    _settings.ModelVendor).IsUsable(
-                        _settings.ModelVendor);
-            return _settings.Provider == "Google"
-                ? !string.IsNullOrWhiteSpace(_settings.GoogleApiKey)
-                : !string.IsNullOrWhiteSpace(_settings.MicrosoftApiKey);
+            ModelConnectionSettings connection =
+                _settings.GetModelConnection(_settings.ModelVendor);
+            return string.Equals(_settings.Provider, "ModelApi",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   connection.IsUsable(_settings.ModelVendor);
         }
 
         private void CreateMessageWindow()
@@ -791,7 +788,7 @@ namespace GlobalTranslator
             string target = _settings.GetOcrConsentTarget();
             if (_settings.OcrAiConsentGranted &&
                 string.Equals(_settings.OcrConsentTarget, target,
-                    StringComparison.Ordinal))
+                    StringComparison.OrdinalIgnoreCase))
                 return;
             MessageBoxResult consent = System.Windows.MessageBox.Show(
                 "截图将发送到 " + _settings.ModelVendor +

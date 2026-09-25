@@ -3,151 +3,128 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
+using System.Windows.Threading;
 using ShapePath = System.Windows.Shapes.Path;
 
 namespace GlobalTranslator
 {
     internal sealed class SettingsWindow : Window
     {
-        private static readonly Brush Navy = Brush("#0B2942");
-        private static readonly Brush Ocean = Brush("#087EA4");
-        private static readonly Brush Muted = Brush("#65798B");
-        private static readonly Brush Line = Brush("#DCE9EF");
-        private static readonly Brush Page = Brush("#F2F7FA");
+        private static readonly Brush Ink = Brush("#17324A");
+        private static readonly Brush Subtle = Brush("#647B8D");
+        private static readonly Brush Accent = Brush("#1682A6");
+        private static readonly Brush BorderLine = Brush("#D9E7EF");
+        private static readonly Brush Canvas = Brush("#F6FAFC");
+        private static readonly Brush Surface = Brush("#FFFFFF");
+        private static readonly string[] LanguageCodes =
+            { "zh-Hans", "zh-Hant", "en", "ja", "ko", "fr", "de", "es" };
+        private static readonly string[] LanguageNames =
+            { "简体中文", "繁體中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español" };
+        private static readonly int[] UpdateIntervals = { 6, 12, 24, 72, 168, 0 };
 
         private readonly AppSettings _settings;
-        private ComboBox _language;
-        private TextBlock _targetRule;
-        private TabControl _tabs;
-        private Button _googleFree;
-        private Button _microsoftFree;
-        private Button _microsoftOfficial;
-        private Button _googleOfficial;
-        private Button _modelApi;
-        private PasswordBox _googleKey;
-        private PasswordBox _microsoftKey;
-        private TextBox _region;
-        private TextBox _modelBaseUrl;
-        private PasswordBox _modelApiKey;
+        private AppSettings _draft;
+        private readonly Dictionary<string, ModelConnectionSettings> _modelDrafts =
+            new Dictionary<string, ModelConnectionSettings>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Button> _navigationButtons =
+            new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Button> _vendorButtons =
+            new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<PasswordBox, TextBox> _revealedKeys =
             new Dictionary<PasswordBox, TextBox>();
-        private TextBox _modelName;
-        private ComboBox _modelVendor;
-        private ComboBox _modelProtocol;
-        private TextBlock _modelEndpointHint;
-        private CheckBox _ocrAiFallback;
-        private Button _copyDiagnostics;
-        private Button _openDiagnosticFolder;
-        private Button _checkUpdate;
-        private TextBlock _updateStatus;
-        private TextBlock _ocrModelSummary;
-        private TextBlock _aiModelSelectionStatus;
-        private UIElement _modelConfigurationPanel;
-        private CheckBox _commerceSearchEnabled;
-        private PasswordBox _commerceSearchKey;
+        private readonly Dictionary<string, string> _pageTitles =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private readonly DispatcherTimer _balanceTimer =
+            new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+
+        private Grid _contentHost;
+        private StackPanel _navigation;
+        private TextBlock _pageTitle;
+        private TextBlock _headerCurrentEngine;
+        private TextBlock _dirtyText;
+        private Button _saveButton;
         private Button _cancelSettings;
-        private TextBox _translateHotkey;
-        private TextBox _writingHotkey;
-        private TextBox _ocrHotkey;
-        private TextBox _settingsHotkey;
-        private CheckBox _startWithWindows;
-        private ComboBox _popupFontSize;
-        private ComboBox _updateInterval;
-        private TextBlock _balanceText;
-        private Button _refreshBalance;
-        private readonly System.Windows.Threading.DispatcherTimer _balanceTimer =
-            new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
-        private System.Threading.CancellationTokenSource _balanceRequest;
+        private string _selectedPage = "Model";
+        private string _pendingModelVendor = "DeepSeek";
+        private string _activeModelVendor = "DeepSeek";
+        private bool _loadingValues;
+        private bool _isDirty;
+        private bool _reloadOnShow;
+        private int _testGeneration;
+        private CancellationTokenSource _modelTestCancellation;
+        private CancellationTokenSource _balanceRequest;
         private string _balanceIdentity = "";
         private string _balanceValue;
         private DateTime _balanceUpdated;
-        private static readonly int[] UpdateIntervals = { 6, 12, 24, 72, 168, 0 };
-        private bool _loadingValues;
-        private string _pendingProvider = "GoogleFree";
-        private string _pendingModelVendor = "Custom";
-        private string _browsedProvider = "GoogleFree";
-        private string _activeConfigSection = "Free";
-        private Grid _providerPickerGrid;
-        private ContentControl _providerConfigHost;
-        private TextBlock _providerConfigTitle;
-        private TextBlock _providerConfigState;
-        private Button _activateProviderButton;
-        private TextBlock _headerCurrentEngine;
-        private Button _freeConfigButton;
-        private Button _officialConfigButton;
-        private Button _modelConfigButton;
-        private readonly Dictionary<string, Button>
-            _providerBrowseButtons =
-                new Dictionary<string, Button>(
-                    StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, UIElement>
-            _providerConfigViews =
-                new Dictionary<string, UIElement>(
-                    StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, ModelConnectionSettings>
-            _modelDrafts =
-                new Dictionary<string, ModelConnectionSettings>(
-                    StringComparer.OrdinalIgnoreCase);
-        private string _activeModelVendor = "";
-        private string _currentModelProtocol = ModelApiProtocols.OpenAI;
+
+        private ComboBox _language;
+        private TextBlock _targetRule;
+        private TextBlock _modelSavedSummary;
+        private ComboBox _modelVendor;
+        private TextBox _modelBaseUrl;
+        private PasswordBox _modelApiKey;
+        private TextBox _modelName;
+        private ComboBox _modelProtocol;
+        private TextBlock _modelEndpointHint;
+        private Expander _connectionExpander;
+        private TextBlock _modelTestStatus;
+        private Button _testTextButton;
+        private Button _testImageButton;
+        private TextBlock _balanceText;
+        private Button _refreshBalance;
+        private CheckBox _ocrAiFallback;
+        private CheckBox _ocrConsentAllowed;
+        private TextBlock _ocrConsentStatus;
+        private ComboBox _popupFontSize;
+        private CheckBox _commerceSearchEnabled;
+        private PasswordBox _commerceSearchKey;
+        private TextBlock _searchStatus;
+        private TextBox _writingHotkey;
+        private TextBox _translateHotkey;
+        private TextBox _ocrHotkey;
+        private TextBox _settingsHotkey;
+        private CheckBox _startWithWindows;
+        private ComboBox _updateInterval;
+        private Button _checkUpdate;
+        private TextBlock _updateStatus;
+        private Button _copyDiagnostics;
+        private Button _openDiagnosticFolder;
 
         public event EventHandler SettingsSaved;
         public event EventHandler UpdateCheckRequested;
 
         public SettingsWindow(AppSettings settings)
         {
+            if (settings == null) throw new ArgumentNullException("settings");
             _settings = settings;
             Title = "鲨译 Sharkey · 设置";
-            Width = 760;
-            Height = Math.Min(820, SystemParameters.WorkArea.Height);
+            Width = 960;
+            Height = 720;
             MinWidth = 760;
-            MinHeight = 480;
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            MinHeight = 560;
             ResizeMode = ResizeMode.CanResize;
-            Background = Page;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : Canvas;
             FontFamily = new FontFamily("Microsoft YaHei UI");
+            FontSize = 14;
             KeyDown += SettingsWindowKeyDown;
-
-            var layout = new Grid();
-            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            Content = layout;
-
-            Border header = BuildHeader();
-            Grid.SetRow(header, 0);
-            layout.Children.Add(header);
-
-            _tabs = BuildProviderTabs();
-            Grid.SetRow(_tabs, 1);
-            layout.Children.Add(_tabs);
-
-            Border footer = BuildFooter();
-            Grid.SetRow(footer, 2);
-            layout.Children.Add(footer);
-
-            LoadValues();
+            IsVisibleChanged += SettingsVisibilityChanged;
             _balanceTimer.Tick += async delegate { await RefreshBalanceAsync(); };
-            IsVisibleChanged += async delegate
-            {
-                if (IsVisible)
-                {
-                    _balanceTimer.Start();
-                    await RefreshBalanceAsync();
-                }
-                else
-                {
-                    _balanceTimer.Stop();
-                    if (_balanceRequest != null) _balanceRequest.Cancel();
-                    _balanceRequest = null;
-                }
-            };
+
+            BuildWindow();
+            LoadValues();
+            ClampToWorkArea();
         }
 
         protected override void OnClosing(CancelEventArgs e)
@@ -160,956 +137,1000 @@ namespace GlobalTranslator
         protected override void OnActivated(EventArgs e)
         {
             base.OnActivated(e);
-            if (_startWithWindows != null && !_loadingValues)
-                _startWithWindows.IsChecked =
-                    StartupManager.IsEnabled();
+            if (!_loadingValues && _startWithWindows != null)
+                _startWithWindows.IsChecked = StartupManager.IsEnabled();
         }
 
         public void RefreshStartupState()
         {
             if (_startWithWindows != null)
-                _startWithWindows.IsChecked =
-                    StartupManager.IsEnabled();
+                _startWithWindows.IsChecked = StartupManager.IsEnabled();
         }
 
         public void ShowOcrSettings()
         {
-            _tabs.SelectedIndex = 1;
+            Navigate("Assistant");
             if (_ocrAiFallback != null) _ocrAiFallback.Focus();
         }
 
         public void ShowModelSettings()
         {
-            _tabs.SelectedIndex = 1;
-            if (_modelBaseUrl != null) _modelBaseUrl.Focus();
+            Navigate("Model");
+            if (_modelApiKey != null && string.IsNullOrWhiteSpace(_modelApiKey.Password))
+                _modelApiKey.Focus();
+            else if (_modelName != null)
+                _modelName.Focus();
         }
 
-        private Border BuildHeader()
+        public void SetUpdateStatus(string status, bool checkEnabled)
+        {
+            if (_updateStatus != null) _updateStatus.Text = status ?? "";
+            if (_checkUpdate != null) _checkUpdate.IsEnabled = checkEnabled;
+        }
+
+        private void BuildWindow()
+        {
+            var shell = new Grid();
+            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+            shell.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Content = shell;
+
+            Border sidebar = BuildSidebar();
+            Grid.SetColumn(sidebar, 0);
+            shell.Children.Add(sidebar);
+
+            var main = new Grid();
+            main.RowDefinitions.Add(new RowDefinition { Height = new GridLength(70) });
+            main.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetColumn(main, 1);
+            shell.Children.Add(main);
+
+            Border header = BuildMainHeader();
+            Grid.SetRow(header, 0);
+            main.Children.Add(header);
+
+            _contentHost = new Grid { Margin = new Thickness(26, 10, 26, 14) };
+            Grid.SetRow(_contentHost, 1);
+            main.Children.Add(_contentHost);
+
+            Border footer = BuildFooter();
+            Grid.SetRow(footer, 2);
+            main.Children.Add(footer);
+
+            RegisterPage("Model", "AI 模型", BuildModelPage());
+            RegisterPage("Assistant", "助手偏好", BuildAssistantPage());
+            RegisterPage("Shortcuts", "快捷键", BuildShortcutPage());
+            RegisterPage("General", "通用", BuildGeneralPage());
+            Navigate(_selectedPage);
+        }
+
+        private Border BuildSidebar()
+        {
+            var sidebar = new Border
+            {
+                Background = SystemParameters.HighContrast
+                    ? (Brush)SystemColors.ControlBrush
+                    : new LinearGradientBrush(
+                        Color.FromRgb(224, 242, 250),
+                        Color.FromRgb(240, 248, 252), 90),
+                BorderBrush = BorderLine,
+                BorderThickness = new Thickness(0, 0, 1, 0)
+            };
+            var layout = new Grid();
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            layout.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            sidebar.Child = layout;
+
+            var brand = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(22, 26, 14, 24),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            try
+            {
+                brand.Children.Add(new Image
+                {
+                    Source = new BitmapImage(new Uri(
+                        "pack://application:,,,/Sharkey;component/assets/shark-logo.png")),
+                    Width = 44, Height = 44, Stretch = Stretch.Uniform,
+                    Margin = new Thickness(0, 0, 11, 0)
+                });
+            }
+            catch { }
+            var brandText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            brandText.Children.Add(new TextBlock
+            {
+                Text = "Sharkey", FontSize = 19, FontWeight = FontWeights.SemiBold,
+                Foreground = Ink
+            });
+            brandText.Children.Add(new TextBlock
+            {
+                Text = "鲨译", FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(1, 1, 0, 0)
+            });
+            brand.Children.Add(brandText);
+            Grid.SetRow(brand, 0);
+            layout.Children.Add(brand);
+
+            _navigation = new StackPanel { Margin = new Thickness(13, 0, 13, 8) };
+            AddNavigation("Model", "✦", "AI 模型");
+            AddNavigation("Assistant", "◈", "助手偏好");
+            AddNavigation("Shortcuts", "⌨", "快捷键");
+            AddNavigation("General", "⚙", "通用");
+            Grid.SetRow(_navigation, 1);
+            layout.Children.Add(_navigation);
+
+            var version = new TextBlock
+            {
+                Text = VersionInfo.SemanticVersion,
+                Foreground = Subtle,
+                FontSize = 12,
+                Margin = new Thickness(24, 12, 18, 22),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetRow(version, 2);
+            layout.Children.Add(version);
+            return sidebar;
+        }
+
+        private void AddNavigation(string code, string glyph, string title)
+        {
+            var content = new Grid();
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            content.Children.Add(new TextBlock
+            {
+                Text = glyph, FontFamily = new FontFamily("Segoe UI Symbol"),
+                FontSize = 17, Foreground = Accent,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            });
+            var label = new TextBlock
+            {
+                Text = title, FontSize = 14, Foreground = Ink,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(label, 1);
+            content.Children.Add(label);
+            var button = new Button
+            {
+                Content = content, Tag = code, Height = 48,
+                Margin = new Thickness(0, 3, 0, 5), Padding = new Thickness(10, 5, 10, 5),
+                BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent,
+                Background = Brushes.Transparent, HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                Cursor = Cursors.Hand, ToolTip = title
+            };
+            ApplyButtonTemplate(button, 11);
+            button.Click += delegate { Navigate(code); };
+            _navigationButtons[code] = button;
+            _navigation.Children.Add(button);
+        }
+
+        private Border BuildMainHeader()
         {
             var header = new Border
             {
-                Margin = new Thickness(18, 16, 18, 10),
-                CornerRadius = new CornerRadius(16),
-                Padding = new Thickness(18, 12, 18, 12),
-                Background = new LinearGradientBrush(
-                    Color.FromRgb(8, 42, 67), Color.FromRgb(7, 122, 155), 15)
+                Background = Surface,
+                BorderBrush = BorderLine,
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                Padding = new Thickness(28, 12, 28, 11)
             };
             var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             header.Child = grid;
-
-            var logo = new Image
+            var titles = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            _pageTitle = new TextBlock
             {
-                Source = new BitmapImage(new Uri(
-                    "pack://application:,,,/Sharkey;component/assets/shark-logo.png")),
-                Width = 46,
-                Height = 46,
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(1, 0, 13, 0)
+                Text = "AI 模型", FontSize = 22,
+                FontWeight = FontWeights.SemiBold, Foreground = Ink
             };
-            grid.Children.Add(logo);
-
-            var title = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            Grid.SetColumn(title, 1);
-            title.Children.Add(new TextBlock
-            {
-                Text = "鲨译 · Sharkey",
-                FontSize = 21,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Brushes.White
-            });
-            title.Children.Add(new TextBlock
-            {
-                Text = "全局翻译助手",
-                FontSize = 11.5,
-                Foreground = Brush("#BEEBF2"),
-                Margin = new Thickness(1, 2, 0, 0)
-            });
-            grid.Children.Add(title);
-
-            var engine = new StackPanel
-            {
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-            Grid.SetColumn(engine, 2);
-            engine.Children.Add(new TextBlock
-            {
-                Text = "当前翻译引擎",
-                Foreground = Brush("#BEEBF2"),
-                FontSize = 10.5,
-                HorizontalAlignment = HorizontalAlignment.Right
-            });
+            titles.Children.Add(_pageTitle);
             _headerCurrentEngine = new TextBlock
             {
-                Text = "Google 免费",
-                Foreground = Brushes.White,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 2, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Right
+                Text = "", FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(1, 2, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            engine.Children.Add(_headerCurrentEngine);
-            grid.Children.Add(engine);
+            titles.Children.Add(_headerCurrentEngine);
+            grid.Children.Add(titles);
             return header;
         }
 
-        private Border BuildCommonSettings()
+        private Border BuildFooter()
         {
-            var card = Card();
-            card.Padding = new Thickness(16, 13, 16, 13);
-            var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(245) });
-            card.Child = grid;
-
-            var copy = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-            copy.Children.Add(new TextBlock
+            var footer = new Border
             {
-                Text = "翻译目标",
-                FontSize = 13.5,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
-            });
-            _targetRule = new TextBlock
-            {
-                Text = "中文原文 → English · 其他语言 → 简体中文",
-                FontSize = 11,
-                Foreground = Muted,
-                Margin = new Thickness(0, 3, 0, 0)
+                Background = Surface,
+                BorderBrush = BorderLine,
+                BorderThickness = new Thickness(0, 1, 0, 0),
+                Padding = new Thickness(24, 10, 24, 11)
             };
-            copy.Children.Add(_targetRule);
-            grid.Children.Add(copy);
-
-            _language = new ComboBox
+            var dock = new DockPanel();
+            footer.Child = dock;
+            var actions = new StackPanel
             {
-                Height = 38,
-                Padding = new Thickness(9, 6, 9, 6),
-                VerticalContentAlignment = VerticalAlignment.Center,
-                ItemsSource = new[]
-                {
-                    "自动（推荐）",
-                    "简体中文  (zh-Hans)", "繁體中文  (zh-Hant)", "English  (en)",
-                    "日本語  (ja)", "한국어  (ko)", "Français  (fr)",
-                    "Deutsch  (de)", "Español  (es)"
-                }
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
             };
-            _language.SelectionChanged += delegate
+            DockPanel.SetDock(actions, Dock.Right);
+            dock.Children.Add(actions);
+            _cancelSettings = SecondaryButton("取消");
+            _cancelSettings.Width = 86;
+            _cancelSettings.Height = 40;
+            _cancelSettings.Margin = new Thickness(0, 0, 9, 0);
+            _cancelSettings.ToolTip = "放弃未保存的修改";
+            _cancelSettings.Click += delegate { DiscardAndHide(); };
+            actions.Children.Add(_cancelSettings);
+            _saveButton = PrimaryButton("保存并应用");
+            _saveButton.Width = 140;
+            _saveButton.Height = 40;
+            _saveButton.Click += SaveClick;
+            actions.Children.Add(_saveButton);
+            _dirtyText = new TextBlock
             {
-                UpdateTargetRule();
+                Text = "", FontSize = 12, Foreground = Subtle,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            Grid.SetColumn(_language, 1);
-            grid.Children.Add(_language);
-            return card;
+            dock.Children.Add(_dirtyText);
+            return footer;
         }
 
-        private TabControl BuildProviderTabs()
+        private void RegisterPage(string key, string title, UIElement content)
         {
-            var tabs = new TabControl
-            {
-                Margin = new Thickness(18, 0, 18, 10),
-                Background = Brushes.White,
-                BorderBrush = Line,
-                BorderThickness = new Thickness(1),
-                FontSize = 13,
-                TabStripPlacement = Dock.Left,
-                Padding = new Thickness(0)
-            };
-            tabs.Items.Add(Tab("翻译", BuildTranslationTab()));
-            tabs.Items.Add(Tab("AI 模型", BuildModelTab()));
-            tabs.Items.Add(Tab("外贸助手", BuildCommerceTab()));
-            tabs.Items.Add(Tab("快捷键", BuildShortcutTab()));
-            tabs.Items.Add(Tab("常规", BuildGeneralTab()));
-            return tabs;
+            _pageTitles[key] = title;
+            _contentHost.Children.Add(content);
+            content.Visibility = Visibility.Collapsed;
+            FrameworkElement element = content as FrameworkElement;
+            if (element != null) element.Tag = key;
         }
 
-        private UIElement BuildTranslationTab()
+        private void Navigate(string key)
         {
-            var root = new Grid
+            if (_contentHost == null || !_pageTitles.ContainsKey(key)) return;
+            _selectedPage = key;
+            foreach (UIElement child in _contentHost.Children)
             {
-                Margin = new Thickness(22, 18, 18, 18),
-                Background = Brushes.White
-            };
-            root.RowDefinitions.Add(new RowDefinition
-            {
-                Height = GridLength.Auto
-            });
-            root.RowDefinitions.Add(new RowDefinition
-            {
-                Height = GridLength.Auto
-            });
-            root.RowDefinitions.Add(new RowDefinition
-            {
-                Height = GridLength.Auto
-            });
-            root.RowDefinitions.Add(new RowDefinition
-            {
-                Height = new GridLength(1, GridUnitType.Star)
-            });
-
-            StackPanel intro = Intro("翻译", "");
-            Grid.SetRow(intro, 0);
-            root.Children.Add(intro);
-            Border common = BuildCommonSettings();
-            common.Margin = new Thickness(0, 10, 0, 10);
-            Grid.SetRow(common, 1);
-            root.Children.Add(common);
-
-            Border picker = BuildProviderPicker();
-            Grid.SetRow(picker, 2);
-            root.Children.Add(picker);
-
-            Border configuration = BuildProviderConfiguration();
-            configuration.Margin = new Thickness(0, 10, 0, 0);
-            Grid.SetRow(configuration, 3);
-            root.Children.Add(configuration);
-            return Scroll(root);
-        }
-
-        private Border BuildProviderPicker()
-        {
-            var card = new Border
-            {
-                Background = Brushes.Transparent
-            };
-            var content = new StackPanel();
-            content.Children.Add(new TextBlock
-            {
-                Text = "引擎类型",
-                Foreground = Navy,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(1, 0, 0, 7)
-            });
-
-            _providerPickerGrid = new Grid();
-            for (int i = 0; i < 3; i++)
-                _providerPickerGrid.ColumnDefinitions.Add(
-                    new ColumnDefinition
-                    {
-                        Width = new GridLength(
-                            1, GridUnitType.Star)
-                    });
-            _freeConfigButton =
-                ConfigSectionButton("免费", "Free");
-            _officialConfigButton =
-                ConfigSectionButton("官方 API", "Official");
-            _modelConfigButton =
-                ConfigSectionButton("AI 模型", "Model");
-            Button[] buttons =
-            {
-                _freeConfigButton,
-                _officialConfigButton,
-                _modelConfigButton
-            };
-            for (int i = 0; i < buttons.Length; i++)
-            {
-                buttons[i].Margin = new Thickness(
-                    i == 0 ? 0 : 4,
-                    0,
-                    i == buttons.Length - 1 ? 0 : 4,
-                    0);
-                Grid.SetColumn(buttons[i], i);
-                _providerPickerGrid.Children.Add(buttons[i]);
+                FrameworkElement element = child as FrameworkElement;
+                child.Visibility = string.Equals(element == null ? null : element.Tag as string, key,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? Visibility.Visible : Visibility.Collapsed;
             }
-            content.Children.Add(_providerPickerGrid);
-            card.Child = content;
-            return card;
+            if (_pageTitle != null) _pageTitle.Text = _pageTitles[key];
+            foreach (KeyValuePair<string, Button> item in _navigationButtons)
+            {
+                bool selected = string.Equals(item.Key, key,
+                    StringComparison.OrdinalIgnoreCase);
+                item.Value.Background = selected ? Brush("#DDF1FA") : Brushes.Transparent;
+                item.Value.BorderBrush = selected ? Brush("#C7E8F4") : Brushes.Transparent;
+                item.Value.Foreground = selected ? Accent : Ink;
+            }
+            UpdateHeaderSummary();
         }
 
-        private Border BuildProviderConfiguration()
+        private UIElement BuildModelPage()
         {
-            BuildProviderConfigViews();
-
-            var card = new Border
+            var root = PageStack();
+            root.Children.Add(SectionHeader("当前模型", "翻译、截图识别、外贸助手和识图转表格共用此模型"));
+            var savedRow = new Grid { Margin = new Thickness(0, 2, 0, 15) };
+            savedRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            savedRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            _modelSavedSummary = new TextBlock
             {
-                Background = Brushes.Transparent
+                Text = "DeepSeek · 尚未配置", FontSize = 15,
+                FontWeight = FontWeights.SemiBold, Foreground = Ink,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            var layout = new Grid();
-            layout.RowDefinitions.Add(new RowDefinition
+            savedRow.Children.Add(_modelSavedSummary);
+            var balance = new StackPanel
             {
-                Height = GridLength.Auto
-            });
-            layout.RowDefinitions.Add(new RowDefinition
-            {
-                Height = GridLength.Auto
-            });
-            layout.RowDefinitions.Add(new RowDefinition
-            {
-                Height = new GridLength(1, GridUnitType.Star)
-            });
-
-            var providerHeader = new Grid
-            {
-                Margin = new Thickness(0, 1, 0, 7)
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Right
             };
-            providerHeader.ColumnDefinitions.Add(new ColumnDefinition
+            Grid.SetColumn(balance, 1);
+            _balanceText = new TextBlock
             {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-            providerHeader.Children.Add(new TextBlock
-            {
-                Text = "具体服务",
-                Foreground = Navy,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
+                Text = "余额 · —", FontSize = 12, Foreground = Subtle,
                 VerticalAlignment = VerticalAlignment.Center
-            });
-            layout.Children.Add(providerHeader);
+            };
+            balance.Children.Add(_balanceText);
+            _refreshBalance = new Button
+            {
+                Content = "↻", FontFamily = new FontFamily("Segoe UI Symbol"),
+                FontSize = 16, Width = 28, Height = 28, Margin = new Thickness(3, 0, 0, 0),
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Foreground = Subtle, ToolTip = "刷新已保存当前账户余额", Cursor = Cursors.Hand
+            };
+            _refreshBalance.Click += async delegate { await RefreshBalanceAsync(); };
+            balance.Children.Add(_refreshBalance);
+            savedRow.Children.Add(balance);
+            root.Children.Add(savedRow);
 
-            var serviceBar = new Border
-            {
-                Background = Brush("#F3F7F9"),
-                CornerRadius = new CornerRadius(10),
-                Padding = new Thickness(4),
-                Margin = new Thickness(0, 0, 0, 9)
-            };
-            var serviceButtons = new StackPanel
-            {
-                Orientation = Orientation.Horizontal
-            };
-            serviceBar.Child = serviceButtons;
-            Grid.SetRow(serviceBar, 1);
-            layout.Children.Add(serviceBar);
+            root.Children.Add(FieldLabel("服务商"));
+            root.Children.Add(BuildVendorSelector());
 
-            var configCard = Card();
-            configCard.Padding = new Thickness(16, 13, 16, 15);
-            var configLayout = new Grid();
-            configLayout.RowDefinitions.Add(new RowDefinition
+            Border form = Card();
+            form.Padding = new Thickness(20, 17, 20, 18);
+            form.Margin = new Thickness(0, 14, 0, 0);
+            var fields = new StackPanel();
+            form.Child = fields;
+            _modelApiKey = AddPassword(fields, "API 密钥", "粘贴服务商 API Key");
+            _modelName = AddText(fields, "模型名称", "填写服务商提供的模型 ID；截图与识图转表格请选择支持图片输入的模型");
+            _modelName.Margin = new Thickness(0, 4, 0, 4);
+            var modelHint = new TextBlock
             {
-                Height = GridLength.Auto
-            });
-            configLayout.RowDefinitions.Add(new RowDefinition
-            {
-                Height = new GridLength(1, GridUnitType.Star)
-            });
-            var configHeader = new Grid();
-            configHeader.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-            configHeader.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = GridLength.Auto
-            });
-            var configHeading = new StackPanel();
-            _providerConfigTitle = new TextBlock
-            {
-                FontSize = 14,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
+                Text = "截图识别和识图转表格需要支持图片输入的模型。模型名称由你填写，鲨译不会把示例名称当作已验证模型。",
+                TextWrapping = TextWrapping.Wrap, FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(1, 5, 0, 0)
             };
-            _providerConfigState = new TextBlock
-            {
-                FontSize = 11,
-                Foreground = Muted,
-                Margin = new Thickness(0, 2, 0, 0)
-            };
-            configHeading.Children.Add(_providerConfigTitle);
-            configHeading.Children.Add(_providerConfigState);
-            configHeader.Children.Add(configHeading);
-            _activateProviderButton =
-                PrimaryButton("设为当前引擎");
-            _activateProviderButton.Width = 126;
-            _activateProviderButton.Height = 34;
-            _activateProviderButton.Click += ActivateBrowsedProviderClick;
-            Grid.SetColumn(_activateProviderButton, 1);
-            configHeader.Children.Add(_activateProviderButton);
-            configLayout.Children.Add(configHeader);
+            fields.Children.Add(modelHint);
 
-            _providerConfigHost = new ContentControl
+            _connectionExpander = new Expander
             {
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                VerticalContentAlignment = VerticalAlignment.Stretch,
-                Margin = new Thickness(0, 13, 0, 0)
+                Header = "连接设置", IsExpanded = false,
+                Margin = new Thickness(0, 14, 0, 0),
+                Foreground = Ink, FontSize = 13
             };
-            _providerConfigHost.Tag = serviceButtons;
-            Grid.SetRow(_providerConfigHost, 1);
-            configLayout.Children.Add(_providerConfigHost);
-            configCard.Child = configLayout;
-            Grid.SetRow(configCard, 2);
-            layout.Children.Add(configCard);
-            card.Child = layout;
-            SelectConfigSection("Free");
-            return card;
-        }
-
-        private void BuildProviderConfigViews()
-        {
-            var microsoftContent = new StackPanel();
-            _microsoftKey = AddPassword(microsoftContent, "API Key", "粘贴 Microsoft Translator 密钥");
-            _microsoftKey.PasswordChanged += delegate
+            var connectionFields = new StackPanel
             {
-                UpdateProviderSelection();
+                Margin = new Thickness(0, 10, 0, 2)
             };
-            _region = AddText(microsoftContent, "Region", "例如 eastasia");
-            var googleContent = new StackPanel();
-            _googleKey = AddPassword(googleContent, "API Key", "粘贴 Google Cloud Translation 密钥");
-            _googleKey.PasswordChanged += delegate
-            {
-                UpdateProviderSelection();
-            };
-            var content = new StackPanel();
-            _modelVendor = new ComboBox
-            {
-                ItemsSource = ModelVendors(),
-                Height = 36,
-                Margin = new Thickness(24, 5, 0, 10),
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
-            _modelVendor.SelectionChanged += ModelVendorChanged;
-            AddFieldLabel(content, "供应商");
-            content.Children.Add(_modelVendor);
-            _modelBaseUrl = AddText(
-                content, "API 基础地址", "例如 https://api.openai.com/v1；也可填完整接口地址");
-            AddFieldLabel(content, "接口协议");
+            _modelBaseUrl = AddText(connectionFields, "API 地址", "例如 https://api.deepseek.com");
+            _modelBaseUrl.Margin = new Thickness(0, 4, 0, 8);
             _modelProtocol = new ComboBox
             {
-                ItemsSource = ModelApiProtocolChoices(),
-                Height = 36,
-                Padding = new Thickness(9, 7, 9, 7),
-                Margin = new Thickness(24, 5, 0, 5),
-                VerticalContentAlignment = VerticalAlignment.Center,
-                ToolTip = "默认使用 OpenAI Chat Completions；只有服务商明确支持时才选择 Anthropic Messages"
+                ItemsSource = new[] { "OpenAI 兼容 · Chat Completions", "Anthropic · Messages" },
+                MinHeight = 34, Margin = new Thickness(0, 4, 0, 5),
+                Padding = new Thickness(8, 5, 8, 5),
+                VerticalContentAlignment = VerticalAlignment.Center
             };
-            _modelProtocol.SelectionChanged += ModelProtocolChanged;
-            content.Children.Add(_modelProtocol);
+            AddField(connectionFields, "接口协议", _modelProtocol);
             _modelEndpointHint = new TextBlock
             {
+                Text = "", Foreground = Subtle, FontSize = 12,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10.5,
-                Margin = new Thickness(24, 0, 0, 9)
+                Margin = new Thickness(1, 2, 0, 0)
             };
-            content.Children.Add(_modelEndpointHint);
-            _modelName = AddText(
-                content, "模型名称", "例如 gpt-5.6-sol / deepseek-chat");
-            _modelApiKey = AddPassword(
-                content, "API Key", "本地 Ollama 可留空");
-            var selectAi = SecondaryButton("设为当前 AI 模型");
-            selectAi.Margin = new Thickness(24, 9, 0, 4);
-            selectAi.Click += delegate
-            {
-                SaveActiveModelDraft();
-                ModelConnectionSettings draft;
-                if (!_modelDrafts.TryGetValue(_activeModelVendor, out draft) ||
-                    !draft.IsUsable(_activeModelVendor))
-                {
-                    MessageBox.Show("请先填写当前 AI 模型的地址、模型和密钥。",
-                        "无法选择模型", MessageBoxButton.OK,
-                        MessageBoxImage.Information);
-                    return;
-                }
-                _pendingModelVendor = _activeModelVendor;
-                _aiModelSelectionStatus.Text = "当前 AI：" +
-                    _pendingModelVendor + " · " + draft.Model;
-                if (_ocrModelSummary != null)
-                    _ocrModelSummary.Text = _aiModelSelectionStatus.Text;
-                if (_activeConfigSection == "Model")
-                {
-                    _browsedProvider = "ModelApi:" +
-                        _pendingModelVendor;
-                    SelectConfigSection("Model");
-                }
-                UpdateProviderSelection();
-            };
-            content.Children.Add(selectAi);
-            _aiModelSelectionStatus = new TextBlock
-            {
-                Foreground = Muted, FontSize = 12,
-                Margin = new Thickness(24, 3, 0, 0)
-            };
-            content.Children.Add(_aiModelSelectionStatus);
-            _modelBaseUrl.TextChanged += delegate
-            {
-                UpdateModelEndpointHint();
-                UpdateProviderSelection();
-            };
-            _modelName.TextChanged += delegate
-            {
-                UpdateProviderSelection();
-            };
-            _modelApiKey.PasswordChanged += delegate
-            {
-                UpdateProviderSelection();
-            };
+            connectionFields.Children.Add(_modelEndpointHint);
+            _connectionExpander.Content = connectionFields;
+            fields.Children.Add(_connectionExpander);
+            root.Children.Add(form);
 
-            _providerConfigViews["GoogleFree"] =
-                ProviderConfigPanel("Google 免费", "无需账号或密钥", null);
-            _providerConfigViews["MicrosoftFree"] =
-                ProviderConfigPanel("Microsoft 免费", "无需账号或密钥", null);
-            _providerConfigViews["Microsoft"] =
-                ProviderConfigPanel("Microsoft Translator", "需要订阅密钥", microsoftContent);
-            _providerConfigViews["Google"] =
-                ProviderConfigPanel("Google Cloud Translation", "需要 API Key", googleContent);
-            _modelConfigurationPanel = ProviderConfigPanel(
-                "AI 模型配置", "", content);
-            var modelShortcut = new StackPanel();
-            modelShortcut.Children.Add(new TextBlock
+            var testRow = new StackPanel
             {
-                Text = "AI 翻译使用“AI 模型”页选定的当前模型。",
-                FontSize = 12, Foreground = Muted,
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 14, 0, 0)
+            };
+            _testTextButton = PrimaryButton("测试连接");
+            _testTextButton.Padding = new Thickness(18, 8, 18, 8);
+            _testTextButton.Click += async delegate { await RunTextTestAsync(); };
+            testRow.Children.Add(_testTextButton);
+            _testImageButton = SecondaryButton("测试图片识别");
+            _testImageButton.Padding = new Thickness(16, 8, 16, 8);
+            _testImageButton.Margin = new Thickness(9, 0, 0, 0);
+            _testImageButton.Click += async delegate { await RunImageTestAsync(); };
+            testRow.Children.Add(_testImageButton);
+            _modelTestStatus = new TextBlock
+            {
+                Text = "未测试", FontSize = 12, Foreground = Subtle,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0),
                 TextWrapping = TextWrapping.Wrap
-            });
-            var manage = SecondaryButton("管理 AI 模型");
-            manage.Margin = new Thickness(0, 9, 0, 0);
-            manage.Click += delegate { ShowModelSettings(); };
-            modelShortcut.Children.Add(manage);
-            UIElement modelPanel = ProviderConfigPanel(
-                "AI 翻译", "", modelShortcut);
-            foreach (ModelVendorChoice vendor in ModelVendors())
-                _providerConfigViews[
-                    "ModelApi:" + vendor.Code] = modelPanel;
-        }
-
-        private UIElement BuildShortcutTab()
-        {
-            var root = TabBody();
-            root.Children.Add(Intro(
-                "全局快捷键",
-                "点击快捷键框后直接按下新组合。功能键可单独使用；字母和数字需要搭配 Ctrl、Alt 或 Shift。"));
-
-            var shortcutCard = Card();
-            shortcutCard.Padding = new Thickness(16);
-            shortcutCard.Margin = new Thickness(0, 14, 0, 12);
-            var shortcutContent = new StackPanel();
-            shortcutContent.Children.Add(new TextBlock
-            {
-                Text = "全局快捷键",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy,
-                Margin = new Thickness(0, 0, 0, 10)
-            });
-            _writingHotkey = AddHotkeyRecorder(
-                shortcutContent, "外贸沟通助手", "打开或唤回沟通窗口，保留当前输入");
-            _translateHotkey = AddHotkeyRecorder(
-                shortcutContent,
-                "选中文字翻译",
-                "选中文字后触发翻译");
-            _ocrHotkey = AddHotkeyRecorder(
-                shortcutContent,
-                "截图 OCR 翻译",
-                "进入屏幕框选并识别翻译");
-            _settingsHotkey = AddHotkeyRecorder(
-                shortcutContent,
-                "打开设置",
-                "随时打开 Sharkey 设置页");
-            var reset = new Button
-            {
-                Content = "恢复默认 F7 / F8 / F9 / F10",
-                Height = 34,
-                Padding = new Thickness(13, 0, 13, 0),
-                Margin = new Thickness(0, 4, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Background = Brushes.White,
-                Foreground = Ocean,
-                BorderBrush = Brush("#9BCEDB"),
-                Cursor = Cursors.Hand
             };
-            reset.Click += delegate
-            {
-                _translateHotkey.Text = "F8";
-                _writingHotkey.Text = "F7";
-                _ocrHotkey.Text = "F9";
-                _settingsHotkey.Text = "F10";
-            };
-            shortcutContent.Children.Add(reset);
-            shortcutCard.Child = shortcutContent;
-            root.Children.Add(shortcutCard);
-            root.Children.Add(InfoBox(
-                "若组合键被其他软件占用，保存后 Sharkey 会明确提示未注册成功的快捷键。"));
+            testRow.Children.Add(_modelTestStatus);
+            root.Children.Add(testRow);
+            root.Children.Add(new Border { Height = 12, Background = Brushes.Transparent });
+
+            WireModelDraftEvents();
             return Scroll(root);
         }
 
-        private UIElement BuildGeneralTab()
+        private UIElement BuildVendorSelector()
         {
-            var root = TabBody();
-            root.Children.Add(Intro(
-                "常规",
-                "管理 Windows 启动行为，并查看当前开发版本。"));
-
-            var startupCard = Card();
-            startupCard.Padding = new Thickness(16);
-            startupCard.Margin = new Thickness(0, 14, 0, 12);
-            var startupContent = new StackPanel();
-            startupContent.Children.Add(new TextBlock
+            var selector = new Grid { MinHeight = 42 };
+            string[] vendors = { "DeepSeek", "MiMo", "Qwen", "Custom" };
+            for (int i = 0; i < vendors.Length; i++)
+                selector.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            _modelVendor = new ComboBox
             {
-                Text = "Windows 启动",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
-            });
-            _startWithWindows = new CheckBox
-            {
-                Content = "登录 Windows 后自动启动 Sharkey",
-                Margin = new Thickness(0, 10, 0, 5),
-                Foreground = Navy,
-                FontSize = 12.5
+                ItemsSource = ModelVendors(), Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false, Focusable = false
             };
-            startupContent.Children.Add(_startWithWindows);
-            startupContent.Children.Add(new TextBlock
+            // This non-visual selector is the normalized model-vendor source used
+            // by migration and reflection-based diagnostics; the visible buttons
+            // are the modern segmented control.
+            var bar = new Border
             {
-                Text = "仅为当前 Windows 用户启用。托盘右键也可立即切换，两处状态会自动同步。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10.5
-            });
-            startupCard.Child = startupContent;
-            root.Children.Add(startupCard);
+                Background = Brush("#EDF4F7"), BorderBrush = BorderLine,
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(4)
+            };
+            var segments = new Grid();
+            for (int i = 0; i < vendors.Length; i++)
+                segments.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            foreach (string vendor in vendors)
+            {
+                Button button = SecondaryButton(ModelVendorDisplayName(vendor));
+                button.Tag = vendor;
+                button.Margin = new Thickness(1);
+                button.Height = 36;
+                button.BorderThickness = new Thickness(1);
+                button.Click += VendorButtonClick;
+                Grid.SetColumn(button, Array.IndexOf(vendors, vendor));
+                segments.Children.Add(button);
+                _vendorButtons[vendor] = button;
+            }
+            bar.Child = segments;
+            var host = new StackPanel();
+            host.Children.Add(bar);
+            host.Children.Add(_modelVendor);
+            return host;
+        }
 
-            var versionCard = Card();
-            var reading = new StackPanel { Margin = new Thickness(0, 0, 0, 16) };
-            reading.Children.Add(new TextBlock { Text = "浮窗字号", FontSize = 13, Foreground = Navy });
+        private UIElement BuildAssistantPage()
+        {
+            var root = PageStack();
+            root.Children.Add(SectionHeader("翻译与截图", "目标语言、阅读显示和截图上传偏好"));
+            var targetCard = Card();
+            targetCard.Padding = new Thickness(18);
+            var targetFields = new StackPanel();
+            targetCard.Child = targetFields;
+            _language = new ComboBox
+            {
+                ItemsSource = new[]
+                {
+                    "智能 · 中文 → 英文，其他语言 → 简体中文",
+                    "简体中文", "繁體中文", "English", "日本語", "한국어", "Français", "Deutsch", "Español"
+                },
+                MinHeight = 38, Padding = new Thickness(9, 6, 9, 6),
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+            AddField(targetFields, "翻译目标", _language);
+            _targetRule = new TextBlock
+            {
+                Text = "", FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(1, -1, 0, 12),
+                TextWrapping = TextWrapping.Wrap
+            };
+            targetFields.Children.Add(_targetRule);
             _popupFontSize = new ComboBox
             {
                 ItemsSource = new[] { "小", "标准", "大" },
-                SelectedIndex = 1,
-                Width = 160,
+                MinHeight = 36, Width = 150,
                 HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(0, 8, 0, 0),
-                ToolTip = "用于选中翻译与截图翻译的正文；保存后下一次翻译生效"
+                Padding = new Thickness(8, 5, 8, 5)
             };
-            reading.Children.Add(_popupFontSize);
-            root.Children.Add(reading);
-            versionCard.Padding = new Thickness(16);
-            var version = new StackPanel();
-            version.Children.Add(new TextBlock
+            AddField(targetFields, "浮窗字号", _popupFontSize);
+            root.Children.Add(targetCard);
+
+            root.Children.Add(SectionHeader("截图识别", "截图会发送到当前 AI 服务处理"));
+            var ocrCard = Card();
+            ocrCard.Padding = new Thickness(18);
+            var ocrFields = new StackPanel();
+            ocrCard.Child = ocrFields;
+            _ocrAiFallback = new CheckBox
             {
-                Text = "关于鲨译",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
-            });
-            version.Children.Add(new TextBlock
-            {
-                Text = "Sharkey  " + VersionInfo.SemanticVersion,
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Ocean,
-                Margin = new Thickness(0, 8, 0, 3)
-            });
-            version.Children.Add(new TextBlock
-            {
-                Text = "Windows x64 · 翻译与外贸助手",
-                Foreground = Muted,
-                FontSize = 11
-            });
-            var updateActions = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, 12, 0, 0)
+                Content = "启用 AI 截图识别与翻译", Foreground = Ink,
+                FontSize = 14, Margin = new Thickness(0, 0, 0, 12)
             };
-            version.Children.Add(new TextBlock
+            ocrFields.Children.Add(_ocrAiFallback);
+            _ocrConsentAllowed = new CheckBox
             {
-                Text = "自动检查更新", Margin = new Thickness(0, 12, 0, 5),
-                Foreground = Navy, FontSize = 12
-            });
+                Content = "允许将截图发送到当前 AI 模型", Foreground = Ink,
+                FontSize = 13, Margin = new Thickness(0, 0, 0, 5)
+            };
+            ocrFields.Children.Add(_ocrConsentAllowed);
+            _ocrConsentStatus = new TextBlock
+            {
+                Text = "", Foreground = Subtle, FontSize = 12,
+                TextWrapping = TextWrapping.Wrap
+            };
+            ocrFields.Children.Add(_ocrConsentStatus);
+            root.Children.Add(ocrCard);
+
+            root.Children.Add(SectionHeader("联网搜索", "默认关闭；只在外贸助手明确需要时查询资料"));
+            var searchCard = Card();
+            searchCard.Padding = new Thickness(18);
+            var searchFields = new StackPanel();
+            searchCard.Child = searchFields;
+            _commerceSearchEnabled = new CheckBox
+            {
+                Content = "允许外贸助手联网搜索", Foreground = Ink,
+                FontSize = 14, Margin = new Thickness(0, 0, 0, 10)
+            };
+            searchFields.Children.Add(_commerceSearchEnabled);
+            _commerceSearchKey = AddPassword(searchFields, "Tavily API Key", "仅用于外贸助手按需检索公开资料");
+            var testSearch = SecondaryButton("测试搜索连接");
+            testSearch.HorizontalAlignment = HorizontalAlignment.Left;
+            testSearch.Click += async delegate { await TestSearchAsync(testSearch); };
+            searchFields.Children.Add(testSearch);
+            _searchStatus = new TextBlock
+            {
+                Text = "", FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(1, 7, 0, 0), TextWrapping = TextWrapping.Wrap
+            };
+            searchFields.Children.Add(_searchStatus);
+            root.Children.Add(searchCard);
+
+            _language.SelectionChanged += delegate
+            {
+                UpdateTargetRule();
+                MarkDirty();
+            };
+            _popupFontSize.SelectionChanged += delegate { MarkDirty(); };
+            _ocrAiFallback.Checked += delegate { MarkDirty(); };
+            _ocrAiFallback.Unchecked += delegate { MarkDirty(); };
+            _ocrConsentAllowed.Checked += OcrConsentChanged;
+            _ocrConsentAllowed.Unchecked += OcrConsentChanged;
+            _commerceSearchEnabled.Checked += delegate { MarkDirty(); };
+            _commerceSearchEnabled.Unchecked += delegate { MarkDirty(); };
+            _commerceSearchKey.PasswordChanged += delegate { MarkDirty(); };
+            return Scroll(root);
+        }
+
+        private UIElement BuildShortcutPage()
+        {
+            var root = PageStack();
+            root.Children.Add(SectionHeader("快捷键", "点击输入框后按下新的按键或组合键"));
+            var card = Card();
+            card.Padding = new Thickness(20);
+            var list = new StackPanel();
+            card.Child = list;
+            _writingHotkey = AddHotkeyRecorder(list, "外贸助手", "打开 AI 沟通与计算工作台");
+            _translateHotkey = AddHotkeyRecorder(list, "选中翻译", "读取当前选中文字并显示译文");
+            _ocrHotkey = AddHotkeyRecorder(list, "截图翻译", "框选屏幕区域进行识别和翻译");
+            _settingsHotkey = AddHotkeyRecorder(list, "打开设置", "唤起此设置窗口");
+            root.Children.Add(card);
+            var defaults = SecondaryButton("恢复默认快捷键");
+            defaults.HorizontalAlignment = HorizontalAlignment.Left;
+            defaults.Margin = new Thickness(0, 12, 0, 0);
+            defaults.Click += delegate
+            {
+                _writingHotkey.Text = "F7";
+                _translateHotkey.Text = "F8";
+                _ocrHotkey.Text = "F9";
+                _settingsHotkey.Text = "F10";
+                MarkDirty();
+            };
+            root.Children.Add(defaults);
+            return Scroll(root);
+        }
+
+        private UIElement BuildGeneralPage()
+        {
+            var root = PageStack();
+            root.Children.Add(SectionHeader("通用", "启动、更新与支持工具"));
+            var startupCard = Card();
+            startupCard.Padding = new Thickness(18);
+            _startWithWindows = new CheckBox
+            {
+                Content = "登录 Windows 后自动启动 Sharkey",
+                Foreground = Ink, FontSize = 14
+            };
+            startupCard.Child = _startWithWindows;
+            root.Children.Add(startupCard);
+            _startWithWindows.Checked += delegate { MarkDirty(); };
+            _startWithWindows.Unchecked += delegate { MarkDirty(); };
+
+            var updates = Card();
+            updates.Padding = new Thickness(18);
+            var updateFields = new StackPanel();
+            updates.Child = updateFields;
             _updateInterval = new ComboBox
             {
-                ItemsSource = new[] { "每 6 小时", "每 12 小时", "每 24 小时（推荐）",
-                    "每 3 天", "每周", "关闭自动检查" },
-                MinHeight = 32, Width = 200,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                ToolTip = "保存后生效。程序运行期间定期检查，发现新版本时弹出更新窗口；不会自动安装。"
+                ItemsSource = new[] { "每 6 小时", "每 12 小时", "每 24 小时（推荐）", "每 3 天", "每周", "关闭自动检查" },
+                MinHeight = 36, Width = 220, HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(8, 5, 8, 5),
+                ToolTip = "发现新版本时弹出更新窗口，不会自动安装"
             };
-            version.Children.Add(_updateInterval);
+            AddField(updateFields, "自动检查更新", _updateInterval);
+            var updateActions = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
             _checkUpdate = SecondaryButton("检查更新");
-            _checkUpdate.Width = 102;
             _checkUpdate.Click += delegate
             {
                 SetUpdateStatus("正在检查更新…", false);
-                var handler = UpdateCheckRequested;
-                if (handler != null)
-                    handler(this, EventArgs.Empty);
+                EventHandler handler = UpdateCheckRequested;
+                if (handler != null) handler(this, EventArgs.Empty);
             };
             updateActions.Children.Add(_checkUpdate);
             _updateStatus = new TextBlock
             {
-                Text = "发现新版本时提醒，不自动安装",
-                Foreground = Muted,
-                FontSize = 10.5,
+                Text = "发现新版本时提醒，不自动安装", FontSize = 12,
+                Foreground = Subtle, TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(10, 0, 0, 0),
-                TextWrapping = TextWrapping.Wrap
+                Margin = new Thickness(10, 0, 0, 0)
             };
             updateActions.Children.Add(_updateStatus);
-            version.Children.Add(updateActions);
-            versionCard.Child = version;
-            root.Children.Add(versionCard);
+            updateFields.Children.Add(updateActions);
+            root.Children.Add(updates);
+            _updateInterval.SelectionChanged += delegate { MarkDirty(); };
 
-            var diagnosticsCard = Card();
-            diagnosticsCard.Padding = new Thickness(16);
-            diagnosticsCard.Margin = new Thickness(0, 12, 0, 0);
-            var diagnostics = new StackPanel();
-            diagnostics.Children.Add(new TextBlock
+            var about = Card();
+            about.Padding = new Thickness(18);
+            var aboutText = new StackPanel();
+            about.Child = aboutText;
+            aboutText.Children.Add(new TextBlock
             {
-                Text = "诊断与支持",
-                FontSize = 14,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
+                Text = "Sharkey  " + VersionInfo.SemanticVersion,
+                FontSize = 16, FontWeight = FontWeights.SemiBold, Foreground = Ink
             });
-            diagnostics.Children.Add(new TextBlock
+            aboutText.Children.Add(new TextBlock
             {
-                Text = "若其他电脑无法启动或快捷键无响应，复制诊断信息并附上日志文件即可定位。诊断摘要不包含 API Key 或翻译原文。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 10.5,
-                Margin = new Thickness(0, 6, 0, 10)
+                Text = "Windows x64 · AI 驱动的翻译与外贸助手",
+                FontSize = 12, Foreground = Subtle, Margin = new Thickness(0, 4, 0, 0)
             });
-            var diagnosticActions = new StackPanel
+            root.Children.Add(about);
+
+            var diagnostics = new Expander
             {
-                Orientation = Orientation.Horizontal
+                Header = "诊断与支持", IsExpanded = false,
+                Foreground = Ink, FontSize = 13, Margin = new Thickness(0, 4, 0, 0)
             };
+            var diagBody = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
+            diagBody.Children.Add(new TextBlock
+            {
+                Text = "诊断摘要不包含 API Key 或翻译原文。", FontSize = 12,
+                Foreground = Subtle, Margin = new Thickness(0, 0, 0, 8)
+            });
+            var diagButtons = new StackPanel { Orientation = Orientation.Horizontal };
             _copyDiagnostics = SecondaryButton("复制诊断信息");
-            _copyDiagnostics.Margin = new Thickness(0, 0, 8, 0);
             _copyDiagnostics.Click += CopyDiagnosticsClick;
-            diagnosticActions.Children.Add(_copyDiagnostics);
+            diagButtons.Children.Add(_copyDiagnostics);
             _openDiagnosticFolder = SecondaryButton("打开日志目录");
+            _openDiagnosticFolder.Margin = new Thickness(8, 0, 0, 0);
             _openDiagnosticFolder.Click += OpenDiagnosticFolderClick;
-            diagnosticActions.Children.Add(_openDiagnosticFolder);
-            diagnostics.Children.Add(diagnosticActions);
-            diagnosticsCard.Child = diagnostics;
-            root.Children.Add(diagnosticsCard);
+            diagButtons.Children.Add(_openDiagnosticFolder);
+            diagBody.Children.Add(diagButtons);
+            diagnostics.Content = diagBody;
+            root.Children.Add(diagnostics);
             return Scroll(root);
         }
 
-        public void SetUpdateStatus(
-            string status,
-            bool checkEnabled)
+        private void WireModelDraftEvents()
         {
-            if (_updateStatus != null)
-                _updateStatus.Text = status ?? "";
-            if (_checkUpdate != null)
-                _checkUpdate.IsEnabled = checkEnabled;
+            _modelApiKey.PasswordChanged += ModelValueChanged;
+            _modelName.TextChanged += ModelValueChanged;
+            _modelBaseUrl.TextChanged += ModelValueChanged;
+            _modelProtocol.SelectionChanged += ModelProtocolChanged;
         }
 
-        private void CopyDiagnosticsClick(object sender, RoutedEventArgs e)
+        private void VendorButtonClick(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                Clipboard.SetText(DiagnosticLog.BuildSupportSummary());
-                _copyDiagnostics.Content = "已复制";
-            }
-            catch (Exception error)
-            {
-                MessageBox.Show(
-                    "复制诊断信息失败：" + error.Message,
-                    "Sharkey",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-            }
+            Button button = sender as Button;
+            if (button == null) return;
+            SelectVendor(button.Tag as string);
         }
 
-        private void OpenDiagnosticFolderClick(object sender, RoutedEventArgs e)
+        private void SelectVendor(string vendor)
         {
-            try
+            vendor = NormalizeVendor(vendor);
+            if (string.Equals(vendor, _activeModelVendor, StringComparison.OrdinalIgnoreCase))
+                return;
+            SaveActiveModelDraft();
+            _activeModelVendor = vendor;
+            _pendingModelVendor = vendor;
+            if (_modelVendor != null)
             {
-                DiagnosticLog.Write("Diagnostic folder requested");
-                Directory.CreateDirectory(DiagnosticLog.FolderPath);
-                Process.Start(new ProcessStartInfo
+                for (int i = 0; i < _modelVendor.Items.Count; i++)
                 {
-                    FileName = "explorer.exe",
-                    Arguments = "/select,\"" + DiagnosticLog.FilePath + "\"",
-                    UseShellExecute = true
-                });
+                    ModelVendorChoice item = _modelVendor.Items[i] as ModelVendorChoice;
+                    if (item != null && item.Code == vendor) _modelVendor.SelectedIndex = i;
+                }
+            }
+            LoadModelDraft(vendor);
+            if (_connectionExpander != null)
+                _connectionExpander.IsExpanded = vendor == "Custom";
+            RefreshVendorButtons();
+            RefreshConsentPreview();
+            ResetModelTest("未测试");
+            UpdateHeaderSummary();
+            MarkDirty();
+        }
+
+        private void RefreshVendorButtons()
+        {
+            foreach (KeyValuePair<string, Button> item in _vendorButtons)
+            {
+                bool selected = string.Equals(item.Key, _activeModelVendor,
+                    StringComparison.OrdinalIgnoreCase);
+                item.Value.Background = selected ? Brush("#E1F3FA") : Brushes.White;
+                item.Value.Foreground = selected ? Accent : Ink;
+                item.Value.BorderBrush = selected ? Brush("#9FD6E6") : Brushes.Transparent;
+                item.Value.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+            }
+        }
+
+        private void ModelValueChanged(object sender, RoutedEventArgs e)
+        {
+            if (_loadingValues) return;
+            SaveActiveModelDraft();
+            ResetModelTest("配置已更改，需重新测试");
+            MarkDirty();
+        }
+
+        private void ModelProtocolChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_loadingValues) return;
+            SaveActiveModelDraft();
+            UpdateEndpointHint();
+            ResetModelTest("配置已更改，需重新测试");
+            MarkDirty();
+        }
+
+        private void SaveActiveModelDraft()
+        {
+            if (string.IsNullOrWhiteSpace(_activeModelVendor) || _modelBaseUrl == null) return;
+            _modelDrafts[_activeModelVendor] = new ModelConnectionSettings
+            {
+                BaseUrl = _modelBaseUrl.Text.Trim(),
+                ApiKey = _modelApiKey == null ? "" : _modelApiKey.Password.Trim(),
+                Model = _modelName == null ? "" : _modelName.Text.Trim(),
+                Protocol = SelectedProtocol()
+            };
+        }
+
+        private void LoadModelDraft(string vendor)
+        {
+            ModelConnectionSettings value;
+            if (!_modelDrafts.TryGetValue(vendor, out value))
+            {
+                value = new ModelConnectionSettings
+                {
+                    BaseUrl = RecommendedBaseUrl(vendor, ModelApiProtocols.OpenAI),
+                    ApiKey = "", Model = "", Protocol = ModelApiProtocols.OpenAI
+                };
+                _modelDrafts[vendor] = value;
+            }
+            bool previous = _loadingValues;
+            _loadingValues = true;
+            try
+            {
+                _modelBaseUrl.Text = value.BaseUrl;
+                _modelApiKey.Password = value.ApiKey;
+                _modelName.Text = value.Model;
+                SelectProtocol(value.Protocol);
+            }
+            finally { _loadingValues = previous; }
+            UpdateEndpointHint();
+        }
+
+        private void LoadModelDrafts()
+        {
+            _modelDrafts.Clear();
+            foreach (ModelVendorChoice vendor in _modelVendor.Items)
+            {
+                ModelConnectionSettings value = _settings.GetModelConnection(vendor.Code);
+                if (string.IsNullOrWhiteSpace(value.BaseUrl))
+                    value.BaseUrl = RecommendedBaseUrl(vendor.Code, value.Protocol);
+                _modelDrafts[vendor.Code] = value;
+            }
+        }
+
+        private void UpdateEndpointHint()
+        {
+            if (_modelEndpointHint == null) return;
+            string url = ModelApiProtocols.BuildEndpoint(
+                _modelBaseUrl == null ? "" : _modelBaseUrl.Text,
+                SelectedProtocol());
+            _modelEndpointHint.Text = "请求地址 · " +
+                (string.IsNullOrWhiteSpace(url) ? "填写 API 地址后显示" : url);
+        }
+
+        private string SelectedProtocol()
+        {
+            return _modelProtocol != null && _modelProtocol.SelectedIndex == 1
+                ? ModelApiProtocols.Anthropic : ModelApiProtocols.OpenAI;
+        }
+
+        private void SelectProtocol(string protocol)
+        {
+            if (_modelProtocol != null)
+                _modelProtocol.SelectedIndex = ModelApiProtocols.IsAnthropic(protocol) ? 1 : 0;
+        }
+
+        private async Task RunTextTestAsync()
+        {
+            SaveActiveModelDraft();
+            ModelConnectionSettings connection = ActiveModelDraft();
+            string error = ValidateConnection(_activeModelVendor, connection);
+            if (error.Length > 0)
+            {
+                _modelTestStatus.Text = error;
+                _modelTestStatus.Foreground = Brush("#B25A28");
+                return;
+            }
+            int generation = BeginModelTest("正在测试文本连接…");
+            var cancellation = _modelTestCancellation;
+            try
+            {
+                using (var client = new TranslationClient())
+                    await client.TestModelConnectionAsync(_activeModelVendor,
+                        connection.Copy(), cancellation.Token);
+                if (generation != _testGeneration || cancellation.IsCancellationRequested) return;
+                _modelTestStatus.Text = "文本通过";
+                _modelTestStatus.Foreground = Brush("#27805A");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception errorTest)
+            {
+                if (generation != _testGeneration) return;
+                _modelTestStatus.Text = CompactError(errorTest.Message);
+                _modelTestStatus.Foreground = Brush("#B25A28");
+            }
+            finally
+            {
+                if (generation == _testGeneration)
+                {
+                    _testTextButton.IsEnabled = true;
+                    _testImageButton.IsEnabled = true;
+                    _modelTestCancellation = null;
+                    cancellation.Dispose();
+                }
+            }
+        }
+
+        private async Task RunImageTestAsync()
+        {
+            SaveActiveModelDraft();
+            ModelConnectionSettings connection = ActiveModelDraft();
+            string error = ValidateConnection(_activeModelVendor, connection);
+            if (error.Length > 0)
+            {
+                _modelTestStatus.Text = error;
+                _modelTestStatus.Foreground = Brush("#B25A28");
+                return;
+            }
+            int generation = BeginModelTest("正在测试图片识别…");
+            var cancellation = _modelTestCancellation;
+            try
+            {
+                using (var image = CreateTestImage())
+                using (var client = new TranslationClient())
+                {
+                    string response = await client.TestImageRecognitionAsync(
+                        image, _activeModelVendor, connection.Copy(), cancellation.Token);
+                    if (string.IsNullOrWhiteSpace(response))
+                        throw new InvalidOperationException("图片请求成功，但模型没有返回文字。");
+                }
+                if (generation != _testGeneration || cancellation.IsCancellationRequested) return;
+                _modelTestStatus.Text = "图片通过";
+                _modelTestStatus.Foreground = Brush("#27805A");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception errorTest)
+            {
+                if (generation != _testGeneration) return;
+                _modelTestStatus.Text = CompactError(errorTest.Message);
+                _modelTestStatus.Foreground = Brush("#B25A28");
+            }
+            finally
+            {
+                if (generation == _testGeneration)
+                {
+                    _testTextButton.IsEnabled = true;
+                    _testImageButton.IsEnabled = true;
+                    _modelTestCancellation = null;
+                    cancellation.Dispose();
+                }
+            }
+        }
+
+        private int BeginModelTest(string status)
+        {
+            if (_modelTestCancellation != null)
+            {
+                _modelTestCancellation.Cancel();
+                _modelTestCancellation.Dispose();
+            }
+            _modelTestCancellation = new CancellationTokenSource();
+            _testGeneration++;
+            _modelTestStatus.Text = status;
+            _modelTestStatus.Foreground = Subtle;
+            _testTextButton.IsEnabled = false;
+            _testImageButton.IsEnabled = false;
+            return _testGeneration;
+        }
+
+        private void ResetModelTest(string text)
+        {
+            _testGeneration++;
+            if (_modelTestCancellation != null)
+            {
+                _modelTestCancellation.Cancel();
+                _modelTestCancellation.Dispose();
+                _modelTestCancellation = null;
+            }
+            if (_modelTestStatus != null)
+            {
+                _modelTestStatus.Text = text;
+                _modelTestStatus.Foreground = Subtle;
+            }
+            if (_testTextButton != null) _testTextButton.IsEnabled = true;
+            if (_testImageButton != null) _testImageButton.IsEnabled = true;
+        }
+
+        private ModelConnectionSettings ActiveModelDraft()
+        {
+            ModelConnectionSettings result;
+            return _modelDrafts.TryGetValue(_activeModelVendor, out result)
+                ? result.Copy() : new ModelConnectionSettings();
+        }
+
+        private static System.Drawing.Bitmap CreateTestImage()
+        {
+            var bitmap = new System.Drawing.Bitmap(240, 70);
+            using (System.Drawing.Graphics graphics = System.Drawing.Graphics.FromImage(bitmap))
+            using (var font = new System.Drawing.Font("Arial", 19, System.Drawing.FontStyle.Bold))
+            using (var brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(30, 48, 65)))
+            {
+                graphics.Clear(System.Drawing.Color.White);
+                graphics.DrawString("SHARKEY TEST", font, brush, 10, 17);
+            }
+            return bitmap;
+        }
+
+        private async Task TestSearchAsync(Button button)
+        {
+            if (string.IsNullOrWhiteSpace(_commerceSearchKey.Password))
+            {
+                _searchStatus.Text = "请先填写 Tavily API Key。";
+                _searchStatus.Foreground = Brush("#B25A28");
+                return;
+            }
+            button.IsEnabled = false;
+            _searchStatus.Text = "正在测试…";
+            _searchStatus.Foreground = Subtle;
+            try
+            {
+                using (var search = new CommerceSearch())
+                    await search.SearchAsync("international trade",
+                        _commerceSearchKey.Password.Trim(), CancellationToken.None);
+                _searchStatus.Text = "搜索连接通过";
+                _searchStatus.Foreground = Brush("#27805A");
             }
             catch (Exception error)
             {
-                MessageBox.Show(
-                    "无法打开日志目录：" + error.Message + "\n\n" +
-                    DiagnosticLog.FolderPath,
-                    "Sharkey",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
+                _searchStatus.Text = CompactError(error.Message);
+                _searchStatus.Foreground = Brush("#B25A28");
             }
+            finally { button.IsEnabled = true; }
         }
 
-        private TextBox AddHotkeyRecorder(
-            Panel parent, string label, string description)
+        private void OcrConsentChanged(object sender, RoutedEventArgs e)
         {
-            var row = new Grid
-            {
-                Margin = new Thickness(0, 0, 0, 10)
-            };
-            row.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-            row.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(190)
-            });
-            var copy = new StackPanel
-            {
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            copy.Children.Add(new TextBlock
-            {
-                Text = label,
-                Foreground = Navy,
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 12
-            });
-            copy.Children.Add(new TextBlock
-            {
-                Text = description,
-                Foreground = Muted,
-                FontSize = 10.5,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            row.Children.Add(copy);
-            var recorder = new TextBox
-            {
-                Height = 38,
-                IsReadOnly = true,
-                Cursor = Cursors.Hand,
-                TextAlignment = TextAlignment.Center,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                FontWeight = FontWeights.Bold,
-                Foreground = Ocean,
-                Background = Brush("#F6FBFC"),
-                BorderBrush = Brush("#9BCEDB"),
-                ToolTip = "点击后按下快捷键"
-            };
-            recorder.PreviewKeyDown += HotkeyRecorderKeyDown;
-            recorder.GotKeyboardFocus += delegate
-            {
-                recorder.Background = Brush("#E9F8FB");
-                recorder.BorderBrush = Ocean;
-            };
-            recorder.LostKeyboardFocus += delegate
-            {
-                recorder.Background = Brush("#F6FBFC");
-                recorder.BorderBrush = Brush("#9BCEDB");
-            };
-            Grid.SetColumn(recorder, 1);
-            row.Children.Add(recorder);
-            parent.Children.Add(row);
-            return recorder;
+            if (_loadingValues) return;
+            if (_ocrConsentStatus != null)
+                _ocrConsentStatus.Text = _ocrConsentAllowed.IsChecked == true
+                    ? "更换 AI 服务或清除授权后，会在首次截图上传前确认。"
+                    : "未授权时，首次截图上传会再次询问。";
+            MarkDirty();
         }
 
-        private void HotkeyRecorderKeyDown(
-            object sender, KeyEventArgs e)
+        private void RefreshConsentPreview()
         {
-            if (e.Key == Key.Escape || e.Key == Key.Tab) return;
-            Key key = e.Key == Key.System ? e.SystemKey : e.Key;
-            HotkeyGesture gesture;
-            string error;
-            if (HotkeyGesture.TryFromKeyEvent(
-                key,
-                Keyboard.Modifiers,
-                out gesture,
-                out error))
-            {
-                ((TextBox)sender).Text = gesture.Display;
-                ((TextBox)sender).ToolTip = "已录制 " + gesture.Display;
-            }
-            else
-                ((TextBox)sender).ToolTip = error;
-            e.Handled = true;
+            if (_ocrConsentAllowed == null || _ocrConsentStatus == null) return;
+            ModelConnectionSettings connection = ActiveModelDraft();
+            string target = ConsentTarget(_pendingModelVendor, connection);
+            bool matches = _settings.OcrAiConsentGranted &&
+                string.Equals(_settings.OcrConsentTarget, target,
+                    StringComparison.OrdinalIgnoreCase);
+            bool wasLoading = _loadingValues;
+            _loadingValues = true;
+            _ocrConsentAllowed.IsChecked = matches;
+            _loadingValues = wasLoading;
+            _ocrConsentStatus.Text = matches
+                ? "已授权 · " + ModelVendorDisplayName(_pendingModelVendor) + " · " +
+                    (connection.Model ?? "")
+                : "未授权所选服务；首次截图上传时会再次询问。";
         }
 
-        private UIElement BuildOcrTab()
-        {
-            var root = new StackPanel
-            {
-                Margin = new Thickness(0, 16, 0, 0)
-            };
-            root.Children.Add(Intro(
-                "截图识别",
-                "使用当前 AI 模型读取截图。"));
-
-            var aiCard = Card();
-            aiCard.Padding = new Thickness(16);
-            var ai = new StackPanel();
-            ai.Children.Add(new TextBlock
-            {
-                Text = "当前 AI 模型",
-                FontSize = 14,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
-            });
-            ai.Children.Add(new TextBlock
-            {
-                Text = "识别结果只要求转录，不翻译、不纠错；原文仍可编辑后重新翻译。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 11,
-                Margin = new Thickness(0, 4, 0, 9)
-            });
-            _ocrAiFallback = new CheckBox
-            {
-                Content = "启用 AI 截图识别",
-                Margin = new Thickness(0, 0, 0, 7),
-                Foreground = Navy,
-                FontSize = 12
-            };
-            ai.Children.Add(_ocrAiFallback);
-            _ocrModelSummary = new TextBlock
-            {
-                Text = "截图只在内存中编码；模型和密钥在 AI 模型配置中管理。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Brush("#397080"),
-                FontSize = 12,
-                Margin = new Thickness(24, 0, 0, 0)
-            };
-            ai.Children.Add(_ocrModelSummary);
-            var configureAi = SecondaryButton("管理 AI 模型");
-            configureAi.Height = 34;
-            configureAi.Margin = new Thickness(24, 10, 0, 0);
-            configureAi.Click += delegate
-            {
-                _tabs.SelectedIndex = 1;
-                if (_modelApiKey != null) _modelApiKey.Focus();
-            };
-            ai.Children.Add(configureAi);
-            aiCard.Child = ai;
-            root.Children.Add(aiCard);
-
-            return root;
-        }
-
-        private UIElement BuildModelTab()
-        {
-            var root = TabBody();
-            var intro = Intro("AI 模型",
-                "AI 翻译、截图识别与外贸助手使用同一个当前模型。");
-            intro.Margin = new Thickness(0, 0, 0, 16);
-            root.Children.Add(intro);
-            var balanceRow = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Margin = new Thickness(0, -6, 0, 12)
-            };
-            _balanceText = new TextBlock
-            {
-                Text = "余额 · —", FontSize = 12, Foreground = Muted,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            balanceRow.Children.Add(_balanceText);
-            _refreshBalance = new Button
-            {
-                Content = "刷新", FontSize = 11, Foreground = Muted,
-                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-                Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(5, 0, 0, 0),
-                ToolTip = "查询已保存的当前 AI 账户余额；设置打开时每 60 秒刷新",
-                Cursor = Cursors.Hand
-            };
-            _refreshBalance.Click += async delegate { await RefreshBalanceAsync(); };
-            balanceRow.Children.Add(_refreshBalance);
-            root.Children.Add(balanceRow);
-            var configuration = Card();
-            configuration.Padding = new Thickness(15, 10, 15, 14);
-            configuration.Child = _modelConfigurationPanel;
-            root.Children.Add(configuration);
-            root.Children.Add(BuildOcrTab());
-            return Scroll(root);
-        }
-
-        private async System.Threading.Tasks.Task RefreshBalanceAsync()
+        private async Task RefreshBalanceAsync()
         {
             if (!IsVisible || _balanceText == null) return;
             string vendor = _settings.ModelVendor;
@@ -1121,173 +1142,75 @@ namespace GlobalTranslator
                 _balanceRequest = null;
                 _balanceIdentity = identity;
                 _balanceValue = null;
-                _balanceText.ToolTip = null;
             }
             if (_balanceRequest != null) return;
-            string prefix = vendor + " 余额 · ";
             string unavailable = AiBalanceService.UnavailableReason(vendor, connection);
+            string prefix = vendor + " 余额 · ";
             if (unavailable.Length != 0)
             {
                 _balanceText.Text = prefix + unavailable;
                 _refreshBalance.IsEnabled = false;
                 return;
             }
-            var pending = new System.Threading.CancellationTokenSource();
-            _balanceRequest = pending;
+            var request = new CancellationTokenSource();
+            _balanceRequest = request;
             _refreshBalance.IsEnabled = false;
             if (_balanceValue == null) _balanceText.Text = prefix + "查询中…";
             try
             {
                 string value;
                 using (var service = new AiBalanceService())
-                    value = await service.QueryAsync(vendor, connection, pending.Token);
-                if (_balanceRequest != pending || !IsVisible) return;
-                var current = _settings.GetModelConnection(_settings.ModelVendor);
+                    value = await service.QueryAsync(vendor, connection, request.Token);
+                if (_balanceRequest != request || !IsVisible) return;
+                ModelConnectionSettings current = _settings.GetModelConnection(_settings.ModelVendor);
                 if (identity != _settings.ModelVendor + "\n" + current.BaseUrl + "\n" + current.ApiKey)
-                {
-                    _balanceValue = null;
-                    _balanceText.Text = "余额 · 当前账户已变更";
                     return;
-                }
                 _balanceValue = value;
                 _balanceUpdated = DateTime.Now;
                 _balanceText.Text = prefix + value;
                 _balanceText.ToolTip = "更新于 " + _balanceUpdated.ToString("HH:mm:ss") +
-                    "；每 60 秒刷新，实际扣费以服务商账单为准。";
+                    "；每 60 秒刷新，金额以服务商账单为准。";
             }
-            catch (Exception)
+            catch
             {
-                if (_balanceRequest != pending || !IsVisible) return;
+                if (_balanceRequest != request || !IsVisible) return;
                 _balanceText.Text = prefix + (_balanceValue == null ? "暂时无法查询" : _balanceValue + " · 更新失败");
-                _balanceText.ToolTip = _balanceValue == null ? "请检查密钥和网络后重试。" :
+                _balanceText.ToolTip = _balanceValue == null ? "请检查网络和账户后重试。" :
                     "上次成功更新：" + _balanceUpdated.ToString("HH:mm:ss") + "；当前显示旧值。";
             }
             finally
             {
-                if (_balanceRequest == pending)
+                if (_balanceRequest == request)
                 {
                     _balanceRequest = null;
                     _refreshBalance.IsEnabled = true;
                 }
-                pending.Dispose();
+                request.Dispose();
             }
         }
 
-        private UIElement BuildCommerceTab()
+        private void SettingsVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
         {
-            var root = TabBody();
-            root.Children.Add(Intro("外贸助手",
-                "F7 使用当前 AI 模型。计算由鲨译本地执行，联网资料会显示来源。"));
-            var card = Card();
-            card.Padding = new Thickness(16);
-            card.Margin = new Thickness(0, 12, 0, 0);
-            var content = new StackPanel();
-            _commerceSearchEnabled = new CheckBox
+            if (IsVisible)
             {
-                Content = "允许外贸助手按需联网查资料",
-                FontSize = 12, Foreground = Navy,
-                Margin = new Thickness(0, 0, 0, 8)
-            };
-            content.Children.Add(_commerceSearchEnabled);
-            _commerceSearchKey = AddPassword(content, "Tavily 搜索 API Key",
-                "仅用于检索公开资料；缺少 Key 时仍可计算和拟写回复");
-            var testSearch = SecondaryButton("测试搜索连接");
-            testSearch.Margin = new Thickness(24, 7, 0, 0);
-            testSearch.Click += async delegate
-            {
-                testSearch.IsEnabled = false;
-                try
+                if (_reloadOnShow)
                 {
-                    using (var search = new CommerceSearch())
-                        await search.SearchAsync("international trade",
-                            _commerceSearchKey.Password,
-                            System.Threading.CancellationToken.None);
-                    MessageBox.Show("搜索连接成功。", "外贸助手",
-                        MessageBoxButton.OK, MessageBoxImage.Information);
+                    LoadValues();
+                    _reloadOnShow = false;
                 }
-                catch (Exception error)
+                _balanceTimer.Start();
+                Task ignored = RefreshBalanceAsync();
+            }
+            else
+            {
+                _balanceTimer.Stop();
+                if (_balanceRequest != null)
                 {
-                    MessageBox.Show(error.Message, "搜索连接失败",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    _balanceRequest.Cancel();
+                    _balanceRequest = null;
                 }
-                finally { testSearch.IsEnabled = true; }
-            };
-            content.Children.Add(testSearch);
-            content.Children.Add(new TextBlock
-            {
-                Text = "价格、汇率、运价和规则应核对来源；搜索结果不会自动变成报价参数。",
-                TextWrapping = TextWrapping.Wrap, FontSize = 12,
-                Foreground = Muted, Margin = new Thickness(0, 8, 0, 0)
-            });
-            card.Child = content;
-            root.Children.Add(card);
-            return Scroll(root);
-        }
-
-        private Border BuildFooter()
-        {
-            var footer = new Border
-            {
-                Background = Brushes.White,
-                BorderBrush = Line,
-                BorderThickness = new Thickness(0, 1, 0, 0),
-                Padding = new Thickness(20, 13, 20, 15)
-            };
-            var dock = new DockPanel();
-            footer.Child = dock;
-            var save = PrimaryButton("保存并应用");
-            save.Width = 140;
-            save.Height = 42;
-            save.Click += SaveClick;
-            DockPanel.SetDock(save, Dock.Right);
-            dock.Children.Add(save);
-
-            _cancelSettings = new Button
-            {
-                Content = "取消",
-                Width = 88,
-                Height = 42,
-                Margin = new Thickness(0, 0, 10, 0),
-                Background = Brushes.White,
-                Foreground = Navy,
-                BorderBrush = Brush("#B9D0DA"),
-                BorderThickness = new Thickness(1),
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand,
-                ToolTip = "放弃未保存的修改并关闭设置"
-            };
-            _cancelSettings.Click += CancelClick;
-            DockPanel.SetDock(_cancelSettings, Dock.Right);
-            dock.Children.Add(_cancelSettings);
-
-            dock.Children.Add(new TextBlock
-            {
-                Text = "🔒  密钥由 Windows DPAPI 加密，仅当前账户可读取",
-                Foreground = Muted,
-                FontSize = 11.5,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            return footer;
-        }
-
-        private void CancelClick(object sender, RoutedEventArgs e)
-        {
-            DiscardAndHide();
-        }
-
-        private void SettingsWindowKeyDown(
-            object sender, KeyEventArgs e)
-        {
-            if (e.Key != Key.Escape) return;
-            DiscardAndHide();
-            e.Handled = true;
-        }
-
-        private void DiscardAndHide()
-        {
-            LoadValues();
-            Hide();
+                ResetModelTest("未测试");
+            }
         }
 
         private void LoadValues()
@@ -1295,204 +1218,149 @@ namespace GlobalTranslator
             _loadingValues = true;
             try
             {
-                _language.SelectedIndex =
-                    string.Equals(
-                        _settings.TargetLanguageMode,
-                        "Fixed",
-                        StringComparison.OrdinalIgnoreCase)
-                        ? LanguageIndex(
-                            _settings.TargetLanguage) + 1
-                        : 0;
-                UpdateTargetRule();
-                _googleKey.Password = _settings.GoogleApiKey;
-                _microsoftKey.Password = _settings.MicrosoftApiKey;
-                _region.Text = _settings.MicrosoftRegion;
-                LoadModelDrafts();
-                SelectModelVendor(
-                    _settings.ModelVendor,
-                    _settings.ModelBaseUrl);
-                var selectedVendor =
-                    _modelVendor.SelectedItem as ModelVendorChoice;
-                _activeModelVendor = selectedVendor == null
-                    ? "Custom"
-                    : selectedVendor.Code;
-                LoadModelDraft(_activeModelVendor);
-                _pendingModelVendor =
-                    NormalizeModelVendor(_settings.ModelVendor);
-                if (_aiModelSelectionStatus != null)
+                _draft = _settings.Copy();
+                _draft.Provider = "ModelApi";
+                _modelDrafts.Clear();
+                foreach (ModelVendorChoice item in _modelVendor.Items)
                 {
-                    ModelConnectionSettings activeAi =
-                        _settings.GetModelConnection(
-                            _pendingModelVendor);
-                    _aiModelSelectionStatus.Text = "当前 AI：" +
-                        _pendingModelVendor + " · " +
-                        activeAi.Model +
-                        (activeAi.IsUsable(_pendingModelVendor)
-                            ? "" : " · 待配置");
+                    ModelConnectionSettings connection = _settings.GetModelConnection(item.Code);
+                    if (string.IsNullOrWhiteSpace(connection.BaseUrl))
+                        connection.BaseUrl = RecommendedBaseUrl(item.Code, connection.Protocol);
+                    _modelDrafts[item.Code] = connection;
                 }
-                if (_ocrAiFallback != null)
-                    _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
-                if (_ocrModelSummary != null)
-                    _ocrModelSummary.Text =
-                        _aiModelSelectionStatus.Text;
-                _commerceSearchEnabled.IsChecked =
-                    _settings.CommerceSearchEnabled;
-                _commerceSearchKey.Password =
-                    _settings.CommerceSearchApiKey;
-                _translateHotkey.Text =
-                    NormalizeHotkey(_settings.TranslateHotkey, "F8");
+                _activeModelVendor = NormalizeVendor(_settings.ModelVendor);
+                _pendingModelVendor = _activeModelVendor;
+                if (!_modelDrafts.ContainsKey(_activeModelVendor))
+                {
+                    _activeModelVendor = "DeepSeek";
+                    _pendingModelVendor = _activeModelVendor;
+                }
+                for (int i = 0; i < _modelVendor.Items.Count; i++)
+                {
+                    ModelVendorChoice item = _modelVendor.Items[i] as ModelVendorChoice;
+                    if (item != null && item.Code == _activeModelVendor) _modelVendor.SelectedIndex = i;
+                }
+                LoadModelDraft(_activeModelVendor);
+                _connectionExpander.IsExpanded = _activeModelVendor == "Custom";
+                RefreshVendorButtons();
+
+                _language.SelectedIndex = string.Equals(_settings.TargetLanguageMode,
+                    "Fixed", StringComparison.OrdinalIgnoreCase)
+                    ? LanguageIndex(_settings.TargetLanguage) + 1 : 0;
+                _popupFontSize.SelectedIndex = _settings.PopupFontSize == "Small" ? 0 :
+                    _settings.PopupFontSize == "Large" ? 2 : 1;
+                _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
+                RefreshConsentPreview();
+                _commerceSearchEnabled.IsChecked = _settings.CommerceSearchEnabled;
+                _commerceSearchKey.Password = _settings.CommerceSearchApiKey;
                 _writingHotkey.Text = NormalizeHotkey(_settings.WritingHotkey, "F7");
-                _ocrHotkey.Text =
-                    NormalizeHotkey(_settings.OcrHotkey, "F9");
-                _settingsHotkey.Text =
-                    NormalizeHotkey(_settings.SettingsHotkey, "F10");
-                _startWithWindows.IsChecked =
-                    StartupManager.IsEnabled();
-                _popupFontSize.SelectedIndex = _settings.PopupFontSize == "Small" ? 0 : _settings.PopupFontSize == "Large" ? 2 : 1;
-                _updateInterval.SelectedIndex = Array.IndexOf(UpdateIntervals,
+                _translateHotkey.Text = NormalizeHotkey(_settings.TranslateHotkey, "F8");
+                _ocrHotkey.Text = NormalizeHotkey(_settings.OcrHotkey, "F9");
+                _settingsHotkey.Text = NormalizeHotkey(_settings.SettingsHotkey, "F10");
+                _startWithWindows.IsChecked = StartupManager.IsEnabled();
+                int update = Array.IndexOf(UpdateIntervals,
                     AppSettings.NormalizeUpdateCheckHours(_settings.UpdateCheckHours));
-                _pendingProvider =
-                    IsKnownProvider(_settings.Provider)
-                        ? _settings.Provider
-                        : "GoogleFree";
-                _browsedProvider =
-                    _pendingProvider == "ModelApi"
-                        ? "ModelApi:" + _pendingModelVendor
-                        : _pendingProvider;
-                SelectConfigSection(
-                    ConfigSectionForProvider(_pendingProvider));
-                BrowseProvider(_browsedProvider);
-                UpdateProviderSelection();
-                _tabs.SelectedIndex = 0;
+                _updateInterval.SelectedIndex = update < 0 ? 2 : update;
+                _searchStatus.Text = "";
+                UpdateTargetRule();
+                UpdateHeaderSummary();
+                ResetModelTest("未测试");
+                _isDirty = false;
+                UpdateDirtyStatus();
             }
-            finally
-            {
-                _loadingValues = false;
-            }
+            finally { _loadingValues = false; }
         }
 
         private void SaveClick(object sender, RoutedEventArgs e)
         {
-            HotkeyGesture translateGesture;
-            HotkeyGesture ocrGesture;
-            HotkeyGesture settingsGesture;
-            HotkeyGesture writingGesture;
-            if (!ValidateHotkeys(
-                out translateGesture,
-                out ocrGesture,
-                out settingsGesture, out writingGesture))
+            HotkeyGesture translate, ocr, settingsHotkey, writing;
+            if (!ValidateHotkeys(out translate, out ocr, out settingsHotkey, out writing))
                 return;
-
+            SaveActiveModelDraft();
+            ModelConnectionSettings active = ActiveModelDraft();
+            string validation = ValidateConnection(_pendingModelVendor, active);
+            if (validation.Length > 0)
+            {
+                Navigate("Model");
+                _modelTestStatus.Text = validation;
+                _modelTestStatus.Foreground = Brush("#B25A28");
+                if (string.IsNullOrWhiteSpace(active.ApiKey) && _pendingModelVendor != "Custom")
+                    _modelApiKey.Focus();
+                else if (string.IsNullOrWhiteSpace(active.Model)) _modelName.Focus();
+                else _modelBaseUrl.Focus();
+                return;
+            }
             if (_commerceSearchEnabled.IsChecked == true &&
                 string.IsNullOrWhiteSpace(_commerceSearchKey.Password))
             {
-                _tabs.SelectedIndex = 2;
-                MessageBox.Show("开启联网搜索需要先填写 Tavily API Key。",
-                    "外贸助手", MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                Navigate("Assistant");
+                MessageBox.Show("启用联网搜索需要先填写 Tavily API Key。", "助手偏好",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
                 _commerceSearchKey.Focus();
                 return;
             }
 
-            bool enableAiOcr = _ocrAiFallback != null &&
-                _ocrAiFallback.IsChecked == true;
-            bool grantOcrConsent = false;
-            SaveActiveModelDraft();
-            ModelConnectionSettings pendingAi =
-                _modelDrafts[_pendingModelVendor];
-            string consentTarget = _pendingModelVendor.ToLowerInvariant() +
-                "|" + (pendingAi.BaseUrl ?? "").Trim().TrimEnd('/').ToLowerInvariant();
-            if (enableAiOcr && pendingAi.IsUsable(_pendingModelVendor) &&
-                (!_settings.OcrAiConsentGranted ||
-                 _settings.OcrConsentTarget != consentTarget))
+            AppSettings candidate = _draft.Copy();
+            candidate.Provider = "ModelApi";
+            candidate.ModelVendor = _pendingModelVendor;
+            foreach (KeyValuePair<string, ModelConnectionSettings> profile in _modelDrafts)
+                candidate.SetModelConnection(profile.Key, profile.Value.Copy());
+            candidate.ModelBaseUrl = active.BaseUrl;
+            candidate.ModelApiKey = active.ApiKey;
+            candidate.ModelName = active.Model;
+            candidate.ModelProtocol = ModelApiProtocols.Normalize(active.Protocol);
+            candidate.TargetLanguageMode = _language.SelectedIndex <= 0 ? "Smart" : "Fixed";
+            if (_language.SelectedIndex > 0)
+                candidate.TargetLanguage = LanguageCodes[_language.SelectedIndex - 1];
+            candidate.OcrAiFallback = _ocrAiFallback.IsChecked == true;
+            candidate.CommerceSearchEnabled = _commerceSearchEnabled.IsChecked == true;
+            candidate.CommerceSearchApiKey = _commerceSearchKey.Password.Trim();
+            candidate.TranslateHotkey = translate.Display;
+            candidate.OcrHotkey = ocr.Display;
+            candidate.SettingsHotkey = settingsHotkey.Display;
+            candidate.WritingHotkey = writing.Display;
+            candidate.StartWithWindows = _startWithWindows.IsChecked == true;
+            candidate.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" :
+                _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
+            candidate.UpdateCheckHours = _updateInterval.SelectedIndex < 0
+                ? 24 : UpdateIntervals[_updateInterval.SelectedIndex];
+
+            string consentTarget = ConsentTarget(candidate.ModelVendor, active);
+            bool consentStillValid = _ocrConsentAllowed.IsChecked == true &&
+                candidate.OcrAiConsentGranted &&
+                string.Equals(candidate.OcrConsentTarget, consentTarget,
+                    StringComparison.OrdinalIgnoreCase);
+            if (!consentStillValid)
             {
-                MessageBoxResult consent = MessageBox.Show(
-                    "开启后，所选截图会发送到 " +
-                    _pendingModelVendor + " 的 AI 服务。\n\n" +
-                    "截图可能包含隐私信息。确定允许上传吗？",
-                    "启用截图识别",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
-                if (consent != MessageBoxResult.Yes) return;
-                grantOcrConsent = true;
+                candidate.OcrAiConsentGranted = false;
+                candidate.OcrConsentTarget = "";
             }
 
-            SaveActiveModelDraft();
-            if (!IsProviderReady(_pendingProvider))
-            {
-                _tabs.SelectedIndex = _pendingProvider == "ModelApi"
-                    ? 1 : 0;
-                if (_pendingProvider != "ModelApi")
-                {
-                    SelectConfigSection(
-                        ConfigSectionForProvider(_pendingProvider));
-                    BrowseProvider(_pendingProvider);
-                }
-                MessageBox.Show(
-                    ProviderDisplayName(_pendingProvider) +
-                    " 的必要配置尚未填写完整。请补充配置，或选择其他可用服务。",
-                    "当前翻译服务不可用",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Warning);
-                return;
-            }
-            _settings.Provider = _pendingProvider;
-            _settings.TargetLanguageMode =
-                _language.SelectedIndex <= 0
-                    ? "Smart"
-                    : "Fixed";
-            if (_language.SelectedIndex > 0)
-                _settings.TargetLanguage =
-                    LanguageCode(_language.SelectedIndex - 1);
-            _settings.GoogleApiKey = _googleKey.Password.Trim();
-            _settings.MicrosoftApiKey = _microsoftKey.Password.Trim();
-            _settings.MicrosoftRegion = _region.Text.Trim();
-            _settings.ModelVendor =
-                NormalizeModelVendor(_pendingModelVendor);
-            foreach (KeyValuePair<string, ModelConnectionSettings>
-                profile in _modelDrafts)
-                _settings.SetModelConnection(
-                    profile.Key, profile.Value);
-            ModelConnectionSettings activeConnection =
-                _modelDrafts[_settings.ModelVendor];
-            _settings.ModelBaseUrl = activeConnection.BaseUrl;
-            _settings.ModelName = activeConnection.Model;
-            _settings.ModelApiKey = activeConnection.ApiKey;
-            _settings.ModelProtocol = ModelApiProtocols.Normalize(
-                activeConnection.Protocol);
-            _settings.OcrAiFallback = enableAiOcr;
-            _settings.CommerceSearchEnabled =
-                _commerceSearchEnabled.IsChecked == true;
-            _settings.CommerceSearchApiKey =
-                _commerceSearchKey.Password.Trim();
-            _settings.AutoTranslate = false;
-            _settings.TranslateHotkey = translateGesture.Display;
-            _settings.WritingHotkey = writingGesture.Display;
-            _settings.OcrHotkey = ocrGesture.Display;
-            _settings.SettingsHotkey = settingsGesture.Display;
-            _settings.StartWithWindows =
-                _startWithWindows.IsChecked == true;
-            _settings.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" : _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
-            _settings.UpdateCheckHours = _updateInterval.SelectedIndex < 0 ? 24
-                : UpdateIntervals[_updateInterval.SelectedIndex];
+            bool previousStartup = StartupManager.IsEnabled();
             try
             {
-                StartupManager.SetEnabled(
-                    _settings.StartWithWindows);
-                if (grantOcrConsent)
-                {
-                    _settings.OcrAiConsentGranted = true;
-                    _settings.OcrConsentTarget = consentTarget;
-                }
-                _settings.Save();
-                var handler = SettingsSaved;
+                StartupManager.SetEnabled(candidate.StartWithWindows);
+                candidate.Save();
+                _settings.CopyFrom(candidate);
+                _draft = candidate.Copy();
+                _reloadOnShow = true;
+                _isDirty = false;
+                UpdateDirtyStatus();
+                UpdateHeaderSummary();
+                EventHandler handler = SettingsSaved;
                 if (handler != null) handler(this, EventArgs.Empty);
                 Hide();
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                MessageBox.Show(
-                    "保存失败：" + ex.Message, "鲨译",
+                try { StartupManager.SetEnabled(previousStartup); }
+                catch (Exception rollbackError)
+                {
+                    DiagnosticLog.Write("Startup rollback failed; type=" + rollbackError.GetType().Name);
+                }
+                _dirtyText.Text = "保存失败，编辑内容已保留";
+                MessageBox.Show("保存失败：" + error.Message +
+                    "\n\n设置没有部分应用；请修复问题后重试。", "鲨译",
                     MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
@@ -1500,436 +1368,295 @@ namespace GlobalTranslator
         private bool ValidateHotkeys(
             out HotkeyGesture translate,
             out HotkeyGesture ocr,
-            out HotkeyGesture settings, out HotkeyGesture writing)
+            out HotkeyGesture settings,
+            out HotkeyGesture writing)
         {
-            translate = null;
-            ocr = null;
-            settings = null;
-            writing = null;
-            string error;
-            if (!HotkeyGesture.TryParse(_writingHotkey.Text, out writing, out error))
-                return ShowHotkeyError("外贸沟通助手", error, _writingHotkey);
-            if (!HotkeyGesture.TryParse(
-                _translateHotkey.Text,
-                out translate,
-                out error))
-                return ShowHotkeyError(
-                    "选中文字翻译", error, _translateHotkey);
-            if (!HotkeyGesture.TryParse(
-                _ocrHotkey.Text,
-                out ocr,
-                out error))
-                return ShowHotkeyError(
-                    "截图 OCR 翻译", error, _ocrHotkey);
-            if (!HotkeyGesture.TryParse(
-                _settingsHotkey.Text,
-                out settings,
-                out error))
-                return ShowHotkeyError(
-                    "打开设置", error, _settingsHotkey);
-            if (writing.SameAs(translate) || writing.SameAs(ocr) || writing.SameAs(settings) || translate.SameAs(ocr) ||
-                translate.SameAs(settings) ||
-                ocr.SameAs(settings))
-                return ShowHotkeyError(
-                    "快捷键冲突",
-                    "四项功能不能使用相同的快捷键。",
-                    null);
+            translate = ocr = settings = writing = null;
+            if (!ParseHotkey(_translateHotkey, "选中翻译", out translate)) return false;
+            if (!ParseHotkey(_ocrHotkey, "截图翻译", out ocr)) return false;
+            if (!ParseHotkey(_settingsHotkey, "打开设置", out settings)) return false;
+            if (!ParseHotkey(_writingHotkey, "外贸助手", out writing)) return false;
+            var all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            HotkeyGesture[] gestures = { translate, ocr, settings, writing };
+            string[] labels = { "选中翻译", "截图翻译", "打开设置", "外贸助手" };
+            for (int i = 0; i < gestures.Length; i++)
+            {
+                string prior;
+                if (all.TryGetValue(gestures[i].Display, out prior))
+                {
+                    MessageBox.Show("“" + labels[i] + "”与“" + prior + "”使用了相同快捷键。",
+                        "快捷键冲突", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    Navigate("Shortcuts");
+                    return false;
+                }
+                all[gestures[i].Display] = labels[i];
+            }
             return true;
         }
 
-        private bool ShowHotkeyError(
-            string name, string error, Control focus)
+        private bool ParseHotkey(TextBox input, string name, out HotkeyGesture gesture)
         {
-            _tabs.SelectedIndex = 3;
-            MessageBox.Show(
-                name + "：" + error,
-                "快捷键设置",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            if (focus != null) focus.Focus();
+            string error;
+            if (HotkeyGesture.TryParse(input.Text, out gesture, out error)) return true;
+            MessageBox.Show("“" + name + "”快捷键无效：" + error,
+                "快捷键无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+            Navigate("Shortcuts");
+            input.Focus();
             return false;
         }
 
-        private static string NormalizeHotkey(
-            string value, string fallback)
+        private void DiscardAndHide()
+        {
+            LoadValues();
+            _reloadOnShow = true;
+            Hide();
+        }
+
+        private void SettingsWindowKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key != Key.Escape) return;
+            DiscardAndHide();
+            e.Handled = true;
+        }
+
+        private void AddHotkeyEvents(TextBox recorder) { }
+
+        private TextBox AddHotkeyRecorder(Panel parent, string title, string hint)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 15) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+            var label = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            label.Children.Add(new TextBlock
+            {
+                Text = title, FontSize = 14, FontWeight = FontWeights.Medium, Foreground = Ink
+            });
+            label.Children.Add(new TextBlock
+            {
+                Text = hint, FontSize = 12, Foreground = Subtle,
+                Margin = new Thickness(0, 3, 0, 0), TextWrapping = TextWrapping.Wrap
+            });
+            row.Children.Add(label);
+            var recorder = new TextBox
+            {
+                Height = 38, IsReadOnly = true, Cursor = Cursors.Hand,
+                TextAlignment = TextAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
+                FontWeight = FontWeights.SemiBold, Foreground = Accent,
+                Background = Brush("#F3FAFC"), BorderBrush = BorderLine,
+                ToolTip = "点击后按下快捷键"
+            };
+            recorder.PreviewKeyDown += HotkeyRecorderKeyDown;
+            recorder.TextChanged += delegate { MarkDirty(); };
+            Grid.SetColumn(recorder, 1);
+            row.Children.Add(recorder);
+            parent.Children.Add(row);
+            return recorder;
+        }
+
+        private void HotkeyRecorderKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Escape || e.Key == Key.Tab) return;
+            Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+            HotkeyGesture gesture;
+            string error;
+            if (HotkeyGesture.TryFromKeyEvent(key, Keyboard.Modifiers, out gesture, out error))
+            {
+                ((TextBox)sender).Text = gesture.Display;
+                ((TextBox)sender).ToolTip = "已录制 " + gesture.Display;
+            }
+            else ((TextBox)sender).ToolTip = error;
+            e.Handled = true;
+        }
+
+        private void CopyDiagnosticsClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Clipboard.SetText(DiagnosticLog.BuildSupportSummary());
+                _copyDiagnostics.Content = "已复制";
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show("复制诊断信息失败：" + error.Message, "Sharkey",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void OpenDiagnosticFolderClick(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                DiagnosticLog.Write("Diagnostic folder requested");
+                Directory.CreateDirectory(DiagnosticLog.FolderPath);
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe", Arguments = "/select,\"" + DiagnosticLog.FilePath + "\"",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show("无法打开日志目录：" + error.Message + "\n\n" +
+                    DiagnosticLog.FolderPath, "Sharkey",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private void LoadModelSummary()
+        {
+            UpdateHeaderSummary();
+        }
+
+        private void UpdateHeaderSummary()
+        {
+            if (_headerCurrentEngine != null)
+            {
+                ModelConnectionSettings current = _settings.GetModelConnection(_settings.ModelVendor);
+                string model = string.IsNullOrWhiteSpace(current.Model) ? "尚未配置模型" : current.Model;
+                _headerCurrentEngine.Text = _selectedPage == "Model" ? "" :
+                    "当前 AI · " + ModelVendorDisplayName(_settings.ModelVendor) + " · " + model;
+                _headerCurrentEngine.Visibility = _selectedPage == "Model"
+                    ? Visibility.Collapsed : Visibility.Visible;
+                _headerCurrentEngine.ToolTip = _headerCurrentEngine.Text;
+            }
+            if (_modelSavedSummary != null)
+            {
+                ModelConnectionSettings current = _settings.GetModelConnection(_settings.ModelVendor);
+                _modelSavedSummary.Text = ModelVendorDisplayName(_settings.ModelVendor) + " · " +
+                    (string.IsNullOrWhiteSpace(current.Model) ? "尚未配置" : current.Model);
+            }
+        }
+
+        private void UpdateTargetRule()
+        {
+            if (_targetRule == null || _language == null) return;
+            _targetRule.Text = _language.SelectedIndex <= 0
+                ? "中文 → English；其他语言 → 简体中文。"
+                : "所有内容固定翻译为 " + LanguageNames[_language.SelectedIndex - 1] + "。";
+        }
+
+        private void MarkDirty()
+        {
+            if (_loadingValues) return;
+            _isDirty = true;
+            UpdateDirtyStatus();
+        }
+
+        private void UpdateDirtyStatus()
+        {
+            if (_dirtyText != null)
+                _dirtyText.Text = _isDirty ? "● 有未保存的更改" : "";
+            if (_saveButton != null) _saveButton.IsDefault = _isDirty;
+        }
+
+        private void ClampToWorkArea()
+        {
+            double workHeight = SystemParameters.WorkArea.Height;
+            double workWidth = SystemParameters.WorkArea.Width;
+            Height = Math.Max(MinHeight, Math.Min(Height, workHeight));
+            Width = Math.Max(MinWidth, Math.Min(Width, workWidth));
+        }
+
+        private void UpdateHeaderFromDraft() { }
+
+        private static string ValidateConnection(string vendor, ModelConnectionSettings connection)
+        {
+            if (connection == null) return "模型配置不可用。";
+            Uri uri;
+            if (!Uri.TryCreate((connection.BaseUrl ?? "").Trim(), UriKind.Absolute, out uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return "请填写有效的 HTTP 或 HTTPS API 地址。";
+            if (string.IsNullOrWhiteSpace(connection.Model)) return "请填写模型名称。";
+            if (!connection.IsUsable(vendor))
+                return vendor == "Custom" && ModelConnectionSettings.IsLocalEndpoint(connection.BaseUrl)
+                    ? "自定义模型配置不完整。" : "请填写 API 密钥。";
+            return "";
+        }
+
+        private static string ConsentTarget(string vendor, ModelConnectionSettings connection)
+        {
+            return (vendor ?? "").ToLowerInvariant() + "|" +
+                ((connection == null ? "" : connection.BaseUrl) ?? "")
+                    .Trim().TrimEnd('/').ToLowerInvariant();
+        }
+
+        private void UpdateModelTestButtonState()
+        {
+            if (_testTextButton == null || _testImageButton == null) return;
+            bool ready = ValidateConnection(_activeModelVendor, ActiveModelDraft()).Length == 0;
+            _testTextButton.IsEnabled = ready;
+            _testImageButton.IsEnabled = ready;
+        }
+
+        private static string CompactError(string message)
+        {
+            string value = string.IsNullOrWhiteSpace(message) ? "请求失败。" : message.Trim();
+            return value.Length > 150 ? value.Substring(0, 150) + "…" : value;
+        }
+
+        private static string NormalizeHotkey(string value, string fallback)
         {
             HotkeyGesture gesture;
             string error;
-            return HotkeyGesture.TryParse(
-                value, out gesture, out error)
-                ? gesture.Display
-                : fallback;
+            return HotkeyGesture.TryParse(value, out gesture, out error)
+                ? gesture.Display : fallback;
         }
 
-        private void ModelVendorChanged(
-            object sender, SelectionChangedEventArgs e)
+        private static string NormalizeVendor(string vendor)
         {
-            if (_loadingValues) return;
-            var vendor =
-                _modelVendor.SelectedItem as ModelVendorChoice;
-            if (vendor == null) return;
-            SaveActiveModelDraft();
-            _activeModelVendor = vendor.Code;
-            EnsureModelDraft(vendor);
-            LoadModelDraft(vendor.Code);
-            UpdateProviderSelection();
+            if (string.Equals(vendor, "MiMo", StringComparison.OrdinalIgnoreCase)) return "MiMo";
+            if (string.Equals(vendor, "Qwen", StringComparison.OrdinalIgnoreCase)) return "Qwen";
+            if (string.Equals(vendor, "Custom", StringComparison.OrdinalIgnoreCase)) return "Custom";
+            return "DeepSeek";
         }
 
-        private void ModelProtocolChanged(
-            object sender, SelectionChangedEventArgs e)
+        private static string ModelVendorDisplayName(string vendor)
         {
-            if (_loadingValues) return;
-            ModelApiProtocolChoice choice =
-                _modelProtocol == null
-                    ? null
-                    : _modelProtocol.SelectedItem as ModelApiProtocolChoice;
-            if (choice == null) return;
-
-            ModelVendorChoice vendor = SelectedModelVendorChoice();
-            ModelConnectionSettings draft;
-            if (vendor != null &&
-                _modelDrafts.TryGetValue(vendor.Code, out draft))
+            switch (NormalizeVendor(vendor))
             {
-                string oldProtocol = ModelApiProtocols.Normalize(
-                    _currentModelProtocol);
-                string currentBase = (_modelBaseUrl == null
-                    ? ""
-                    : _modelBaseUrl.Text).Trim();
-                string oldRecommended = vendor.RecommendedBaseUrl(
-                    oldProtocol);
-                string newRecommended = vendor.RecommendedBaseUrl(
-                    choice.Code);
-                // When the user is still on a built-in default, switch the
-                // provider's base URL along with the protocol. A hand-edited
-                // URL is never overwritten.
-                if (!string.IsNullOrWhiteSpace(newRecommended) &&
-                    (string.IsNullOrWhiteSpace(currentBase) ||
-                     string.Equals(
-                         currentBase.TrimEnd('/'),
-                         (oldRecommended ?? "").TrimEnd('/'),
-                         StringComparison.OrdinalIgnoreCase)) &&
-                    _modelBaseUrl != null)
-                    _modelBaseUrl.Text = newRecommended;
-            }
-            _currentModelProtocol = choice.Code;
-            UpdateModelEndpointHint();
-            UpdateProviderSelection();
-        }
-
-        private void LoadModelDrafts()
-        {
-            _modelDrafts.Clear();
-            foreach (ModelVendorChoice vendor in
-                _modelVendor.Items)
-            {
-                ModelConnectionSettings saved =
-                    _settings.GetModelConnection(vendor.Code);
-                if (string.IsNullOrWhiteSpace(saved.BaseUrl))
-                    saved.BaseUrl = vendor.RecommendedBaseUrl(
-                        saved.Protocol);
-                if (string.IsNullOrWhiteSpace(saved.Model))
-                    saved.Model = vendor.Model;
-                _modelDrafts[vendor.Code] = saved;
+                case "MiMo": return "MiMo";
+                case "Qwen": return "Qwen";
+                case "Custom": return "自定义";
+                default: return "DeepSeek";
             }
         }
 
-        private void EnsureModelDraft(ModelVendorChoice vendor)
+        private static string RecommendedBaseUrl(string vendor, string protocol)
         {
-            if (_modelDrafts.ContainsKey(vendor.Code)) return;
-            _modelDrafts[vendor.Code] =
-                new ModelConnectionSettings
-                {
-                    BaseUrl = vendor.BaseUrl,
-                    Model = vendor.Model,
-                    ApiKey = "",
-                    Protocol = ModelApiProtocols.OpenAI
-                };
-        }
-
-        private void SaveActiveModelDraft()
-        {
-            if (string.IsNullOrWhiteSpace(
-                _activeModelVendor) ||
-                _modelBaseUrl == null ||
-                _modelName == null ||
-                _modelApiKey == null)
-                return;
-            _modelDrafts[_activeModelVendor] =
-                new ModelConnectionSettings
-                {
-                    BaseUrl = _modelBaseUrl.Text.Trim(),
-                    Model = _modelName.Text.Trim(),
-                    ApiKey = _modelApiKey.Password.Trim(),
-                    Protocol = SelectedModelProtocol()
-                };
-        }
-
-        private void LoadModelDraft(string vendor)
-        {
-            ModelConnectionSettings draft;
-            if (!_modelDrafts.TryGetValue(
-                vendor, out draft))
-                return;
-            bool wasLoading = _loadingValues;
-            _loadingValues = true;
-            try
+            if (ModelApiProtocols.IsAnthropic(protocol))
             {
-                _modelBaseUrl.Text = draft.BaseUrl;
-                _modelName.Text = draft.Model;
-                _modelApiKey.Password = draft.ApiKey;
-                _currentModelProtocol = draft.Protocol;
-                SelectModelProtocol(draft.Protocol);
+                if (vendor == "DeepSeek") return "https://api.deepseek.com/anthropic";
+                if (vendor == "MiMo") return "https://api.xiaomimimo.com/anthropic";
             }
-            finally { _loadingValues = wasLoading; }
-            UpdateModelEndpointHint();
-        }
-
-        private string SelectedModelProtocol()
-        {
-            ModelApiProtocolChoice choice =
-                _modelProtocol == null
-                    ? null
-                    : _modelProtocol.SelectedItem as ModelApiProtocolChoice;
-            return ModelApiProtocols.Normalize(
-                choice == null ? ModelApiProtocols.OpenAI : choice.Code);
-        }
-
-        private void SelectModelProtocol(string protocol)
-        {
-            string requested = ModelApiProtocols.Normalize(protocol);
-            if (_modelProtocol == null) return;
-            for (int i = 0; i < _modelProtocol.Items.Count; i++)
+            switch (vendor)
             {
-                ModelApiProtocolChoice choice =
-                    _modelProtocol.Items[i] as ModelApiProtocolChoice;
-                if (choice != null && string.Equals(
-                        choice.Code, requested,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    _modelProtocol.SelectedIndex = i;
-                    return;
-                }
+                case "DeepSeek": return "https://api.deepseek.com";
+                case "MiMo": return "https://api.xiaomimimo.com/v1";
+                case "Qwen": return "https://dashscope.aliyuncs.com/compatible-mode/v1";
+                default: return "https://api.openai.com/v1";
             }
-            _modelProtocol.SelectedIndex = 0;
         }
 
-        private ModelVendorChoice SelectedModelVendorChoice()
+        private static List<ModelVendorChoice> ModelVendors()
         {
-            return _modelVendor == null
-                ? null
-                : _modelVendor.SelectedItem as ModelVendorChoice;
-        }
-
-        private void UpdateModelEndpointHint()
-        {
-            if (_modelEndpointHint == null) return;
-            string protocol = SelectedModelProtocol();
-            string baseUrl = _modelBaseUrl == null
-                ? ""
-                : _modelBaseUrl.Text.Trim();
-            string endpoint = ModelApiProtocols.BuildEndpoint(
-                baseUrl, protocol);
-            if (string.IsNullOrWhiteSpace(endpoint))
-                endpoint = "（填写基础地址后显示）";
-            _modelEndpointHint.Text =
-                "最终请求地址：" + endpoint + "\n" +
-                (ModelApiProtocols.IsAnthropic(protocol)
-                    ? "Anthropic Messages；服务商需支持该协议，返回内容按 content[].text 读取。"
-                    : "OpenAI Chat Completions；自动补全 /chat/completions。");
-        }
-
-        private void SelectModelVendor(
-            string code, string baseUrl)
-        {
-            string requested = code ?? "";
-            if (requested.Length == 0 ||
-                requested == "Custom")
+            return new List<ModelVendorChoice>
             {
-                foreach (ModelVendorChoice choice in
-                    _modelVendor.Items)
-                {
-                    if (choice.Code != "Custom" &&
-                        (string.Equals(
-                             choice.BaseUrl.TrimEnd('/'),
-                             (baseUrl ?? "").TrimEnd('/'),
-                             StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(
-                             (choice.AnthropicBaseUrl ?? "").TrimEnd('/'),
-                             (baseUrl ?? "").TrimEnd('/'),
-                             StringComparison.OrdinalIgnoreCase)))
-                    {
-                        requested = choice.Code;
-                        break;
-                    }
-                }
-            }
-            for (int i = 0; i < _modelVendor.Items.Count; i++)
-            {
-                var choice =
-                    _modelVendor.Items[i] as ModelVendorChoice;
-                if (choice != null &&
-                    string.Equals(
-                        choice.Code,
-                        requested,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    _modelVendor.SelectedIndex = i;
-                    return;
-                }
-            }
-            _modelVendor.SelectedIndex = 0;
-        }
-
-        private string SelectedProvider()
-        {
-            return _pendingProvider;
-        }
-
-        private static bool IsKnownProvider(string provider)
-        {
-            return provider == "GoogleFree" ||
-                   provider == "MicrosoftFree" ||
-                   provider == "Microsoft" ||
-                   provider == "Google" ||
-                   provider == "ModelApi";
-        }
-
-        private static Border ShortcutPill(
-            string key,
-            string action,
-            out TextBlock keyText)
-        {
-            var panel = new StackPanel { Orientation = Orientation.Horizontal };
-            keyText = new TextBlock
-            {
-                Text = key,
-                Foreground = Navy,
-                FontWeight = FontWeights.Bold,
-                FontSize = 12,
-                Background = Brushes.White,
-                Padding = new Thickness(8, 5, 8, 5)
-            };
-            panel.Children.Add(keyText);
-            panel.Children.Add(new TextBlock
-            {
-                Text = action,
-                Foreground = Brushes.White,
-                FontSize = 11.5,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 9, 0)
-            });
-            return new Border
-            {
-                Background = Brush("#287C98"),
-                BorderBrush = Brush("#59C6D5"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(7),
-                Margin = new Thickness(8, 0, 0, 0),
-                Child = panel
+                new ModelVendorChoice("DeepSeek", "DeepSeek"),
+                new ModelVendorChoice("MiMo", "MiMo"),
+                new ModelVendorChoice("Qwen", "Qwen"),
+                new ModelVendorChoice("Custom", "自定义")
             };
         }
 
-        private static TabItem Tab(string title, UIElement content)
+        private static int LanguageIndex(string code)
         {
-            var item = new TabItem
-            {
-                Header = title,
-                Content = content,
-                Width = 102,
-                Height = 48,
-                Margin = new Thickness(7, 5, 7, 0),
-                Padding = new Thickness(15, 10, 15, 10),
-                FontWeight = FontWeights.SemiBold,
-                FontSize = 12.5,
-                Foreground = Navy,
-                HorizontalContentAlignment =
-                    HorizontalAlignment.Stretch,
-                VerticalContentAlignment =
-                    VerticalAlignment.Stretch
-            };
-            var template = new ControlTemplate(
-                typeof(TabItem));
-            var border = new FrameworkElementFactory(
-                typeof(Border));
-            border.Name = "NavigationChrome";
-            border.SetValue(
-                Border.CornerRadiusProperty,
-                new CornerRadius(9));
-            border.SetBinding(
-                Border.BackgroundProperty,
-                new Binding("Background")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(
-                Border.BorderBrushProperty,
-                new Binding("BorderBrush")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(
-                Border.BorderThicknessProperty,
-                new Binding("BorderThickness")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            var presenter = new FrameworkElementFactory(
-                typeof(ContentPresenter));
-            presenter.SetValue(
-                ContentPresenter.ContentSourceProperty,
-                "Header");
-            presenter.SetValue(
-                FrameworkElement.VerticalAlignmentProperty,
-                VerticalAlignment.Center);
-            presenter.SetValue(
-                FrameworkElement.HorizontalAlignmentProperty,
-                HorizontalAlignment.Left);
-            presenter.SetBinding(
-                FrameworkElement.MarginProperty,
-                new Binding("Padding")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.AppendChild(presenter);
-            template.VisualTree = border;
-            var hover = new Trigger
-            {
-                Property = UIElement.IsMouseOverProperty,
-                Value = true
-            };
-            hover.Setters.Add(new Setter(
-                Control.BackgroundProperty,
-                Brush("#F0F7F9")));
-            template.Triggers.Add(hover);
-            var selected = new Trigger
-            {
-                Property = TabItem.IsSelectedProperty,
-                Value = true
-            };
-            selected.Setters.Add(new Setter(
-                Control.BackgroundProperty,
-                Brush("#E4F3F6")));
-            selected.Setters.Add(new Setter(
-                Control.ForegroundProperty,
-                Ocean));
-            selected.Setters.Add(new Setter(
-                Control.BorderBrushProperty,
-                Brush("#A9D6DF")));
-            selected.Setters.Add(new Setter(
-                Control.BorderThicknessProperty,
-                new Thickness(1)));
-            template.Triggers.Add(selected);
-            item.Template = template;
-            return item;
+            int index = Array.IndexOf(LanguageCodes, code);
+            return index < 0 ? 0 : index;
         }
 
-        private static StackPanel TabBody()
+        private static StackPanel PageStack()
         {
-            return new StackPanel { Margin = new Thickness(18) };
+            return new StackPanel { Margin = new Thickness(0, 4, 8, 12) };
         }
 
         private static ScrollViewer Scroll(UIElement content)
@@ -1938,31 +1665,26 @@ namespace GlobalTranslator
             {
                 Content = content,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Background = Brushes.White
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Background = Brushes.Transparent,
+                PanningMode = PanningMode.VerticalOnly
             };
         }
 
-        private static StackPanel Intro(string title, string description)
+        private static StackPanel SectionHeader(string title, string subtitle)
         {
-            var panel = new StackPanel();
+            var panel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
             panel.Children.Add(new TextBlock
             {
-                Text = title,
-                FontSize = 18,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
+                Text = title, FontSize = 15, FontWeight = FontWeights.SemiBold,
+                Foreground = Ink
             });
-            if (!string.IsNullOrWhiteSpace(description))
-            {
+            if (!string.IsNullOrWhiteSpace(subtitle))
                 panel.Children.Add(new TextBlock
                 {
-                    Text = description,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = Muted,
-                    FontSize = 11.5,
-                    Margin = new Thickness(0, 4, 0, 0)
+                    Text = subtitle, FontSize = 12, Foreground = Subtle,
+                    TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0)
                 });
-            }
             return panel;
         }
 
@@ -1970,1034 +1692,162 @@ namespace GlobalTranslator
         {
             return new Border
             {
-                Background = Brushes.White,
-                BorderBrush = Line,
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(12)
+                Background = Surface, BorderBrush = BorderLine,
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(14),
+                Margin = new Thickness(0, 0, 0, 12)
             };
         }
 
-        private Button ProviderChoice(
-            string name, string category, string code)
+        private static TextBlock FieldLabel(string text)
         {
-            var text = new StackPanel
-            {
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            text.Children.Add(new TextBlock
-            {
-                Text = name,
-                TextAlignment = TextAlignment.Left,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                FontSize = 11.5,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
-            });
-            text.Children.Add(new TextBlock
-            {
-                Text = category,
-                TextAlignment = TextAlignment.Left,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-                FontSize = 10.5,
-                Foreground = Muted,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            var button = new Button
-            {
-                Content = text,
-                Tag = code,
-                Height = 48,
-                MinWidth = 112,
-                Cursor = Cursors.Hand,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Background = Brushes.Transparent,
-                BorderBrush = Brushes.Transparent,
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(12, 5, 12, 5),
-                Margin = new Thickness(0, 0, 4, 0)
-            };
-            button.Template = RoundedButtonTemplate(9);
-            button.Click += ProviderBrowseClick;
-            return button;
-        }
-
-        private static UIElement ProviderConfigPanel(
-            string name,
-            string state,
-            UIElement fields)
-        {
-            if (fields != null) return fields;
             return new TextBlock
             {
-                Text = state,
-                Foreground = Muted,
-                FontSize = 11.5,
-                Margin = new Thickness(0, 2, 0, 0)
+                Text = text, FontSize = 12, FontWeight = FontWeights.SemiBold,
+                Foreground = Ink, Margin = new Thickness(0, 0, 0, 6)
             };
         }
 
-        private static Border ConfigurationCard(
-            string name,
-            string badge,
-            string description,
-            UIElement fields = null)
+        private static void AddField(Panel panel, string label, UIElement control)
         {
-            var card = Card();
-            card.Padding = new Thickness(15);
-            var content = new StackPanel();
-            content.Children.Add(new TextBlock
-            {
-                Text = name,
-                FontSize = 13.5,
-                FontWeight = FontWeights.Bold,
-                Foreground = Navy
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = badge,
-                FontSize = 10.5,
-                Foreground = Ocean,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            content.Children.Add(new TextBlock
-            {
-                Text = description,
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = Muted,
-                FontSize = 11,
-                Margin = new Thickness(
-                    0, 7, 0, fields == null ? 0 : 8)
-            });
-            if (fields != null)
-            {
-                content.Children.Add(new Border
-                {
-                    Height = 1,
-                    Background = Line,
-                    Margin = new Thickness(0, 5, 0, 11)
-                });
-                content.Children.Add(fields);
-            }
-            card.Child = content;
-            return card;
+            panel.Children.Add(FieldLabel(label));
+            FrameworkElement element = control as FrameworkElement;
+            if (element != null) element.Margin = new Thickness(0, 0, 0, 12);
+            panel.Children.Add(control);
         }
 
-        private Button ConfigSectionButton(
-            string text, string section)
+        private static TextBox AddText(Panel panel, string label, string hint)
         {
-            var button = new Button
-            {
-                Content = text,
-                Tag = section,
-                Height = 34,
-                Background = Brushes.Transparent,
-                Foreground = Muted,
-                BorderThickness = new Thickness(0),
-                FontSize = 11.5,
-                FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand
-            };
-            button.Template = RoundedButtonTemplate(9);
-            button.Click += ConfigSectionClick;
-            return button;
-        }
-
-        private void ConfigSectionClick(
-            object sender, RoutedEventArgs e)
-        {
-            var button = sender as Button;
-            if (button == null) return;
-            SelectConfigSection(
-                button.Tag as string ?? "Free");
-            e.Handled = true;
-        }
-
-        private void SelectConfigSection(string section)
-        {
-            if (section != "Official" &&
-                section != "Model")
-                section = "Free";
-            _activeConfigSection = section;
-            Button[] buttons =
-            {
-                _freeConfigButton,
-                _officialConfigButton,
-                _modelConfigButton
-            };
-            foreach (Button button in buttons)
-            {
-                if (button == null) continue;
-                bool selected = string.Equals(
-                    button.Tag as string,
-                    section,
-                    StringComparison.Ordinal);
-                button.Background = selected
-                    ? Brushes.White
-                    : Brushes.Transparent;
-                button.Foreground = selected
-                    ? Navy
-                    : Muted;
-                button.BorderBrush = selected
-                    ? Brush("#C8DDE5")
-                    : Brushes.Transparent;
-                button.BorderThickness = selected
-                    ? new Thickness(1)
-                    : new Thickness(0);
-            }
-            if (_providerConfigHost == null) return;
-            string next = DefaultBrowsedProvider(section);
-            RebuildProviderBrowseButtons(section);
-            BrowseProvider(next);
-        }
-
-        private static string ConfigSectionForProvider(
-            string provider)
-        {
-            if (provider == "Microsoft" ||
-                provider == "Google")
-                return "Official";
-            if (provider == "ModelApi")
-                return "Model";
-            return "Free";
-        }
-
-        private string DefaultBrowsedProvider(string section)
-        {
-            if (ConfigSectionForBrowse(
-                _browsedProvider) == section)
-                return _browsedProvider;
-            if (ConfigSectionForProvider(
-                _pendingProvider) == section)
-                return _pendingProvider == "ModelApi"
-                    ? "ModelApi:" +
-                      NormalizeModelVendor(
-                          _pendingModelVendor)
-                    : _pendingProvider;
-            if (section == "Official")
-                return "Microsoft";
-            if (section == "Model")
-                return "ModelApi:" +
-                    NormalizeModelVendor(
-                        _pendingModelVendor);
-            return "GoogleFree";
-        }
-
-        private void RebuildProviderBrowseButtons(
-            string section)
-        {
-            var host = _providerConfigHost == null
-                ? null
-                : _providerConfigHost.Tag as StackPanel;
-            if (host == null) return;
-            host.Children.Clear();
-            _providerBrowseButtons.Clear();
-            var choices = new List<KeyValuePair<string, string>>();
-            if (section == "Official")
-            {
-                choices.Add(new KeyValuePair<string, string>(
-                    "Microsoft", "Microsoft Translator"));
-                choices.Add(new KeyValuePair<string, string>(
-                    "Google", "Google Cloud"));
-            }
-            else if (section == "Model")
-            {
-                choices.Add(new KeyValuePair<string, string>(
-                    "ModelApi:" + NormalizeModelVendor(
-                        _pendingModelVendor), "当前 AI 模型"));
-            }
-            else
-            {
-                choices.Add(new KeyValuePair<string, string>(
-                    "GoogleFree", "Google 免费"));
-                choices.Add(new KeyValuePair<string, string>(
-                    "MicrosoftFree", "Microsoft 免费"));
-            }
-            foreach (KeyValuePair<string, string>
-                choice in choices)
-            {
-                bool ready = IsBrowseReady(choice.Key);
-                Button button = ProviderChoice(
-                    choice.Value,
-                    IsPendingProvider(choice.Key)
-                        ? "✓ 当前引擎"
-                        : ready
-                            ? "已配置"
-                            : "待配置",
-                    choice.Key);
-                _providerBrowseButtons[choice.Key] = button;
-                host.Children.Add(button);
-                switch (choice.Key)
-                {
-                    case "GoogleFree":
-                        _googleFree = button;
-                        break;
-                    case "MicrosoftFree":
-                        _microsoftFree = button;
-                        break;
-                    case "Microsoft":
-                        _microsoftOfficial = button;
-                        break;
-                    case "Google":
-                        _googleOfficial = button;
-                        break;
-                    case "ModelApi:Custom":
-                        _modelApi = button;
-                        break;
-                }
-            }
-        }
-
-        private void BrowseProvider(string code)
-        {
-            if (string.IsNullOrWhiteSpace(code))
-                code = "GoogleFree";
-            string section = ConfigSectionForBrowse(code);
-            if (section != _activeConfigSection)
-            {
-                SelectConfigSection(section);
-                return;
-            }
-            _browsedProvider = code;
-            if (BaseProvider(code) == "ModelApi")
-                SelectModelVendorForBrowse(
-                    ModelVendorFromBrowse(code));
-            UIElement view;
-            if (_providerConfigHost != null &&
-                _providerConfigViews.TryGetValue(
-                    code, out view))
-                _providerConfigHost.Content = view;
-            UpdateProviderSelection();
-        }
-
-        private void SelectModelVendorForBrowse(
-            string vendorCode)
-        {
-            vendorCode = NormalizeModelVendor(vendorCode);
-            if (_activeModelVendor == vendorCode)
-                return;
-            SaveActiveModelDraft();
-            bool wasLoading = _loadingValues;
-            _loadingValues = true;
-            try
-            {
-                for (int i = 0;
-                    i < _modelVendor.Items.Count;
-                    i++)
-                {
-                    var choice =
-                        _modelVendor.Items[i]
-                        as ModelVendorChoice;
-                    if (choice == null ||
-                        !string.Equals(
-                            choice.Code,
-                            vendorCode,
-                            StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    _modelVendor.SelectedIndex = i;
-                    _activeModelVendor = choice.Code;
-                    LoadModelDraft(choice.Code);
-                    break;
-                }
-            }
-            finally
-            {
-                _loadingValues = wasLoading;
-            }
-        }
-
-        private bool IsBrowsedProviderReady()
-        {
-            return IsBrowseReady(_browsedProvider);
-        }
-
-        private bool IsBrowseReady(string browseCode)
-        {
-            string provider = BaseProvider(browseCode);
-            if (provider != "ModelApi")
-                return IsProviderReady(provider);
-            string vendor =
-                ModelVendorFromBrowse(browseCode);
-            if (string.Equals(
-                vendor,
-                _activeModelVendor,
-                StringComparison.OrdinalIgnoreCase))
-                SaveActiveModelDraft();
-            ModelConnectionSettings draft;
-            return _modelDrafts.TryGetValue(
-                vendor, out draft) &&
-                draft.IsUsable(vendor);
-        }
-
-        private bool IsPendingProvider(string browseCode)
-        {
-            string provider = BaseProvider(browseCode);
-            if (!string.Equals(
-                provider,
-                _pendingProvider,
-                StringComparison.OrdinalIgnoreCase))
-                return false;
-            return provider != "ModelApi" ||
-                string.Equals(
-                    ModelVendorFromBrowse(browseCode),
-                    NormalizeModelVendor(
-                        _pendingModelVendor),
-                    StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string BaseProvider(string browseCode)
-        {
-            return browseCode != null &&
-                browseCode.StartsWith(
-                    "ModelApi:",
-                    StringComparison.OrdinalIgnoreCase)
-                ? "ModelApi"
-                : browseCode ?? "GoogleFree";
-        }
-
-        private static string ConfigSectionForBrowse(
-            string browseCode)
-        {
-            return ConfigSectionForProvider(
-                BaseProvider(browseCode));
-        }
-
-        private static string ModelVendorFromBrowse(
-            string browseCode)
-        {
-            if (browseCode == null) return "Custom";
-            int separator = browseCode.IndexOf(':');
-            return separator < 0
-                ? "Custom"
-                : NormalizeModelVendor(
-                    browseCode.Substring(
-                        separator + 1));
-        }
-
-        private static string NormalizeModelVendor(
-            string vendor)
-        {
-            if (string.Equals(
-                vendor, "DeepSeek",
-                StringComparison.OrdinalIgnoreCase))
-                return "DeepSeek";
-            if (string.Equals(
-                vendor, "MiMo",
-                StringComparison.OrdinalIgnoreCase))
-                return "MiMo";
-            if (string.Equals(
-                vendor, "Qwen",
-                StringComparison.OrdinalIgnoreCase))
-                return "Qwen";
-            return "Custom";
-        }
-
-        private static string ModelVendorDisplayName(
-            string vendor)
-        {
-            switch (NormalizeModelVendor(vendor))
-            {
-                case "DeepSeek": return "DeepSeek";
-                case "MiMo": return "MiMo";
-                case "Qwen": return "Qwen";
-                default: return "自定义";
-            }
-        }
-
-        private static string ProviderBrowseDisplayName(
-            string browseCode)
-        {
-            if (BaseProvider(browseCode) == "ModelApi")
-                return ModelVendorDisplayName(
-                    ModelVendorFromBrowse(
-                        browseCode));
-            return ProviderDisplayName(
-                BaseProvider(browseCode));
-        }
-
-        private void ProviderBrowseClick(
-            object sender, RoutedEventArgs e)
-        {
-            var button = sender as Button;
-            if (button == null) return;
-            BrowseProvider(
-                button.Tag as string ?? "GoogleFree");
-            e.Handled = true;
-        }
-
-        private void ActivateBrowsedProviderClick(
-            object sender, RoutedEventArgs e)
-        {
-            string provider =
-                BaseProvider(_browsedProvider);
-            if (!IsBrowsedProviderReady())
-            {
-                MessageBox.Show(
-                    ProviderBrowseDisplayName(
-                        _browsedProvider) +
-                    " 的必要配置尚未填写完整。",
-                    "无法设为当前引擎",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                return;
-            }
-            _pendingProvider = provider;
-            if (provider == "ModelApi")
-            {
-                _pendingModelVendor =
-                    ModelVendorFromBrowse(
-                        _browsedProvider);
-                if (_aiModelSelectionStatus != null)
-                    _aiModelSelectionStatus.Text = "当前 AI：" +
-                        _pendingModelVendor + " · " +
-                        _modelDrafts[_pendingModelVendor].Model;
-                if (_ocrModelSummary != null)
-                    _ocrModelSummary.Text = _aiModelSelectionStatus.Text;
-            }
-            UpdateProviderSelection();
-            e.Handled = true;
-        }
-
-        private void UpdateProviderSelection()
-        {
-            foreach (KeyValuePair<string, Button> item in
-                _providerBrowseButtons)
-            {
-                Button button = item.Value;
-                string code = item.Key;
-                bool browsed = string.Equals(
-                    code, _browsedProvider,
-                    StringComparison.OrdinalIgnoreCase);
-                bool current = IsPendingProvider(code);
-                bool ready = IsBrowseReady(code);
-                var panel = button.Content as StackPanel;
-                if (panel != null && panel.Children.Count >= 2)
-                {
-                    var title = panel.Children[0] as TextBlock;
-                    var state = panel.Children[1] as TextBlock;
-                    if (state != null)
-                        state.Text = current
-                            ? "✓ 当前引擎"
-                            : ready
-                                ? "已配置"
-                                : "待配置";
-                    if (title != null)
-                        title.Foreground = browsed
-                            ? Ocean
-                            : Navy;
-                    if (state != null)
-                        state.Foreground = current
-                            ? Ocean
-                            : ready
-                                ? Brush("#137A57")
-                                : Brush("#A45B00");
-                }
-                button.Background = browsed
-                    ? Brushes.White
-                    : Brushes.Transparent;
-                button.BorderBrush = browsed
-                    ? Brush("#A9D1DC")
-                    : Brushes.Transparent;
-            }
-            bool browsedReady = IsBrowsedProviderReady();
-            bool alreadyCurrent =
-                IsPendingProvider(_browsedProvider);
-            if (_providerConfigTitle != null)
-                _providerConfigTitle.Text =
-                    ProviderBrowseDisplayName(
-                        _browsedProvider);
-            if (_providerConfigState != null)
-            {
-                _providerConfigState.Text =
-                    alreadyCurrent
-                        ? "当前引擎"
-                        : browsedReady
-                            ? "配置可用"
-                            : "配置尚未完成";
-                _providerConfigState.Foreground =
-                    browsedReady
-                        ? Brush("#137A57")
-                        : Brush("#A45B00");
-            }
-            if (_activateProviderButton != null)
-            {
-                _activateProviderButton.IsEnabled =
-                    browsedReady && !alreadyCurrent;
-                _activateProviderButton.Content =
-                    alreadyCurrent
-                        ? "当前引擎"
-                        : "设为当前引擎";
-                _activateProviderButton.Opacity =
-                    _activateProviderButton.IsEnabled
-                        ? 1.0
-                        : 0.58;
-            }
-            if (_headerCurrentEngine != null)
-            {
-                string name = ProviderDisplayName(
-                    _pendingProvider);
-                if (_pendingProvider == "ModelApi")
-                    name += " · " +
-                        ModelVendorDisplayName(
-                            _pendingModelVendor);
-                bool changed =
-                    !string.Equals(
-                        _pendingProvider,
-                        _settings.Provider,
-                        StringComparison.OrdinalIgnoreCase) ||
-                    (_pendingProvider == "ModelApi" &&
-                     !string.Equals(
-                         _pendingModelVendor,
-                         NormalizeModelVendor(
-                             _settings.ModelVendor),
-                         StringComparison.OrdinalIgnoreCase));
-                _headerCurrentEngine.Text =
-                    name + (changed ? "（待保存）" : "");
-            }
-        }
-
-        private bool IsProviderReady(string provider)
-        {
-            if (provider == "GoogleFree" ||
-                provider == "MicrosoftFree")
-                return true;
-            if (provider == "Google")
-                return !string.IsNullOrWhiteSpace(
-                    _googleKey == null ? "" : _googleKey.Password);
-            if (provider == "Microsoft")
-                return !string.IsNullOrWhiteSpace(
-                    _microsoftKey == null
-                        ? ""
-                        : _microsoftKey.Password);
-            if (provider == "ModelApi")
-            {
-                SaveActiveModelDraft();
-                ModelConnectionSettings pending;
-                return _modelDrafts.TryGetValue(
-                    NormalizeModelVendor(
-                        _pendingModelVendor),
-                    out pending) &&
-                    pending.IsUsable(
-                        NormalizeModelVendor(
-                            _pendingModelVendor));
-            }
-            return false;
-        }
-
-        private static string ProviderDisplayName(string provider)
-        {
-            switch (provider)
-            {
-                case "MicrosoftFree": return "Microsoft 免费";
-                case "Microsoft": return "Microsoft Translator";
-                case "Google": return "Google Cloud Translation";
-                case "ModelApi": return "AI 大模型";
-                default: return "Google 免费";
-            }
-        }
-
-        private static Border InfoBox(string text)
-        {
-            return new Border
-            {
-                Background = Brush("#ECF8FA"),
-                BorderBrush = Brush("#C9EAEF"),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(12, 9, 12, 9),
-                Margin = new Thickness(0, 14, 0, 0),
-                Child = new TextBlock
-                {
-                    Text = text,
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = Brush("#397080"),
-                    FontSize = 11
-                }
-            };
-        }
-
-        private static TextBox AddText(
-            Panel parent, string label, string placeholder)
-        {
-            AddFieldLabel(parent, label);
+            panel.Children.Add(FieldLabel(label));
             var box = new TextBox
             {
-                Height = 36,
-                Padding = new Thickness(9, 7, 9, 7),
-                Margin = new Thickness(24, 5, 0, 9),
-                ToolTip = placeholder,
-                BorderBrush = Line
+                MinHeight = 38, Padding = new Thickness(10, 7, 10, 7),
+                BorderBrush = BorderLine, Background = Brushes.White,
+                ToolTip = hint, FontSize = 13,
+                VerticalContentAlignment = VerticalAlignment.Center
             };
-            parent.Children.Add(box);
+            box.Margin = new Thickness(0, 0, 0, 12);
+            panel.Children.Add(box);
             return box;
         }
 
-        private PasswordBox AddPassword(
-            Panel parent, string label, string placeholder)
+        private PasswordBox AddPassword(Panel panel, string label, string hint)
         {
-            AddFieldLabel(parent, label);
-            var host = new Grid
+            panel.Children.Add(FieldLabel(label));
+            var host = new Grid { Height = 40, Margin = new Thickness(0, 0, 0, 12), ToolTip = hint };
+            host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var password = new PasswordBox
             {
-                Margin = new Thickness(24, 5, 0, 9),
-                Height = 36,
-                ToolTip = placeholder
-            };
-            host.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = new GridLength(1, GridUnitType.Star)
-            });
-            host.ColumnDefinitions.Add(new ColumnDefinition
-            {
-                Width = GridLength.Auto
-            });
-
-            var box = new PasswordBox
-            {
-                Padding = new Thickness(9, 7, 9, 7),
-                BorderBrush = Line,
-                ToolTip = placeholder
+                Padding = new Thickness(10, 7, 10, 7), BorderBrush = BorderLine,
+                Background = Brushes.White, FontSize = 13, VerticalContentAlignment = VerticalAlignment.Center
             };
             var revealed = new TextBox
             {
-                Padding = new Thickness(9, 7, 9, 7),
-                BorderBrush = Line,
-                Visibility = Visibility.Collapsed,
-                ToolTip = placeholder
+                Padding = new Thickness(10, 7, 10, 7), BorderBrush = BorderLine,
+                Background = Brushes.White, FontSize = 13,
+                Visibility = Visibility.Collapsed, VerticalContentAlignment = VerticalAlignment.Center
             };
-            var eye = new ShapePath
-            {
-                Data = Geometry.Parse(
-                    "M1,10 C4,4 8,2 12,2 C16,2 20,4 23,10 C20,16 16,18 12,18 C8,18 4,16 1,10 Z M8,10 A4,4 0 1 0 16,10 A4,4 0 1 0 8,10"),
-                Stroke = Ocean,
-                StrokeThickness = 1.4,
-                Fill = Brushes.Transparent,
-                Stretch = Stretch.Uniform,
-                Width = 23,
-                Height = 19
-            };
-            var eyeOff = new ShapePath
-            {
-                Data = Geometry.Parse(
-                    "M2,3 L22,17 M1,10 C4,4 8,2 12,2 C16,2 20,4 23,10 C20,16 16,18 12,18 C8,18 4,16 1,10 Z"),
-                Stroke = Ocean,
-                StrokeThickness = 1.4,
-                Fill = Brushes.Transparent,
-                Stretch = Stretch.Uniform,
-                Width = 23,
-                Height = 19,
-                Visibility = Visibility.Collapsed
-            };
-            var icon = new Grid
-            {
-                Width = 24,
-                Height = 20
-            };
-            icon.Children.Add(eye);
-            icon.Children.Add(eyeOff);
-            var toggle = new Button
-            {
-                Content = icon,
-                Width = 36,
-                Margin = new Thickness(5, 0, 0, 0),
-                Padding = new Thickness(4, 0, 4, 0),
-                Foreground = Ocean,
-                Background = Brushes.White,
-                BorderBrush = Line,
-                Cursor = Cursors.Hand,
-                ToolTip = "显示完整 API Key"
-            };
-            Grid.SetColumn(box, 0);
+            var button = SecondaryButton("显示");
+            button.Width = 62;
+            button.Height = 40;
+            button.Margin = new Thickness(7, 0, 0, 0);
+            Grid.SetColumn(password, 0);
             Grid.SetColumn(revealed, 0);
-            Grid.SetColumn(toggle, 1);
-            host.Children.Add(box);
+            Grid.SetColumn(button, 1);
+            host.Children.Add(password);
             host.Children.Add(revealed);
-            host.Children.Add(toggle);
-            parent.Children.Add(host);
-            _revealedKeys[box] = revealed;
-
-            box.PasswordChanged += delegate
-            {
-                if (revealed.Text != box.Password)
-                    revealed.Text = box.Password;
-            };
+            host.Children.Add(button);
+            panel.Children.Add(host);
+            _revealedKeys[password] = revealed;
+            password.PasswordChanged += delegate { if (revealed.Text != password.Password) revealed.Text = password.Password; };
             revealed.TextChanged += delegate
             {
-                if (revealed.Visibility == Visibility.Visible &&
-                    box.Password != revealed.Text)
-                    box.Password = revealed.Text;
+                if (revealed.Visibility == Visibility.Visible && password.Password != revealed.Text)
+                    password.Password = revealed.Text;
             };
-            toggle.Click += delegate
+            button.Click += delegate
             {
                 bool show = revealed.Visibility != Visibility.Visible;
-                revealed.Visibility = show
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-                box.Visibility = show
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
-                eye.Visibility = show
-                    ? Visibility.Collapsed
-                    : Visibility.Visible;
-                eyeOff.Visibility = show
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-                toggle.ToolTip = show
-                    ? "隐藏 API Key"
-                    : "显示完整 API Key";
-                if (show)
-                {
-                    revealed.Focus();
-                    revealed.CaretIndex = revealed.Text.Length;
-                }
-                else
-                    box.Focus();
+                revealed.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+                password.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
+                button.Content = show ? "隐藏" : "显示";
+                if (show) { revealed.Focus(); revealed.CaretIndex = revealed.Text.Length; }
+                else password.Focus();
             };
-            return box;
-        }
-
-        private static void AddFieldLabel(Panel parent, string label)
-        {
-            parent.Children.Add(new TextBlock
-            {
-                Text = label,
-                Margin = new Thickness(24, 0, 0, 0),
-                Foreground = Navy,
-                FontSize = 11.5,
-                FontWeight = FontWeights.SemiBold
-            });
+            return password;
         }
 
         private static Button PrimaryButton(string text)
         {
             var button = new Button
             {
-                Content = text,
-                Background = Ocean,
-                Foreground = Brushes.White,
-                BorderThickness = new Thickness(0),
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
+                Content = text, MinHeight = 38, Padding = new Thickness(14, 8, 14, 8),
+                Background = Accent, Foreground = Brushes.White,
+                BorderBrush = Accent, BorderThickness = new Thickness(1),
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
                 Cursor = Cursors.Hand
             };
-            var border = new FrameworkElementFactory(typeof(Border));
-            border.SetBinding(Border.BackgroundProperty, new Binding("Background")
-            {
-                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent)
-            });
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(9));
-            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
-            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
-            border.AppendChild(presenter);
-            button.Template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+            ApplyButtonTemplate(button, 10);
             return button;
-        }
-
-        private static ControlTemplate RoundedButtonTemplate(
-            double radius)
-        {
-            var template = new ControlTemplate(
-                typeof(Button));
-            var border = new FrameworkElementFactory(
-                typeof(Border));
-            border.SetValue(
-                Border.CornerRadiusProperty,
-                new CornerRadius(radius));
-            border.SetBinding(
-                Border.BackgroundProperty,
-                new Binding("Background")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(
-                Border.BorderBrushProperty,
-                new Binding("BorderBrush")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.SetBinding(
-                Border.BorderThicknessProperty,
-                new Binding("BorderThickness")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            var presenter = new FrameworkElementFactory(
-                typeof(ContentPresenter));
-            presenter.SetValue(
-                FrameworkElement.HorizontalAlignmentProperty,
-                HorizontalAlignment.Stretch);
-            presenter.SetValue(
-                FrameworkElement.VerticalAlignmentProperty,
-                VerticalAlignment.Center);
-            presenter.SetBinding(
-                FrameworkElement.MarginProperty,
-                new Binding("Padding")
-                {
-                    RelativeSource = new RelativeSource(
-                        RelativeSourceMode.TemplatedParent)
-                });
-            border.AppendChild(presenter);
-            template.VisualTree = border;
-            return template;
         }
 
         private static Button SecondaryButton(string text)
         {
-            return new Button
+            var button = new Button
             {
-                Content = text,
-                Height = 38,
-                Padding = new Thickness(13, 0, 13, 0),
-                Background = Brushes.White,
-                Foreground = Ocean,
-                BorderBrush = Brush("#9BCEDB"),
-                BorderThickness = new Thickness(1),
-                FontWeight = FontWeights.SemiBold,
-                Cursor = Cursors.Hand
+                Content = text, MinHeight = 34, Padding = new Thickness(12, 6, 12, 6),
+                Background = Brushes.White, Foreground = Ink,
+                BorderBrush = BorderLine, BorderThickness = new Thickness(1),
+                FontSize = 13, Cursor = Cursors.Hand
             };
+            ApplyButtonTemplate(button, 9);
+            return button;
         }
 
-        private static List<ModelVendorChoice> ModelVendors()
+        private static void ApplyButtonTemplate(Button button, double radius)
         {
-            return new List<ModelVendorChoice>
-            {
-                new ModelVendorChoice(
-                    "Custom",
-                    "自定义 / 其他兼容接口",
-                    "",
-                    "",
-                    ""),
-                new ModelVendorChoice(
-                    "DeepSeek",
-                    "DeepSeek",
-                    "https://api.deepseek.com",
-                    "deepseek-v4-flash",
-                    "https://api.deepseek.com/anthropic"),
-                new ModelVendorChoice(
-                    "MiMo",
-                    "小米 MiMo",
-                    "https://api.xiaomimimo.com/v1",
-                    "mimo-v2.5",
-                    "https://api.xiaomimimo.com/anthropic"),
-                new ModelVendorChoice(
-                    "Qwen",
-                    "阿里云百炼 · Qwen（中国区）",
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "qwen-plus",
-                    "")
-            };
-        }
-
-        private static List<ModelApiProtocolChoice>
-            ModelApiProtocolChoices()
-        {
-            return new List<ModelApiProtocolChoice>
-            {
-                new ModelApiProtocolChoice(
-                    ModelApiProtocols.OpenAI,
-                    "OpenAI Chat Completions  ·  /chat/completions"),
-                new ModelApiProtocolChoice(
-                    ModelApiProtocols.Anthropic,
-                    "Anthropic Messages  ·  /v1/messages")
-            };
-        }
-
-        private void UpdateTargetRule()
-        {
-            if (_targetRule == null || _language == null)
-                return;
-            if (_language.SelectedIndex <= 0)
-            {
-                _targetRule.Text =
-                    "中文原文 → English · 其他语言 → 简体中文";
-                return;
-            }
-            string[] names =
-            {
-                "简体中文", "繁體中文", "English",
-                "日本語", "한국어", "Français",
-                "Deutsch", "Español"
-            };
-            int index = _language.SelectedIndex - 1;
-            _targetRule.Text =
-                "始终翻译为 " +
-                (index >= 0 && index < names.Length
-                    ? names[index]
-                    : "简体中文");
-        }
-
-        private static int LanguageIndex(string code)
-        {
-            string[] codes = { "zh-Hans", "zh-Hant", "en", "ja", "ko", "fr", "de", "es" };
-            int index = Array.IndexOf(codes, code);
-            return index < 0 ? 0 : index;
-        }
-
-        private static string LanguageCode(int index)
-        {
-            string[] codes = { "zh-Hans", "zh-Hant", "en", "ja", "ko", "fr", "de", "es" };
-            return index >= 0 && index < codes.Length ? codes[index] : "zh-Hans";
+            var border = new FrameworkElementFactory(typeof(Border));
+            border.Name = "Chrome";
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(radius));
+            border.SetBinding(Border.BackgroundProperty, new Binding("Background")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            border.SetBinding(Border.BorderBrushProperty, new Binding("BorderBrush")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            border.SetBinding(Border.BorderThicknessProperty, new Binding("BorderThickness")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            presenter.SetBinding(ContentPresenter.ContentProperty, new Binding("Content")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            presenter.SetBinding(ContentPresenter.ContentTemplateProperty, new Binding("ContentTemplate")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            presenter.SetBinding(ContentPresenter.MarginProperty, new Binding("Padding")
+            { RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent) });
+            border.AppendChild(presenter);
+            var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(UIElement.OpacityProperty, 0.9));
+            template.Triggers.Add(hover);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.5));
+            template.Triggers.Add(disabled);
+            button.Template = template;
         }
 
         private static SolidColorBrush Brush(string hex)
         {
-            return (SolidColorBrush)new BrushConverter().ConvertFromString(hex);
+            var brush = (SolidColorBrush)new BrushConverter().ConvertFromString(hex);
+            brush.Freeze();
+            return brush;
         }
 
         private sealed class ModelVendorChoice
         {
             public readonly string Code;
-            public readonly string Display;
-            public readonly string BaseUrl;
-            public readonly string Model;
-            public readonly string AnthropicBaseUrl;
-
-            public ModelVendorChoice(
-                string code,
-                string display,
-                string baseUrl,
-                string model,
-                string anthropicBaseUrl)
-            {
-                Code = code;
-                Display = display;
-                BaseUrl = baseUrl;
-                Model = model;
-                AnthropicBaseUrl = anthropicBaseUrl;
-            }
-
-            public string RecommendedBaseUrl(string protocol)
-            {
-                return ModelApiProtocols.IsAnthropic(protocol)
-                    ? AnthropicBaseUrl
-                    : BaseUrl;
-            }
-
-            public override string ToString()
-            {
-                return Display;
-            }
-        }
-
-        private sealed class ModelApiProtocolChoice
-        {
-            public readonly string Code;
             private readonly string _display;
-
-            public ModelApiProtocolChoice(
-                string code, string display)
-            {
-                Code = code;
-                _display = display;
-            }
-
-            public override string ToString()
-            {
-                return _display;
-            }
+            public ModelVendorChoice(string code, string display) { Code = code; _display = display; }
+            public override string ToString() { return _display; }
         }
     }
 }

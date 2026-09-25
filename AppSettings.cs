@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Reflection;
 
 namespace GlobalTranslator
 {
@@ -98,7 +99,7 @@ namespace GlobalTranslator
 
     internal sealed class AppSettings
     {
-        public string Provider = "GoogleFree";
+        public string Provider = "ModelApi";
         public string TargetLanguageMode = "Smart";
         public string TargetLanguage = "zh-Hans";
         public string CommunicationLanguage = "auto";
@@ -107,27 +108,27 @@ namespace GlobalTranslator
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
         public string MicrosoftRegion = "";
-        public string ModelVendor = "Custom";
+        public string ModelVendor = "DeepSeek";
         public string ModelBaseUrl = "https://api.openai.com/v1";
         public string ModelApiKey = "";
-        public string ModelName = "gpt-5.6-sol";
+        public string ModelName = "";
         public string ModelProtocol = ModelApiProtocols.OpenAI;
         public string CustomModelBaseUrl = "https://api.openai.com/v1";
         public string CustomModelApiKey = "";
-        public string CustomModelName = "gpt-5.6-sol";
+        public string CustomModelName = "";
         public string CustomModelProtocol = ModelApiProtocols.OpenAI;
         public string DeepSeekModelBaseUrl = "https://api.deepseek.com";
         public string DeepSeekModelApiKey = "";
-        public string DeepSeekModelName = "deepseek-v4-flash";
+        public string DeepSeekModelName = "";
         public string DeepSeekModelProtocol = ModelApiProtocols.OpenAI;
         public string MiMoModelBaseUrl = "https://api.xiaomimimo.com/v1";
         public string MiMoModelApiKey = "";
-        public string MiMoModelName = "mimo-v2.5";
+        public string MiMoModelName = "";
         public string MiMoModelProtocol = ModelApiProtocols.OpenAI;
         public string QwenModelBaseUrl =
             "https://dashscope.aliyuncs.com/compatible-mode/v1";
         public string QwenModelApiKey = "";
-        public string QwenModelName = "qwen-plus";
+        public string QwenModelName = "";
         public string QwenModelProtocol = ModelApiProtocols.OpenAI;
         public bool OcrAiFallback = true;
         // Read legacy configurations only; recognition uses ModelVendor now.
@@ -168,6 +169,7 @@ namespace GlobalTranslator
             try
             {
                 bool hasVendorProfiles = false;
+                bool hasModelVendor = false;
                 bool hasOcrVisionModel = false;
                 bool hasOcrAiSetting = false;
                 byte[] encrypted = File.ReadAllBytes(FilePath);
@@ -195,7 +197,7 @@ namespace GlobalTranslator
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
                         case "MicrosoftRegion": settings.MicrosoftRegion = value; break;
-                        case "ModelVendor": settings.ModelVendor = value; break;
+                        case "ModelVendor": settings.ModelVendor = value; hasModelVendor = true; break;
                         case "ModelBaseUrl": settings.ModelBaseUrl = value; break;
                         case "ModelApiKey": settings.ModelApiKey = value; break;
                         case "ModelName": settings.ModelName = value; break;
@@ -233,7 +235,7 @@ namespace GlobalTranslator
                 if (!hasVendorProfiles)
                 {
                     settings.ModelVendor = InferModelVendor(
-                        settings.ModelVendor,
+                        hasModelVendor ? settings.ModelVendor : "Custom",
                         settings.ModelBaseUrl);
                     settings.SetModelConnection(
                         settings.ModelVendor,
@@ -253,7 +255,41 @@ namespace GlobalTranslator
                     settings.OcrAiFallback = true;
             }
             catch { return new AppSettings(); }
+            // Google/Microsoft translation modes were removed. Keep their legacy
+            // encrypted fields for compatibility, but route all new work through AI.
+            settings.Provider = "ModelApi";
             return settings;
+        }
+
+        public AppSettings Copy()
+        {
+            lock (this)
+            {
+                var result = new AppSettings();
+                foreach (FieldInfo field in typeof(AppSettings).GetFields(
+                    BindingFlags.Instance | BindingFlags.Public))
+                    field.SetValue(result, field.GetValue(this));
+                return result;
+            }
+        }
+
+        public void CopyFrom(AppSettings source)
+        {
+            if (source == null) throw new ArgumentNullException("source");
+            AppSettings snapshot = source.Copy();
+            lock (this)
+            {
+                foreach (FieldInfo field in typeof(AppSettings).GetFields(
+                    BindingFlags.Instance | BindingFlags.Public))
+                    field.SetValue(this, field.GetValue(snapshot));
+            }
+        }
+
+        public AppSettings SnapshotForAiRequest()
+        {
+            AppSettings snapshot = Copy();
+            snapshot.Provider = "ModelApi";
+            return snapshot;
         }
 
         public void Save()
@@ -304,7 +340,20 @@ namespace GlobalTranslator
                 "StartWithWindows=" + Encode(StartWithWindows ? "true" : "false");
             byte[] clear = Encoding.UTF8.GetBytes(data);
             byte[] encrypted = ProtectedData.Protect(clear, Entropy, DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(FilePath, encrypted);
+            string temporaryPath = FilePath + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temporaryPath, encrypted);
+                if (File.Exists(FilePath))
+                    File.Replace(temporaryPath, FilePath, null);
+                else
+                    File.Move(temporaryPath, FilePath);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath))
+                    File.Delete(temporaryPath);
+            }
         }
 
         public ModelConnectionSettings GetModelConnection(

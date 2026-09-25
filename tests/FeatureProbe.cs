@@ -35,7 +35,10 @@ internal static class FeatureProbe
             TestUpdateService(app);
             TestVisionApi(app);
             TestAnthropicVisionApi(app);
-            TestMicrosoftFree(app);
+            TestLegacyProviderUsesAi(app);
+            TestDraftModelConnection(app);
+            TestLegacySettingsMigration(app);
+            TestAiRequestSnapshot(app);
             TestScreenshotRightClickCancellation(app);
             return 0;
         }
@@ -183,6 +186,7 @@ internal static class FeatureProbe
         Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
         object settings = Activator.CreateInstance(settingsType, true);
         settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
         settingsType.GetField("TargetLanguageMode").SetValue(settings, "Fixed");
         settingsType.GetField("TargetLanguage").SetValue(settings, "en");
         settingsType.GetField("CustomModelName").SetValue(settings, "probe-model");
@@ -193,7 +197,7 @@ internal static class FeatureProbe
         {
             try
             {
-                for (int i = 0; i < 3; i++)
+                for (int i = 0; i < 4; i++)
                 {
                     var context = listener.GetContext(); string body;
                     using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
@@ -216,14 +220,13 @@ internal static class FeatureProbe
                 var task = (Task)method.Invoke(client, new object[] { "请确认交期", settings, CancellationToken.None, null, requirement, false });
                 if (!task.Wait(10000)) throw new Exception("Writing request/cache test timed out.");
             }
-            if (!server.Wait(2000)) throw new Exception("Expected distinct requests not received.");
-            if (serverError != null) throw serverError;
             Array found = (Array)history.GetMethod("Search").Invoke(null, new object[] { "交期" });
             if (found.Length != 3) throw new Exception("History deduplication/search failed.");
             settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
-            var unsupported = (Task)method.Invoke(client, new object[] { "中文", settings, CancellationToken.None, null, "formal", false });
-            try { unsupported.GetAwaiter().GetResult(); throw new Exception("Unsupported requirements were silently ignored."); }
-            catch (InvalidOperationException) { }
+            var legacy = (Task)method.Invoke(client, new object[] { "旧配置也应走 AI", settings, CancellationToken.None, null, "formal", false });
+            if (!legacy.Wait(10000)) throw new Exception("Legacy provider AI translation timed out.");
+            if (!server.Wait(10000)) throw new Exception("Legacy provider did not issue a model request.");
+            if (serverError != null) throw serverError;
             Console.WriteLine("WRITING requirements/cache/isolation/history/pdf/numbers=True");
         }
         finally { listener.Close(); ((IDisposable)client).Dispose(); history.GetMethod("Clear").Invoke(null, null); }
@@ -574,6 +577,7 @@ internal static class FeatureProbe
         Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
         object settings = Activator.CreateInstance(settingsType, true);
         object input = Activator.CreateInstance(inputType, true);
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
         settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
             "http://127.0.0.1:18948/v1");
         settingsType.GetField("CustomModelApiKey").SetValue(settings,
@@ -856,6 +860,7 @@ internal static class FeatureProbe
             Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
             settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
             settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
             settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
@@ -967,6 +972,7 @@ internal static class FeatureProbe
                 "GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
             settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
             settingsType.GetField("CustomModelProtocol").SetValue(settings, "Anthropic");
             settingsType.GetField("CustomModelBaseUrl").SetValue(
@@ -1309,6 +1315,7 @@ internal static class FeatureProbe
                 "GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
             settingsType.GetField("CustomModelProtocol").SetValue(settings, "OpenAI");
             settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
             settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
@@ -1680,43 +1687,183 @@ internal static class FeatureProbe
         }
     }
 
-    private static void TestMicrosoftFree(Assembly app)
+    private static void TestLegacyProviderUsesAi(Assembly app)
     {
+        const string prefix = "http://127.0.0.1:18945/";
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
         Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
         object settings = Activator.CreateInstance(settingsType, true);
         settingsType.GetField("Provider").SetValue(settings, "MicrosoftFree");
-        settingsType.GetField("TargetLanguage").SetValue(settings, "zh-Hans");
-
+        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
+        settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
+        settingsType.GetField("CustomModelApiKey").SetValue(settings, "legacy-ai-key");
+        settingsType.GetField("CustomModelName").SetValue(settings, "legacy-ai-model");
+        string path = null;
+        string authorization = null;
+        Exception serverError = null;
+        var server = Task.Run(delegate
+        {
+            try
+            {
+                var context = listener.GetContext();
+                path = context.Request.Url.AbsolutePath;
+                authorization = context.Request.Headers["Authorization"];
+                using (var reader = new StreamReader(context.Request.InputStream))
+                {
+                    string body = reader.ReadToEnd();
+                    if (!body.Contains("legacy-ai-model"))
+                        throw new Exception("Legacy provider request did not use the configured AI model.");
+                }
+                byte[] response = Encoding.UTF8.GetBytes(
+                    "{\"choices\":[{\"message\":{\"content\":\"AI route verified\"}}]}");
+                context.Response.ContentLength64 = response.Length;
+                context.Response.OutputStream.Write(response, 0, response.Length);
+                context.Response.Close();
+            }
+            catch (Exception error) { serverError = error; }
+        });
         Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
         object client = Activator.CreateInstance(clientType, true);
         try
         {
-            MethodInfo translate = clientType.GetMethod(
-                "TranslateAsync",
+            MethodInfo translate = clientType.GetMethod("TranslateAsync",
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new[] { typeof(string), settingsType, typeof(CancellationToken) },
-                null);
-            object task = translate.Invoke(client, new[]
-            {
-                (object)"Microsoft anonymous translation works.",
-                settings,
-                CancellationToken.None
-            });
-            ((Task)task).Wait();
+                null, new[] { typeof(string), settingsType, typeof(CancellationToken) }, null);
+            var task = (Task)translate.Invoke(client, new object[]
+                { "Legacy settings must call the AI model.", settings, CancellationToken.None });
+            if (!task.Wait(10000)) throw new Exception("Legacy AI route timed out.");
+            if (!server.Wait(10000)) throw new Exception("Legacy AI server timed out.");
+            if (serverError != null) throw serverError;
             object result = task.GetType().GetProperty("Result").GetValue(task, null);
-            Type resultType = result.GetType();
-            Console.WriteLine(
-                "MICROSOFT_FREE provider={0} detected={1} text={2}",
-                resultType.GetField("Provider").GetValue(result),
-                resultType.GetField("DetectedLanguage").GetValue(result),
-                resultType.GetField("Text").GetValue(result));
+            if (path != "/v1/chat/completions" || authorization != "Bearer legacy-ai-key" ||
+                !((string)result.GetType().GetField("Text").GetValue(result)).Contains("AI route verified"))
+                throw new Exception("Removed free provider still bypasses the unified AI path.");
+            Console.WriteLine("LEGACY_PROVIDER routes to unified AI=True");
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); }
+    }
+
+    private static void TestDraftModelConnection(Assembly app)
+    {
+        const string prefix = "http://127.0.0.1:18946/";
+        var listener = new HttpListener();
+        listener.Prefixes.Add(prefix);
+        listener.Start();
+        Exception serverError = null;
+        var server = Task.Run(delegate
+        {
+            try
+            {
+                for (int i = 0; i < 2; i++)
+                {
+                    var context = listener.GetContext();
+                    string body;
+                    using (var reader = new StreamReader(context.Request.InputStream)) body = reader.ReadToEnd();
+                    if (context.Request.Url.AbsolutePath != "/v1/chat/completions" ||
+                        context.Request.Headers["Authorization"] != "Bearer draft-test-key" ||
+                        !body.Contains("draft-model"))
+                        throw new Exception("Draft model test used an incomplete profile.");
+                    if (i == 0 && !body.Contains("SHARKEY_TEXT_OK"))
+                        throw new Exception("Text test marker was not sent.");
+                    if (i == 1 && (!body.Contains("data:image/png;base64,") || !body.Contains("image_url")))
+                        throw new Exception("Image test request did not contain an image.");
+                    string text = i == 0 ? "SHARKEY_TEXT_OK" : "SHARKEY TEST";
+                    byte[] response = Encoding.UTF8.GetBytes(
+                        "{\"choices\":[{\"message\":{\"content\":\"" + text + "\"}}]}");
+                    context.Response.ContentLength64 = response.Length;
+                    context.Response.OutputStream.Write(response, 0, response.Length);
+                    context.Response.Close();
+                }
+            }
+            catch (Exception error) { serverError = error; }
+        });
+        Type connectionType = app.GetType("GlobalTranslator.ModelConnectionSettings", true);
+        object connection = Activator.CreateInstance(connectionType, true);
+        connectionType.GetField("BaseUrl").SetValue(connection, prefix + "v1");
+        connectionType.GetField("ApiKey").SetValue(connection, "draft-test-key");
+        connectionType.GetField("Model").SetValue(connection, "draft-model");
+        connectionType.GetField("Protocol").SetValue(connection, "OpenAI");
+        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
+        object client = Activator.CreateInstance(clientType, true);
+        try
+        {
+            var textTask = (Task)clientType.GetMethod("TestModelConnectionAsync")
+                .Invoke(client, new object[] { "Custom", connection, CancellationToken.None });
+            if (!textTask.Wait(10000)) throw new Exception("Draft text connection test timed out.");
+            using (var bitmap = new Bitmap(80, 36))
+            {
+                var imageTask = (Task)clientType.GetMethod("TestImageRecognitionAsync")
+                    .Invoke(client, new object[] { bitmap, "Custom", connection, CancellationToken.None });
+                if (!imageTask.Wait(10000)) throw new Exception("Draft image test timed out.");
+            }
+            if (!server.Wait(10000)) throw new Exception("Draft model test server timed out.");
+            if (serverError != null) throw serverError;
+            Console.WriteLine("DRAFT model text/image test=True");
+        }
+        finally { listener.Close(); ((IDisposable)client).Dispose(); }
+    }
+
+    private static void TestLegacySettingsMigration(Assembly app)
+    {
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        FieldInfo path = settingsType.GetField("FilePath", BindingFlags.Static | BindingFlags.NonPublic);
+        string oldPath = (string)path.GetValue(null);
+        string tempPath = Path.GetFullPath("tmp/tests/legacy-settings-" + Guid.NewGuid().ToString("N") + ".dat");
+        object settings = Activator.CreateInstance(settingsType, true);
+        try
+        {
+            path.SetValue(null, tempPath);
+            settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
+            settingsType.GetField("GoogleApiKey").SetValue(settings, "legacy-google");
+            settingsType.GetField("MicrosoftApiKey").SetValue(settings, "legacy-microsoft");
+            settingsType.GetMethod("Save").Invoke(settings, null);
+            object loaded = settingsType.GetMethod("Load").Invoke(null, null);
+            if ((string)settingsType.GetField("Provider").GetValue(loaded) != "ModelApi" ||
+                (string)settingsType.GetField("GoogleApiKey").GetValue(loaded) != "legacy-google" ||
+                (string)settingsType.GetField("MicrosoftApiKey").GetValue(loaded) != "legacy-microsoft")
+                throw new Exception("Legacy settings migration did not normalize the provider and preserve old secrets.");
+            Console.WriteLine("LEGACY settings migration=True");
         }
         finally
         {
-            ((IDisposable)client).Dispose();
+            path.SetValue(null, oldPath);
+            if (File.Exists(tempPath)) File.Delete(tempPath);
         }
     }
+
+    private static void TestAiRequestSnapshot(Assembly app)
+    {
+        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
+        object settings = Activator.CreateInstance(settingsType, true);
+        settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
+        settingsType.GetField("ModelVendor").SetValue(settings, "DeepSeek");
+        settingsType.GetField("DeepSeekModelBaseUrl").SetValue(
+            settings, "https://api.deepseek.com");
+        settingsType.GetField("DeepSeekModelApiKey").SetValue(
+            settings, "snapshot-key");
+        settingsType.GetField("DeepSeekModelName").SetValue(
+            settings, "snapshot-model");
+        object snapshot = settingsType.GetMethod("SnapshotForAiRequest")
+            .Invoke(settings, null);
+        settingsType.GetField("Provider").SetValue(settings, "MicrosoftFree");
+        settingsType.GetField("ModelVendor").SetValue(settings, "MiMo");
+        settingsType.GetField("DeepSeekModelApiKey").SetValue(
+            settings, "changed-key");
+        settingsType.GetField("DeepSeekModelName").SetValue(
+            settings, "changed-model");
+        object connection = settingsType.GetMethod("GetActiveAiConnection")
+            .Invoke(snapshot, null);
+        Type connectionType = connection.GetType();
+        if ((string)settingsType.GetField("Provider").GetValue(snapshot) != "ModelApi" ||
+            (string)settingsType.GetField("ModelVendor").GetValue(snapshot) != "DeepSeek" ||
+            (string)connectionType.GetField("ApiKey").GetValue(connection) != "snapshot-key" ||
+            (string)connectionType.GetField("Model").GetValue(connection) != "snapshot-model")
+            throw new Exception("AI request snapshot changed after live settings were edited.");
+        Console.WriteLine("AI_REQUEST snapshot/provider/profile isolated=True");
+    }
+
 
     private static void TestVisionApi(Assembly app)
     {
@@ -1761,6 +1908,7 @@ internal static class FeatureProbe
         {
             Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
+            settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
             settingsType.GetField("CustomModelBaseUrl").SetValue(settings, prefix + "v1");
             settingsType.GetField("CustomModelApiKey").SetValue(settings, "vision-secret");
             settingsType.GetField("CustomModelName").SetValue(settings, "probe-vision");
@@ -1852,6 +2000,7 @@ internal static class FeatureProbe
                 "GlobalTranslator.AppSettings", true);
             object settings = Activator.CreateInstance(settingsType, true);
             settingsType.GetField("Provider").SetValue(settings, "ModelApi");
+            settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
             settingsType.GetField("ModelProtocol").SetValue(settings, "Anthropic");
             settingsType.GetField("CustomModelBaseUrl").SetValue(
                 settings, prefix + "anthropic");

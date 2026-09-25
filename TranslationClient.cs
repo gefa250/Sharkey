@@ -28,11 +28,6 @@ namespace GlobalTranslator
     internal sealed class TranslationClient : IDisposable
     {
         private readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
-        private readonly SemaphoreSlim _bingSessionLock = new SemaphoreSlim(1, 1);
-        private string _bingKey;
-        private string _bingToken;
-        private string _bingIg;
-        private DateTime _bingSessionExpiresUtc;
         private readonly object _cacheGate = new object();
         private readonly Dictionary<string, TranslationCacheEntry> _translationCache =
             new Dictionary<string, TranslationCacheEntry>(StringComparer.Ordinal);
@@ -46,14 +41,78 @@ namespace GlobalTranslator
 
         public TranslationClient()
         {
-            // This project targets the in-box .NET Framework toolchain. Explicitly
-            // opt into TLS 1.2 for modern Google and Microsoft HTTPS endpoints.
+            // Opt into TLS 1.2 for modern model API endpoints on the in-box framework.
             ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
         }
 
         public Task<TranslationResult> TranslateAsync(string text, AppSettings settings, CancellationToken token)
         {
             return TranslateAsync(text, settings, token, null);
+        }
+
+        public async Task TestModelConnectionAsync(
+            string vendor,
+            ModelConnectionSettings connection,
+            CancellationToken token)
+        {
+            if (connection == null) throw new ArgumentNullException("connection");
+            string protocol = ModelApiProtocols.Normalize(connection.Protocol);
+            string endpointText = ModelApiProtocols.BuildEndpoint(
+                connection.BaseUrl, protocol);
+            Uri endpoint;
+            if (!Uri.TryCreate(endpointText, UriKind.Absolute, out endpoint) ||
+                (endpoint.Scheme != Uri.UriSchemeHttp &&
+                 endpoint.Scheme != Uri.UriSchemeHttps))
+                throw new InvalidOperationException(
+                    "模型 API 地址必须是有效的 HTTP 或 HTTPS 地址。");
+            if (string.IsNullOrWhiteSpace(connection.Model))
+                throw new InvalidOperationException("请填写模型名称。");
+
+            const string marker = "SHARKEY_TEXT_OK";
+            string body;
+            if (ModelApiProtocols.IsAnthropic(protocol))
+                body = "{\"model\":\"" + EscapeJson(connection.Model.Trim()) +
+                    "\",\"max_tokens\":32,\"system\":\"Reply with exactly the token SHARKEY_TEXT_OK.\"," +
+                    "\"messages\":[{\"role\":\"user\",\"content\":\"SHARKEY_TEXT_OK\"}],\"stream\":false}";
+            else
+                body = "{\"model\":\"" + EscapeJson(connection.Model.Trim()) +
+                    "\",\"messages\":[" +
+                    "{\"role\":\"system\",\"content\":\"Reply with exactly the token SHARKEY_TEXT_OK.\"}," +
+                    "{\"role\":\"user\",\"content\":\"SHARKEY_TEXT_OK\"}],\"stream\":false}";
+
+            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            {
+                ApplyModelAuthentication(request,
+                    (connection.ApiKey ?? "").Trim(), endpoint, protocol);
+                request.Content = new StringContent(body, Encoding.UTF8,
+                    "application/json");
+                using (HttpResponseMessage response = await _http.SendAsync(
+                    request, token))
+                {
+                    string json = await response.Content.ReadAsStringAsync();
+                    if (!response.IsSuccessStatusCode)
+                        throw ApiError("模型连接测试", response.StatusCode, json);
+                    string text;
+                    if (ModelApiProtocols.IsAnthropic(protocol))
+                        text = ExtractAnthropicText(json);
+                    else
+                    {
+                        ModelApiResponse parsed = Deserialize<ModelApiResponse>(json);
+                        text = parsed == null || parsed.Choices == null ||
+                            parsed.Choices.Length == 0 || parsed.Choices[0].Message == null
+                            ? "" : parsed.Choices[0].Message.Content;
+                    }
+                    if (string.IsNullOrWhiteSpace(text))
+                        throw new InvalidOperationException(
+                            "连接成功，但模型没有返回可读文本。请检查接口协议和模型名称。");
+                    token.ThrowIfCancellationRequested();
+                    // Some providers ignore the exact-token instruction. A non-empty
+                    // assistant response still confirms that authentication and chat
+                    // completions are working; report a partial test rather than fail.
+                    if (text.IndexOf(marker, StringComparison.OrdinalIgnoreCase) < 0)
+                        DiagnosticLog.Write("Model connection probe returned text without the expected marker.");
+                }
+            }
         }
 
         public async Task<TranslationResult> TranslateAsync(
@@ -67,23 +126,12 @@ namespace GlobalTranslator
             string requirements, bool rewrite)
         {
             token.ThrowIfCancellationRequested();
-            if ((!string.IsNullOrWhiteSpace(requirements) || rewrite) && settings.Provider != "ModelApi")
-                throw new InvalidOperationException("表达要求需要 AI 模型引擎，请在设置中选择并配置 AI 模型。");
+            if (settings == null) throw new ArgumentNullException("settings");
+            settings = settings.SnapshotForAiRequest();
             string targetLanguage = SmartTargetResolver.Resolve(
                 text,
                 settings.TargetLanguageMode,
                 settings.TargetLanguage);
-            string cacheKey = BuildTranslationCacheKey(
-                text, targetLanguage, settings);
-            cacheKey += "\u001e" + (rewrite ? "rewrite" : "faithful") + "\u001e" + (requirements ?? "");
-            TranslationResult cached = GetCachedTranslation(cacheKey);
-            if (cached != null)
-            {
-                cached.EffectiveTargetLanguage = targetLanguage;
-                cached.FromCache = true;
-                TranslationHistory.Add(text, cached, requirements, rewrite);
-                return cached;
-            }
             if (SmartTargetResolver.ShouldPreserveContent(
                 text, settings.TargetLanguageMode))
             {
@@ -96,25 +144,23 @@ namespace GlobalTranslator
                     EffectiveTargetLanguage = targetLanguage,
                     FromCache = false
                 };
-                PutCachedTranslation(cacheKey, preserved);
+                TranslationHistory.Add(text, preserved, requirements, rewrite);
                 return preserved;
             }
+            string cacheKey = BuildTranslationCacheKey(
+                text, targetLanguage, settings);
+            cacheKey += "\u001e" + (rewrite ? "rewrite" : "faithful") + "\u001e" + (requirements ?? "");
+            TranslationResult cached = GetCachedTranslation(cacheKey);
+            if (cached != null)
+            {
+                cached.EffectiveTargetLanguage = targetLanguage;
+                cached.FromCache = true;
+                TranslationHistory.Add(text, cached, requirements, rewrite);
+                return cached;
+            }
             TranslationResult result;
-            if (string.Equals(settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
-                result = await TranslateModelApiAsync(
-                    text, targetLanguage, settings, token, progress, requirements, rewrite);
-            else if (string.Equals(settings.Provider, "MicrosoftFree", StringComparison.OrdinalIgnoreCase))
-                result = await TranslateMicrosoftFreeAsync(
-                    text, targetLanguage, settings, token);
-            else if (string.Equals(settings.Provider, "GoogleFree", StringComparison.OrdinalIgnoreCase))
-                result = await TranslateGoogleFreeAsync(
-                    text, targetLanguage, settings, token);
-            else if (string.Equals(settings.Provider, "Google", StringComparison.OrdinalIgnoreCase))
-                result = await TranslateGoogleAsync(
-                    text, targetLanguage, settings, token);
-            else
-                result = await TranslateMicrosoftAsync(
-                    text, targetLanguage, settings, token);
+            result = await TranslateModelApiAsync(
+                text, targetLanguage, settings, token, progress, requirements, rewrite);
             token.ThrowIfCancellationRequested();
             result.EffectiveTargetLanguage = targetLanguage;
             result.FromCache = false;
@@ -127,15 +173,14 @@ namespace GlobalTranslator
             string text, string targetLanguage, AppSettings settings)
         {
             var builder = new StringBuilder();
-            builder.Append(settings == null ? "" : settings.Provider ?? "");
+            builder.Append("ModelApi");
             builder.Append('\u001f').Append(targetLanguage ?? "");
             // Smart mode can intentionally preserve URLs, numbers, or code,
             // while Fixed mode translates the same text. Keep those outcomes
             // isolated even when their effective target happens to match.
             builder.Append('\u001f').Append(
                 settings == null ? "" : settings.TargetLanguageMode ?? "");
-            if (settings != null && string.Equals(
-                    settings.Provider, "ModelApi", StringComparison.OrdinalIgnoreCase))
+            if (settings != null)
             {
                 ModelConnectionSettings active =
                     settings.GetActiveAiConnection();
@@ -144,13 +189,6 @@ namespace GlobalTranslator
                 builder.Append('\u001f').Append(active.BaseUrl ?? "");
                 builder.Append('\u001f').Append(
                     ModelApiProtocols.Normalize(active.Protocol));
-            }
-            else if (settings != null && string.Equals(
-                         settings.Provider, "Microsoft", StringComparison.OrdinalIgnoreCase))
-            {
-                // Region changes the official Microsoft endpoint context but
-                // is not itself a secret, so it belongs in the cache scope.
-                builder.Append('\u001f').Append(settings.MicrosoftRegion ?? "");
             }
             builder.Append('\u001f').Append(text ?? "");
             return builder.ToString();
@@ -224,6 +262,21 @@ namespace GlobalTranslator
             return await RecognizeImageCoreAsync(image, settings, token, null);
         }
 
+        public Task<string> TestImageRecognitionAsync(
+            Bitmap image,
+            string vendor,
+            ModelConnectionSettings connection,
+            CancellationToken token)
+        {
+            if (connection == null) throw new ArgumentNullException("connection");
+            AppSettings draft = new AppSettings();
+            draft.Provider = "ModelApi";
+            draft.ModelVendor = vendor;
+            draft.SetModelConnection(vendor, connection.Copy());
+            return RecognizeImageCoreAsync(image, draft, token,
+                "Read the image and return only its visible text. If the image contains no readable text, return TEST IMAGE.");
+        }
+
         public async Task<TableDocument> RecognizeTableAsync(
             Bitmap image, AppSettings settings, CancellationToken token)
         {
@@ -242,6 +295,8 @@ namespace GlobalTranslator
             Bitmap image, AppSettings settings, CancellationToken token, string customPrompt)
         {
             if (image == null) throw new ArgumentNullException("image");
+            if (settings == null) throw new ArgumentNullException("settings");
+            settings = settings.SnapshotForAiRequest();
             ModelConnectionSettings visionConnection =
                 settings.GetActiveAiConnection();
             string model = visionConnection.Model.Trim();
@@ -361,6 +416,8 @@ namespace GlobalTranslator
                 Turns = input.Turns,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
             };
+            // Capture the full active configuration for the whole multi-turn round trip.
+            AppSettings modelSnapshot = settings.SnapshotForAiRequest();
             var details = new List<string>();
             var sources = new List<string>();
             int calculations = 0;
@@ -371,7 +428,7 @@ namespace GlobalTranslator
                 {
                     token.ThrowIfCancellationRequested();
                     CommunicationResult answer = await
-                        ComposeCommunicationOnceAsync(work, settings, token);
+                    ComposeCommunicationOnceAsync(work, modelSnapshot, token);
                     if (answer.ToolRequests.Length == 0)
                     {
                         answer.CalculationDetails = string.Join("\n\n",
@@ -1089,195 +1146,6 @@ namespace GlobalTranslator
                 "模型 API 未正常结束（" + reason + "），请重试。");
         }
 
-        private async Task<TranslationResult> TranslateMicrosoftFreeAsync(
-            string text,
-            string targetLanguage,
-            AppSettings settings,
-            CancellationToken token)
-        {
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                await EnsureBingSessionAsync(attempt > 0, token);
-                string url = "https://www.bing.com/ttranslatev3?isVertical=1&IG=" +
-                             Uri.EscapeDataString(_bingIg) + "&IID=translator.5028.1";
-                var fields = new Dictionary<string, string>
-                {
-                    { "text", text },
-                    { "fromLang", "auto-detect" },
-                    { "to", targetLanguage },
-                    { "token", _bingToken },
-                    { "key", _bingKey }
-                };
-                using (var content = new FormUrlEncodedContent(fields))
-                using (HttpResponseMessage response = await _http.PostAsync(url, content, token))
-                {
-                    string json = await response.Content.ReadAsStringAsync();
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        if (attempt == 0) continue;
-                        throw ApiError("Microsoft 免费接口", response.StatusCode, json);
-                    }
-                    var data = Deserialize<MicrosoftResponse[]>(json);
-                    if (data == null || data.Length == 0 ||
-                        data[0].Translations == null || data[0].Translations.Length == 0)
-                        throw new InvalidOperationException("Microsoft 免费接口返回了空翻译结果。");
-                    return new TranslationResult
-                    {
-                        Text = data[0].Translations[0].Text,
-                        DetectedLanguage = data[0].DetectedLanguage == null
-                            ? "" : data[0].DetectedLanguage.Language,
-                        Provider = "Microsoft 免费"
-                    };
-                }
-            }
-            throw new InvalidOperationException("Microsoft 免费接口暂时不可用。");
-        }
-
-        private async Task EnsureBingSessionAsync(bool forceRefresh, CancellationToken token)
-        {
-            if (!forceRefresh && !string.IsNullOrEmpty(_bingToken) &&
-                DateTime.UtcNow < _bingSessionExpiresUtc) return;
-
-            await _bingSessionLock.WaitAsync(token);
-            try
-            {
-                if (!forceRefresh && !string.IsNullOrEmpty(_bingToken) &&
-                    DateTime.UtcNow < _bingSessionExpiresUtc) return;
-
-                string page = await _http.GetStringAsync("https://www.bing.com/translator?mkt=zh-CN");
-                Match abuse = Regex.Match(
-                    page,
-                    "params_AbusePreventionHelper\\s*=\\s*\\[(\\d+)\\s*,\\s*\"([^\"]+)\"",
-                    RegexOptions.IgnoreCase);
-                Match ig = Regex.Match(page, "IG:\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                if (!abuse.Success || !ig.Success)
-                    throw new InvalidOperationException(
-                        "无法建立 Microsoft 匿名翻译会话，网页接口可能已更新。");
-
-                _bingKey = abuse.Groups[1].Value;
-                _bingToken = abuse.Groups[2].Value;
-                _bingIg = ig.Groups[1].Value;
-                _bingSessionExpiresUtc = DateTime.UtcNow.AddMinutes(8);
-            }
-            finally
-            {
-                _bingSessionLock.Release();
-            }
-        }
-
-        private async Task<TranslationResult> TranslateGoogleFreeAsync(
-            string text,
-            string targetLanguage,
-            AppSettings settings,
-            CancellationToken token)
-        {
-            const string url = "https://translate.googleapis.com/translate_a/single";
-            string body = "client=gtx&sl=auto&tl=" +
-                          Uri.EscapeDataString(NormalizeGoogleLanguage(targetLanguage)) +
-                          "&dt=t&q=" + Uri.EscapeDataString(text);
-            using (var content = new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded"))
-            using (HttpResponseMessage response = await _http.PostAsync(url, content, token))
-            {
-                string json = await response.Content.ReadAsStringAsync();
-                if (!response.IsSuccessStatusCode)
-                    throw ApiError("Google 免费接口", response.StatusCode, json);
-
-                try
-                {
-                    object[] root = new JavaScriptSerializer().Deserialize<object[]>(json);
-                    object[] segments = root != null && root.Length > 0 ? root[0] as object[] : null;
-                    if (segments == null || segments.Length == 0)
-                        throw new InvalidOperationException();
-
-                    var translated = new StringBuilder();
-                    foreach (object item in segments)
-                    {
-                        object[] segment = item as object[];
-                        if (segment != null && segment.Length > 0 && segment[0] != null)
-                            translated.Append(segment[0].ToString());
-                    }
-                    if (translated.Length == 0) throw new InvalidOperationException();
-
-                    string detected = root.Length > 2 && root[2] != null ? root[2].ToString() : "";
-                    return new TranslationResult
-                    {
-                        Text = translated.ToString(),
-                        DetectedLanguage = detected,
-                        Provider = "Google 免费"
-                    };
-                }
-                catch
-                {
-                    throw new InvalidOperationException(
-                        "Google 免费接口返回格式已发生变化，请改用官方 Google 或 Microsoft 服务。");
-                }
-            }
-        }
-
-        private async Task<TranslationResult> TranslateMicrosoftAsync(
-            string text,
-            string targetLanguage,
-            AppSettings settings,
-            CancellationToken token)
-        {
-            if (string.IsNullOrWhiteSpace(settings.MicrosoftApiKey))
-                throw new InvalidOperationException("请先在设置中填写 Microsoft Translator API 密钥。");
-
-            string url = "https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=" +
-                         Uri.EscapeDataString(targetLanguage);
-            var request = new HttpRequestMessage(HttpMethod.Post, url);
-            request.Headers.Add("Ocp-Apim-Subscription-Key", settings.MicrosoftApiKey.Trim());
-            if (!string.IsNullOrWhiteSpace(settings.MicrosoftRegion))
-                request.Headers.Add("Ocp-Apim-Subscription-Region", settings.MicrosoftRegion.Trim());
-            request.Headers.Add("X-ClientTraceId", Guid.NewGuid().ToString());
-            request.Content = new StringContent("[{\"Text\":\"" + EscapeJson(text) + "\"}]", Encoding.UTF8, "application/json");
-
-            using (HttpResponseMessage response = await _http.SendAsync(request, token))
-            {
-                string json = await response.Content.ReadAsStringAsync();
-                if (!response.IsSuccessStatusCode) throw ApiError("Microsoft", response.StatusCode, json);
-                var data = Deserialize<MicrosoftResponse[]>(json);
-                if (data == null || data.Length == 0 || data[0].Translations == null || data[0].Translations.Length == 0)
-                    throw new InvalidOperationException("Microsoft 返回了空翻译结果。");
-                return new TranslationResult
-                {
-                    Text = data[0].Translations[0].Text,
-                    DetectedLanguage = data[0].DetectedLanguage == null ? "" : data[0].DetectedLanguage.Language,
-                    Provider = "Microsoft"
-                };
-            }
-        }
-
-        private async Task<TranslationResult> TranslateGoogleAsync(
-            string text,
-            string targetLanguage,
-            AppSettings settings,
-            CancellationToken token)
-        {
-            if (string.IsNullOrWhiteSpace(settings.GoogleApiKey))
-                throw new InvalidOperationException("请先在设置中填写 Google Cloud Translation API 密钥。");
-
-            string url = "https://translation.googleapis.com/language/translate/v2?key=" +
-                         Uri.EscapeDataString(settings.GoogleApiKey.Trim());
-            string body = "q=" + Uri.EscapeDataString(text) +
-                          "&target=" + Uri.EscapeDataString(NormalizeGoogleLanguage(targetLanguage)) +
-                          "&format=text";
-            using (var content = new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded"))
-            using (HttpResponseMessage response = await _http.PostAsync(url, content, token))
-            {
-                string json = await response.Content.ReadAsStringAsync();
-                if (!response.IsSuccessStatusCode) throw ApiError("Google", response.StatusCode, json);
-                var result = Deserialize<GoogleResponse>(json);
-                if (result == null || result.Data == null || result.Data.Translations == null || result.Data.Translations.Length == 0)
-                    throw new InvalidOperationException("Google 返回了空翻译结果。");
-                return new TranslationResult
-                {
-                    Text = WebUtility.HtmlDecode(result.Data.Translations[0].TranslatedText),
-                    DetectedLanguage = result.Data.Translations[0].DetectedSourceLanguage ?? "",
-                    Provider = "Google"
-                };
-            }
-        }
 
         private static Exception ApiError(string provider, HttpStatusCode status, string response)
         {
@@ -1524,12 +1392,6 @@ namespace GlobalTranslator
             return value;
         }
 
-        private static string NormalizeGoogleLanguage(string language)
-        {
-            if (language == "zh-Hans") return "zh-CN";
-            if (language == "zh-Hant") return "zh-TW";
-            return language;
-        }
 
         private static string TargetLanguageName(string code)
         {
@@ -1564,38 +1426,6 @@ namespace GlobalTranslator
             public LinkedListNode<string> Node;
         }
 
-        [DataContract]
-        private sealed class MicrosoftResponse
-        {
-            [DataMember(Name = "detectedLanguage")] public MicrosoftDetected DetectedLanguage { get; set; }
-            [DataMember(Name = "translations")] public MicrosoftTranslation[] Translations { get; set; }
-        }
-        [DataContract]
-        private sealed class MicrosoftDetected
-        {
-            [DataMember(Name = "language")] public string Language { get; set; }
-        }
-        [DataContract]
-        private sealed class MicrosoftTranslation
-        {
-            [DataMember(Name = "text")] public string Text { get; set; }
-        }
-        [DataContract]
-        private sealed class GoogleResponse
-        {
-            [DataMember(Name = "data")] public GoogleData Data { get; set; }
-        }
-        [DataContract]
-        private sealed class GoogleData
-        {
-            [DataMember(Name = "translations")] public GoogleTranslation[] Translations { get; set; }
-        }
-        [DataContract]
-        private sealed class GoogleTranslation
-        {
-            [DataMember(Name = "translatedText")] public string TranslatedText { get; set; }
-            [DataMember(Name = "detectedSourceLanguage")] public string DetectedSourceLanguage { get; set; }
-        }
         [DataContract]
         private sealed class ModelApiResponse
         {

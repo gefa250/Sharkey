@@ -564,16 +564,15 @@ namespace GlobalTranslator
             _errorPanel.Visibility = Visibility.Collapsed;
             _translation.Visibility = Visibility.Visible;
             _loadingText.Visibility = Visibility.Collapsed;
-            _meta.Text = ProviderName(settings.Provider) + "  ·  → " +
-                         LanguageName(SmartTargetResolver.Resolve(
+            _meta.Text = "→ " + LanguageName(SmartTargetResolver.Resolve(
                              _currentText,
                              settings.TargetLanguageMode,
                              settings.TargetLanguage)) +
                          _ocrMetaSuffix;
             if (!ocrMode)
-                _meta.Text = (settings.Provider == "ModelApi" ? "" : ProviderName(settings.Provider) + " · ") + "→ " + LanguageName(SmartTargetResolver.Resolve(
+                _meta.Text = "→ " + LanguageName(SmartTargetResolver.Resolve(
                     _currentText, settings.TargetLanguageMode, settings.TargetLanguage));
-            _meta.ToolTip = ProviderName(settings.Provider);
+            _meta.ToolTip = "AI 模型";
             UpdateContentLayout();
             if (reposition) ConfigureModeSize("");
             // Keep fast requests visually quiet. The timer reveals the
@@ -642,7 +641,7 @@ namespace GlobalTranslator
                              (result.FromCache ? "  ·  本次缓存" : "") +
                              _ocrMetaSuffix;
                 if (!ocrMode)
-                    _meta.Text = (settings.Provider == "ModelApi" ? "" : ProviderName(settings.Provider) + " · ") +
+                    _meta.Text =
                         (string.IsNullOrWhiteSpace(result.DetectedLanguage) ? "" : LanguageName(result.DetectedLanguage) + " ") +
                         "→ " + LanguageName(result.EffectiveTargetLanguage);
                 _meta.ToolTip = FormatResultMeta(result, settings) + (result.FromCache ? " · 本次缓存" : "");
@@ -2871,12 +2870,7 @@ namespace GlobalTranslator
 
         private static string ProviderName(string provider)
         {
-            if (provider == "GoogleFree") return "Google 免费";
-            if (provider == "MicrosoftFree") return "Microsoft 免费";
-            if (provider == "Microsoft") return "Microsoft 官方 API";
-            if (provider == "Google") return "Google Cloud API";
-            if (provider == "ModelApi") return "AI 模型 API";
-            return provider;
+            return "AI 模型";
         }
 
         private static string PopupVendorName(string vendor)
