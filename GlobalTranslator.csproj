@@ -73,6 +73,7 @@
     <Compile Include="ScreenshotSelector.cs" />
     <Compile Include="NativeMethods.cs" />
     <Compile Include="AppSettings.cs" />
+    <Compile Include="AiBalanceService.cs" />
     <Compile Include="TranslationClient.cs" />
     <Compile Include="SelectionMonitor.cs" />
     <Compile Include="PopupWindow.cs" />

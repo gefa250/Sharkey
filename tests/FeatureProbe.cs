@@ -26,6 +26,7 @@ internal static class FeatureProbe
             TestCommerceTools(app);
             TestCommerceToolRoundTrip(app);
             TestCommerceSearch(app);
+            TestAiBalance(app);
             TestModelApi(app);
             TestAnthropicModelApi(app);
             TestModelStreamReliability(app);
@@ -48,6 +49,64 @@ internal static class FeatureProbe
             }
             return 1;
         }
+    }
+
+    private sealed class BalanceProbeHandler : HttpMessageHandler
+    {
+        public int Calls;
+        public HttpStatusCode Status = HttpStatusCode.OK;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            Calls++;
+            if (request.Method != HttpMethod.Get || request.RequestUri.AbsoluteUri != "https://api.deepseek.com/user/balance" ||
+                request.Headers.Authorization.Scheme != "Bearer" || request.Headers.Authorization.Parameter != "balance-test-key")
+                throw new Exception("Wrong balance endpoint or authorization.");
+            return Task.FromResult(new HttpResponseMessage(Status)
+            {
+                Content = new StringContent("{\"is_available\":true,\"balance_infos\":[{\"currency\":\"CNY\",\"total_balance\":\"12.3456\"},{\"currency\":\"USD\",\"total_balance\":\"1.20\"}]}")
+            });
+        }
+    }
+
+    private static void TestAiBalance(Assembly app)
+    {
+        Type serviceType = app.GetType("GlobalTranslator.AiBalanceService", true);
+        Type connectionType = app.GetType("GlobalTranslator.ModelConnectionSettings", true);
+        object connection = Activator.CreateInstance(connectionType, true);
+        connectionType.GetField("BaseUrl").SetValue(connection, "https://api.deepseek.com/v1");
+        connectionType.GetField("ApiKey").SetValue(connection, "balance-test-key");
+        var handler = new BalanceProbeHandler();
+        object service = Activator.CreateInstance(serviceType, BindingFlags.Instance | BindingFlags.NonPublic,
+            null, new object[] { handler }, null);
+        Func<string, Task<string>> query = vendor => (Task<string>)serviceType.GetMethod("QueryAsync")
+            .Invoke(service, new object[] { vendor, connection, CancellationToken.None });
+        try
+        {
+            if (query("DeepSeek").GetAwaiter().GetResult() != "CNY 12.3456 / USD 1.20")
+                throw new Exception("Balance precision or currency failed.");
+            foreach (string endpoint in new[] { "https://api.deepseek.com.evil.test", "http://api.deepseek.com", "https://example.com/v1" })
+            {
+                connectionType.GetField("BaseUrl").SetValue(connection, endpoint);
+                try { query("DeepSeek").GetAwaiter().GetResult(); throw new Exception("Unsafe balance endpoint accepted."); }
+                catch (InvalidOperationException) { }
+            }
+            connectionType.GetField("BaseUrl").SetValue(connection, "https://api.deepseek.com");
+            try { query("MiMo").GetAwaiter().GetResult(); throw new Exception("Unsupported vendor queried."); }
+            catch (InvalidOperationException) { }
+            if (handler.Calls != 1) throw new Exception("Unsupported endpoint received credentials.");
+            handler.Status = HttpStatusCode.Unauthorized;
+            try { query("DeepSeek").GetAwaiter().GetResult(); throw new Exception("Unauthorized balance reported success."); }
+            catch (InvalidOperationException) { }
+            var parse = serviceType.GetMethod("Parse", BindingFlags.Static | BindingFlags.NonPublic);
+            foreach (string json in new[] { "{}", "{\"is_available\":true,\"balance_infos\":[{\"currency\":\"CNY\",\"total_balance\":\"NaN\"}]}" })
+            {
+                try { parse.Invoke(null, new object[] { json }); throw new Exception("Malformed balance reported as zero."); }
+                catch (TargetInvocationException ex) { if (!(ex.InnerException is FormatException)) throw; }
+            }
+            Console.WriteLine("AI_BALANCE endpoint/auth/currency/precision/unsupported/error=True");
+        }
+        finally { ((IDisposable)service).Dispose(); }
     }
 
     private static void TestTextToolsAndWriting(Assembly app)

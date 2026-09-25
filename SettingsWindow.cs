@@ -59,6 +59,14 @@ namespace GlobalTranslator
         private CheckBox _startWithWindows;
         private ComboBox _popupFontSize;
         private ComboBox _updateInterval;
+        private TextBlock _balanceText;
+        private Button _refreshBalance;
+        private readonly System.Windows.Threading.DispatcherTimer _balanceTimer =
+            new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
+        private System.Threading.CancellationTokenSource _balanceRequest;
+        private string _balanceIdentity = "";
+        private string _balanceValue;
+        private DateTime _balanceUpdated;
         private static readonly int[] UpdateIntervals = { 6, 12, 24, 72, 168, 0 };
         private bool _loadingValues;
         private string _pendingProvider = "GoogleFree";
@@ -125,6 +133,21 @@ namespace GlobalTranslator
             layout.Children.Add(footer);
 
             LoadValues();
+            _balanceTimer.Tick += async delegate { await RefreshBalanceAsync(); };
+            IsVisibleChanged += async delegate
+            {
+                if (IsVisible)
+                {
+                    _balanceTimer.Start();
+                    await RefreshBalanceAsync();
+                }
+                else
+                {
+                    _balanceTimer.Stop();
+                    if (_balanceRequest != null) _balanceRequest.Cancel();
+                    _balanceRequest = null;
+                }
+            };
         }
 
         protected override void OnClosing(CancelEventArgs e)
@@ -1056,12 +1079,98 @@ namespace GlobalTranslator
                 "AI 翻译、截图识别与外贸助手使用同一个当前模型。");
             intro.Margin = new Thickness(0, 0, 0, 16);
             root.Children.Add(intro);
+            var balanceRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, -6, 0, 12)
+            };
+            _balanceText = new TextBlock
+            {
+                Text = "余额 · —", FontSize = 12, Foreground = Muted,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            balanceRow.Children.Add(_balanceText);
+            _refreshBalance = new Button
+            {
+                Content = "刷新", FontSize = 11, Foreground = Muted,
+                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                Padding = new Thickness(8, 4, 8, 4), Margin = new Thickness(5, 0, 0, 0),
+                ToolTip = "查询已保存的当前 AI 账户余额；设置打开时每 60 秒刷新",
+                Cursor = Cursors.Hand
+            };
+            _refreshBalance.Click += async delegate { await RefreshBalanceAsync(); };
+            balanceRow.Children.Add(_refreshBalance);
+            root.Children.Add(balanceRow);
             var configuration = Card();
             configuration.Padding = new Thickness(15, 10, 15, 14);
             configuration.Child = _modelConfigurationPanel;
             root.Children.Add(configuration);
             root.Children.Add(BuildOcrTab());
             return Scroll(root);
+        }
+
+        private async System.Threading.Tasks.Task RefreshBalanceAsync()
+        {
+            if (!IsVisible || _balanceText == null) return;
+            string vendor = _settings.ModelVendor;
+            ModelConnectionSettings connection = _settings.GetModelConnection(vendor);
+            string identity = vendor + "\n" + connection.BaseUrl + "\n" + connection.ApiKey;
+            if (identity != _balanceIdentity)
+            {
+                if (_balanceRequest != null) _balanceRequest.Cancel();
+                _balanceRequest = null;
+                _balanceIdentity = identity;
+                _balanceValue = null;
+                _balanceText.ToolTip = null;
+            }
+            if (_balanceRequest != null) return;
+            string prefix = vendor + " 余额 · ";
+            string unavailable = AiBalanceService.UnavailableReason(vendor, connection);
+            if (unavailable.Length != 0)
+            {
+                _balanceText.Text = prefix + unavailable;
+                _refreshBalance.IsEnabled = false;
+                return;
+            }
+            var pending = new System.Threading.CancellationTokenSource();
+            _balanceRequest = pending;
+            _refreshBalance.IsEnabled = false;
+            if (_balanceValue == null) _balanceText.Text = prefix + "查询中…";
+            try
+            {
+                string value;
+                using (var service = new AiBalanceService())
+                    value = await service.QueryAsync(vendor, connection, pending.Token);
+                if (_balanceRequest != pending || !IsVisible) return;
+                var current = _settings.GetModelConnection(_settings.ModelVendor);
+                if (identity != _settings.ModelVendor + "\n" + current.BaseUrl + "\n" + current.ApiKey)
+                {
+                    _balanceValue = null;
+                    _balanceText.Text = "余额 · 当前账户已变更";
+                    return;
+                }
+                _balanceValue = value;
+                _balanceUpdated = DateTime.Now;
+                _balanceText.Text = prefix + value;
+                _balanceText.ToolTip = "更新于 " + _balanceUpdated.ToString("HH:mm:ss") +
+                    "；每 60 秒刷新，实际扣费以服务商账单为准。";
+            }
+            catch (Exception)
+            {
+                if (_balanceRequest != pending || !IsVisible) return;
+                _balanceText.Text = prefix + (_balanceValue == null ? "暂时无法查询" : _balanceValue + " · 更新失败");
+                _balanceText.ToolTip = _balanceValue == null ? "请检查密钥和网络后重试。" :
+                    "上次成功更新：" + _balanceUpdated.ToString("HH:mm:ss") + "；当前显示旧值。";
+            }
+            finally
+            {
+                if (_balanceRequest == pending)
+                {
+                    _balanceRequest = null;
+                    _refreshBalance.IsEnabled = true;
+                }
+                pending.Dispose();
+            }
         }
 
         private UIElement BuildCommerceTab()
