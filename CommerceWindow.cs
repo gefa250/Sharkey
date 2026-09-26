@@ -10,12 +10,11 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using Microsoft.Win32;
 using Bitmap = System.Drawing.Bitmap;
 
 namespace GlobalTranslator
 {
-    internal sealed class WritingWindow : Window
+    internal sealed partial class WritingWindow : Window
     {
         private readonly AppSettings _settings;
         private readonly TranslationClient _client;
@@ -78,7 +77,9 @@ namespace GlobalTranslator
             Margin = new Thickness(5, 18, 5, 12)
         };
         private readonly ComboBox _language = new ComboBox
-            { Width = 160, Margin = new Thickness(0, 0, 8, 0) };
+            { Width = 240, MinHeight = 34, IsEditable = true,
+              IsTextSearchEnabled = true, Margin = new Thickness(0, 0, 8, 0),
+              ToolTip = "选择常用语言，也可输入任意语言或地区变体，例如：泰语、巴西葡萄牙语" };
         private readonly Button _copy;
         private readonly Button _generate;
         private readonly Button _adviceOnly;
@@ -89,7 +90,11 @@ namespace GlobalTranslator
         private bool _composing;
         private bool _loading;
         private bool _allowClose;
+        private SavedConversation _session = new SavedConversation();
+        private readonly System.Windows.Threading.DispatcherTimer _saveTimer =
+            new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         internal bool IsCapturing { get; private set; }
+        private Window _capturePrompt;
         private static readonly string[] Codes =
             { "auto", "en", "ja", "ko", "de", "fr", "es", "ru", "ar", "pt", "zh-Hans" };
 
@@ -135,6 +140,7 @@ namespace GlobalTranslator
             DockPanel.SetDock(headerActions, Dock.Right);
             header.Children.Add(headerActions);
             headerActions.Children.Add(Action("新建沟通", NewConversation));
+            headerActions.Children.Add(Action("会话记录", ShowConversations));
             headerActions.Children.Add(Action("AI 设置", delegate
                 { if (_openModelSettings != null) _openModelSettings(); }));
             var heading = new StackPanel
@@ -221,14 +227,19 @@ namespace GlobalTranslator
             var reply = new StackPanel();
             replyScroll.Content = reply;
             var languageRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+            _language.Style = SettingsWindow.CreateComboBoxStyle();
             languageRow.Children.Add(new TextBlock
                 { Text = "回复语言", Margin = new Thickness(0, 5, 8, 0) });
-            foreach (string name in new[] { "自动（跟随客户，否则英语）", "英语", "日语",
+            foreach (string name in new[] { "自动", "英语", "日语",
                 "韩语", "德语", "法语", "西班牙语", "俄语", "阿拉伯语", "葡萄牙语", "简体中文" })
                 _language.Items.Add(name);
             int saved = Array.IndexOf(Codes, settings.CommunicationLanguage);
             _language.SelectedIndex = saved < 0 ? 0 : saved;
+            if (saved < 0 && !string.IsNullOrWhiteSpace(settings.CommunicationLanguage))
+                _language.Text = settings.CommunicationLanguage;
             _language.SelectionChanged += delegate { OnMaterialChanged(); };
+            _language.AddHandler(TextBox.TextChangedEvent, new TextChangedEventHandler(
+                delegate { OnMaterialChanged(); ScheduleSave(); }));
             languageRow.Children.Add(_language);
             content.Children.Add(languageRow);
 
@@ -237,13 +248,30 @@ namespace GlobalTranslator
             _background.ToolTip = "粘贴客户聊天内容、邮件或其他背景文字";
             content.Children.Add(Label("我的想法 / 要求"));
             content.Children.Add(_intent);
+            foreach (TextBox editor in new[] { _background, _intent, _adjustment })
+            {
+                DataObject.AddPastingHandler(editor, delegate(object sender, DataObjectPastingEventArgs args)
+                {
+                    if (!ClipboardImages.HasImage(args.DataObject)) return;
+                    args.CancelCommand();
+                    PasteImageData(args.DataObject);
+                });
+                editor.AllowDrop = true;
+                editor.PreviewDragOver += delegate(object sender, DragEventArgs args)
+                {
+                    if (!ClipboardImages.HasImage(args.Data)) return;
+                    args.Effects = DragDropEffects.Copy; args.Handled = true;
+                };
+                editor.PreviewDrop += delegate(object sender, DragEventArgs args)
+                {
+                    if (!ClipboardImages.HasImage(args.Data)) return;
+                    args.Handled = true; PasteImageData(args.Data);
+                };
+            }
             _intent.ToolTip = "写出零散要点即可。Enter 生成，Shift+Enter 换行";
-            var imageActions = new WrapPanel { Margin = new Thickness(0, 7, 0, 4) };
-            imageActions.Children.Add(Action("框选截图", async delegate
-                { await CaptureImage(); }));
-            imageActions.Children.Add(Action("粘贴图片", PasteImage));
-            imageActions.Children.Add(Action("添加图片", AddFiles));
-            content.Children.Add(imageActions);
+            var imageHint = new TextBlock { Text = "在输入框中 Ctrl+V 粘贴截图，或直接拖入图片", FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center, Foreground = Brushes.SlateGray };
+            content.Children.Add(imageHint);
             content.Children.Add(_imageList);
             content.Children.Add(actions);
             _adjustmentLabel = Label("继续调整");
@@ -343,13 +371,17 @@ namespace GlobalTranslator
             PreviewKeyDown += HandleKeyDown;
             TextCompositionManager.AddPreviewTextInputStartHandler(this,
                 delegate { _composing = true; });
-            TextCompositionManager.AddTextInputHandler(this,
-                delegate { _composing = false; });
+            AddHandler(TextCompositionManager.PreviewTextInputEvent,
+                new TextCompositionEventHandler(delegate { _composing = false; }), true);
+            AddHandler(TextCompositionManager.TextInputEvent,
+                new TextCompositionEventHandler(delegate { _composing = false; }), true);
+            _intent.LostKeyboardFocus += delegate { _composing = false; };
             Loaded += delegate { _intent.Focus(); };
             Closed += delegate { CancelRequest(); };
             Closing += delegate(object sender,
                 System.ComponentModel.CancelEventArgs args)
             {
+                if (!SaveConversation()) { args.Cancel = true; return; }
                 if (_allowClose || System.Windows.Application.Current == null ||
                     System.Windows.Application.Current.Dispatcher.HasShutdownStarted)
                     return;
@@ -358,6 +390,17 @@ namespace GlobalTranslator
                 Hide();
             };
             _loading = false;
+            _saveTimer.Tick += delegate { _saveTimer.Stop(); SaveConversation(); };
+            foreach (TextBox editor in SessionEditors())
+                editor.TextChanged += delegate { ScheduleSave(); };
+            IsVisibleChanged += delegate { if (!IsVisible) SaveConversation(); };
+            Closed += delegate { _saveTimer.Stop(); SaveConversation(); };
+            foreach (string path in ConversationStore.Files())
+            {
+                try { RestoreConversation(ConversationStore.Load(path)); break; }
+                catch { _status.Text = "部分历史记录无法读取，原文件已保留。"; }
+            }
+            BuildChatInterface();
         }
 
         internal void CloseForExit()
@@ -437,7 +480,7 @@ namespace GlobalTranslator
         {
             ModelConnectionSettings current =
                 _settings.GetModelConnection(_settings.ModelVendor);
-            _modelSummary.Text = "当前 AI · " + _settings.ModelVendor +
+            _modelSummary.Text = _settings.ModelVendor +
                 " · " + current.Model;
         }
 
@@ -559,6 +602,14 @@ namespace GlobalTranslator
                 e.Handled = true;
                 return;
             }
+            if (_chatLayout)
+            {
+                if (e.Key != Key.Enter || e.IsRepeat || _composing ||
+                    Keyboard.Modifiers != ModifierKeys.None || !_intent.IsKeyboardFocusWithin) return;
+                e.Handled = true;
+                if (_request == null) { var sending = Generate(false); }
+                return;
+            }
             if (e.Key != Key.Enter || e.IsRepeat || _composing) return;
             if (e.Key == Key.ImeProcessed || e.ImeProcessedKey == Key.Enter)
                 return;
@@ -585,16 +636,7 @@ namespace GlobalTranslator
         {
             if (_loading) return;
             if (_request != null) CancelRequest();
-            if (_turns.Count > 0)
-            {
-                _turns.Clear();
-                _successful = 0;
-                _lastResult = null;
-                _status.Text = "背景或需求已改变，请重新生成。已有回复仍可复制。";
-                _staleNotice.Visibility = Visibility.Visible;
-                _conversationHistory.Children.Clear();
-                _conversationHistory.Visibility = Visibility.Collapsed;
-            }
+            if (_request == null) _status.Text = "";
         }
 
         private async Task Generate(bool adviceOnly)
@@ -611,19 +653,23 @@ namespace GlobalTranslator
                 _status.Text = "请先生成一份回复，再填写调整要求。";
                 return;
             }
-            var turns = _turns.Skip(Math.Max(0, _turns.Count - 10))
-                .Select(t => new CommunicationTurn
-                { Instruction = t.Instruction, Reply = t.Reply }).ToArray();
+            byte[][] sentImages = _images.ToArray();
+            if (_lastResult != null && _turns.Count > TopicStart) _turns[_turns.Count - 1].Reply = _result.Text;
+            var context = ConversationContext.Create(_turns, TopicStart, sentImages);
+            var turns = context.Turns;
             if (turns.Length > 0 && _lastResult != null)
                 turns[turns.Length - 1].Reply = _result.Text;
             var input = new CommunicationRequest
             {
-                Background = _background.Text,
-                Intent = _intent.Text,
-                Adjustment = _adjustment.Text,
-                Language = Codes[_language.SelectedIndex],
+                Background = TopicStart == 0 ? CombinedCustomerMaterials() : "",
+                Intent = _chatLayout && turns.Length > 0 ? "" : _intent.Text,
+                Adjustment = _chatLayout ? (turns.Length > 0 ? _intent.Text : "") : _adjustment.Text,
+                Language = SelectedLanguage(),
+                TaskMode = _chatTaskMode == "inquiry" || _intent.Text.Contains("整理询盘") ? "inquiry" : "",
+                UnifiedInput = _chatLayout,
                 AdviceOnly = adviceOnly,
-                Images = _images.ToArray(),
+                Images = context.Images,
+                ImageContext = context.ImageContext,
                 Turns = turns,
                 ApproveSensitiveSearch = query => MessageBox.Show(this,
                     "搜索词可能包含客户或订单信息：\n\n" + query +
@@ -647,7 +693,9 @@ namespace GlobalTranslator
                 _loading = true;
                 if (!adviceOnly && !answer.ToolLimitReached)
                 {
+                    _editingAnswer = false;
                     _lastResult = answer;
+                    if (_chatLayout) RefreshInquiry();
                     _result.Text = answer.Reply;
                     _meaning.Text = answer.MeaningZh;
                     _staleNotice.Visibility = Visibility.Collapsed;
@@ -679,22 +727,33 @@ namespace GlobalTranslator
                 if (!answer.ToolLimitReached)
                 {
                     _turns.Add(new CommunicationTurn
-                        { Instruction = input.Adjustment,
-                          Reply = adviceOnly ? _result.Text : answer.Reply });
+                        { Instruction = string.IsNullOrWhiteSpace(input.Adjustment) ? input.Intent : input.Adjustment,
+                          Reply = adviceOnly ? answer.AdviceZh : answer.Reply,
+                          Images = sentImages,
+                          Meaning = answer.MeaningZh, Advice = answer.AdviceZh,
+                          Calculation = answer.CalculationDetails, Sources = answer.Sources });
                     _successful++;
                 }
-                AddHistoryTurn(input, answer);
+                if (_chatLayout) RebuildChatHistory();
+                else AddHistoryTurn(input, answer);
+                if (_chatLayout)
+                {
+                    var scrollRequest = Dispatcher.BeginInvoke(new Action(delegate { _chatResultCard.BringIntoView(); }));
+                }
                 _loading = true;
                 _adjustment.Clear();
+                if (_chatLayout && !answer.ToolLimitReached)
+                {
+                    _intent.Clear();
+                    _images.Clear(); RefreshImages();
+                }
+                if (_chatLayout) _chatTaskMode = "";
                 _loading = false;
+                ScheduleSave();
                 _status.Text = answer.ToolLimitReached
                     ? "本次工具已达上限；现有回复和计算明细已保留。"
-                    : _turns.Count > 10
-                    ? "已完成；继续调整仅参考最近 10 次结果。"
-                    : adviceOnly ? "建议已更新；原回复已保留。" :
-                    answer.Reply.Length > 0
-                    ? "已生成，可核对后复制回复。"
-                    : "信息不足，已列出建议和待确认事项。";
+                    : adviceOnly ? "建议已更新。" : "";
+                UpdateContextNotice();
             }
             catch (OperationCanceledException)
             { if (_request == pending) _status.Text = "已取消。"; }
@@ -737,22 +796,166 @@ namespace GlobalTranslator
             if (string.IsNullOrWhiteSpace(_result.Text)) return;
             try
             {
-                Clipboard.SetText(_result.Text);
+                Clipboard.SetText(_chatLayout ? ChatReadingView.ToPlainText(_result.Text) : _result.Text);
                 _status.Text = "已复制回复。";
             }
             catch { _status.Text = "剪贴板正忙，请重试。"; }
         }
 
+        private string SelectedLanguage()
+        {
+            int index = _language.SelectedIndex;
+            if (index >= 0 && index < Codes.Length &&
+                _language.Text == Convert.ToString(_language.Items[index])) return Codes[index];
+            return string.IsNullOrWhiteSpace(_language.Text) ? "auto" : _language.Text.Trim();
+        }
+
+        private TextBox[] SessionEditors()
+        { return new[] { _background, _intent, _adjustment, _result, _meaning, _advice, _calculation, _sources }; }
+
+        private void ScheduleSave()
+        {
+            if (_loading) return;
+            _saveTimer.Stop(); _saveTimer.Start();
+        }
+
+        private bool SaveConversation()
+        {
+            if (_loading) return true;
+            _saveTimer.Stop();
+            string[] texts = SessionEditors().Select(editor => editor.Text).ToArray();
+            if (texts.All(string.IsNullOrWhiteSpace) && _images.Count == 0 && _turns.Count == 0 &&
+                _session.Texts.Length == 0) return true;
+            _session.Texts = texts; _session.Images = _images.ToArray();
+            if (_lastResult != null && _turns.Count > TopicStart) _turns[_turns.Count - 1].Reply = _result.Text;
+            _session.Turns = _turns.ToArray(); _session.Language = SelectedLanguage();
+            // Retain the legacy field for backward-compatible deserialization, but never persist document attachments.
+            _session.Documents = new CommerceDocument[0];
+            _session.InquiryFields = _lastResult == null ? new InquiryField[0] : _lastResult.InquiryFields;
+            _session.MissingFields = _lastResult == null ? new string[0] : _lastResult.MissingFields;
+            _session.Stale = _staleNotice.Visibility == Visibility.Visible;
+            _session.Edited = _editNotice.Visibility == Visibility.Visible;
+            bool newTitle = _session.Title == "新沟通";
+            if (newTitle)
+            {
+                string title = string.IsNullOrWhiteSpace(_intent.Text) ? _background.Text : _intent.Text;
+                if (string.IsNullOrWhiteSpace(title) && _turns.Count > 0)
+                    title = _turns[0].Instruction;
+                title = title.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                _session.Title = title.Length == 0 ? "图片沟通" : title.Substring(0, Math.Min(36, title.Length));
+            }
+            try { ConversationStore.Save(_session); if (_chatLayout && newTitle) RefreshSessionList(); return true; }
+            catch { _status.Text = "会话保存失败，请检查磁盘空间和目录权限；当前内容仍保留，请勿退出。"; return false; }
+        }
+
+        private void RestoreConversation(SavedConversation value)
+        {
+            _editingAnswer = false;
+            foreach (byte[] bytes in value.Images) PreviewSource(bytes);
+            CancelRequest(); _saveTimer.Stop(); _loading = true;
+            try
+            {
+                _chatTaskMode = "";
+                _session = value;
+                _session.TopicBreaks = value.TopicBreaks ?? new int[0];
+                TextBox[] editors = SessionEditors();
+                for (int i = 0; i < editors.Length; i++)
+                    editors[i].Text = i < value.Texts.Length ? value.Texts[i] : "";
+                int index = Array.IndexOf(Codes, value.Language);
+                _language.SelectedIndex = index;
+                if (index < 0) _language.Text = value.Language;
+                _images.Clear(); _images.AddRange(value.Images);
+                bool hadLegacyDocuments = value.Documents != null && value.Documents.Length > 0;
+                _session.Documents = new CommerceDocument[0];
+                _turns.Clear(); _turns.AddRange(value.Turns);
+                _successful = _turns.Count;
+                _lastResult = string.IsNullOrWhiteSpace(_result.Text) ? null : new CommunicationResult
+                { Reply = _result.Text, MeaningZh = _meaning.Text, AdviceZh = _advice.Text,
+                  InquiryFields = value.InquiryFields ?? new InquiryField[0],
+                  MissingFields = value.MissingFields ?? new string[0] };
+                _adjustmentLabel.Visibility = _adjustment.Visibility = _lastResult == null ? Visibility.Collapsed : Visibility.Visible;
+                _calculationLabel.Visibility = _calculation.Visibility = _calculationActions.Visibility =
+                    string.IsNullOrWhiteSpace(_calculation.Text) ? Visibility.Collapsed : Visibility.Visible;
+                _sourcesLabel.Visibility = _sources.Visibility = _sourceActions.Visibility =
+                    string.IsNullOrWhiteSpace(_sources.Text) ? Visibility.Collapsed : Visibility.Visible;
+                _staleNotice.Visibility = value.Stale ? Visibility.Visible : Visibility.Collapsed;
+                _editNotice.Visibility = value.Edited ? Visibility.Visible : Visibility.Collapsed;
+                _conversationHistory.Children.Clear();
+                foreach (CommunicationTurn turn in _turns)
+                {
+                    _conversationHistory.Children.Add(HistoryBubble("你 · " + turn.Instruction, true));
+                    _conversationHistory.Children.Add(HistoryBubble("助手 · " + turn.Reply, false));
+                }
+                _conversationHistory.Visibility = _turns.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+                if (_chatLayout) { RebuildChatHistory(); RefreshInquiry(); }
+                UpdateContextNotice();
+                RefreshImages();
+                _status.Text = hadLegacyDocuments
+                    ? "已恢复：" + value.Title + "（旧版文档附件已忽略；现在仅支持图片）"
+                    : "已恢复：" + value.Title;
+            }
+            finally { _loading = false; }
+        }
+
+        private void ShowConversations()
+        {
+            if (!SaveConversation()) return;
+            var dialog = new Window { Title = "会话记录 · 本机加密保存", Owner = this,
+                Width = 440, Height = 480, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+            var panel = new DockPanel { Margin = new Thickness(16) };
+            var actions = new WrapPanel(); DockPanel.SetDock(actions, Dock.Bottom);
+            panel.Children.Add(actions);
+            var list = new ListBox { Margin = new Thickness(0, 0, 0, 12) };
+            int failed = 0;
+            foreach (string path in ConversationStore.Files())
+                try { list.Items.Add(ConversationStore.Load(path)); } catch { failed++; }
+            if (failed > 0) _status.Text = failed + " 条记录无法读取，文件已保留。";
+            System.Action open = delegate
+            {
+                var value = list.SelectedItem as SavedConversation;
+                if (value == null) return;
+                if (!SaveConversation()) return;
+                RestoreConversation(value); dialog.Close();
+            };
+            actions.Children.Add(Action("打开", open));
+            actions.Children.Add(Action("重命名", delegate
+            {
+                var value = list.SelectedItem as SavedConversation; if (value == null) return;
+                var name = new TextBox { Text = value.Title, Margin = new Thickness(12), MaxLength = 80 };
+                var rename = new Window { Owner = dialog, Title = "重命名 · Enter 保存", Width = 340,
+                    Height = 110, Content = name, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+                name.KeyDown += delegate(object sender, KeyEventArgs args)
+                {
+                    if (args.Key != Key.Enter || string.IsNullOrWhiteSpace(name.Text)) return;
+                    string original = value.Title; value.Title = name.Text.Trim();
+                    try { ConversationStore.Save(value); if (_session.Id == value.Id) _session.Title = value.Title;
+                        list.Items.Refresh(); rename.Close(); }
+                    catch { value.Title = original; MessageBox.Show(rename, "重命名保存失败。"); }
+                };
+                rename.ShowDialog();
+            }));
+            actions.Children.Add(Action("删除", delegate
+            {
+                var value = list.SelectedItem as SavedConversation; if (value == null) return;
+                if (MessageBox.Show(dialog, "删除此会话及图片？此操作无法撤销。", "删除会话",
+                    MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+                try
+                {
+                    ConversationStore.Delete(value.Id); list.Items.Remove(value);
+                    if (_session.Id == value.Id)
+                        RestoreConversation(new SavedConversation());
+                }
+                catch { MessageBox.Show(dialog, "删除失败，记录仍保留。"); }
+            }));
+            list.MouseDoubleClick += delegate { open(); };
+            panel.Children.Add(list); dialog.Content = panel; dialog.ShowDialog();
+        }
+
         private void NewConversation()
         {
-            if ((!string.IsNullOrWhiteSpace(_background.Text) ||
-                 !string.IsNullOrWhiteSpace(_intent.Text) ||
-                 !string.IsNullOrWhiteSpace(_result.Text) ||
-                 _images.Count > 0) &&
-                MessageBox.Show(this, "清空本次沟通的材料和结果？",
-                    "新建沟通", MessageBoxButton.YesNo,
-                    MessageBoxImage.Question) != MessageBoxResult.Yes)
-                return;
+            if (!SaveConversation()) return;
+            _editingAnswer = false;
+            _session = new SavedConversation();
             CancelRequest();
             _loading = true;
             _background.Clear(); _intent.Clear(); _adjustment.Clear();
@@ -769,12 +972,14 @@ namespace GlobalTranslator
             _adjustmentLabel.Visibility = Visibility.Collapsed;
             _adjustment.Visibility = Visibility.Collapsed;
             _images.Clear(); _turns.Clear();
+            _chatTaskMode = "";
             _conversationHistory.Children.Clear();
             _conversationHistory.Visibility = Visibility.Collapsed;
             _lastResult = null; _successful = 0;
             RefreshImages();
-            _status.Text = "已新建沟通。";
+            _status.Text = "";
             _loading = false;
+            if (_chatLayout) { RebuildChatHistory(); RefreshSessionList(); UpdateChatResult(); UpdateContextNotice(); }
             _intent.Focus();
         }
 
@@ -792,6 +997,7 @@ namespace GlobalTranslator
                 _conversationHistory.Children.Add(Label("本次对话"));
             _conversationHistory.Children.Add(HistoryBubble(
                 "你 · " + question, true));
+            if (_chatLayout) return;
             string preview = input.AdviceOnly ||
                 string.IsNullOrWhiteSpace(answer.Reply)
                 ? answer.AdviceZh : answer.Reply;
@@ -808,23 +1014,68 @@ namespace GlobalTranslator
 
         private static Border HistoryBubble(string message, bool user)
         {
+            int split = message.IndexOf(" · ", StringComparison.Ordinal);
+            string role = split < 0 ? (user ? "你" : "Sharkey") : message.Substring(0, split);
+            string text = split < 0 ? message : message.Substring(split + 3);
+            var body = new StackPanel();
+            body.Children.Add(ChatReadingView.Create(text));
+            var copy = Action("复制", delegate
+            { try { Clipboard.SetText(text); } catch { } });
+            QuietIcon(copy, "M6,5 L6,2 L17,2 L17,14 L14,14 M2,6 L13,6 L13,18 L2,18 Z", "复制");
+            copy.HorizontalAlignment = HorizontalAlignment.Left;
+            copy.Margin = new Thickness(0, 9, 0, 0);
+            body.Children.Add(copy);
             return new Border
             {
-                Background = new SolidColorBrush(user
-                    ? System.Windows.Media.Color.FromRgb(232, 246, 250)
-                    : System.Windows.Media.Color.FromRgb(244, 248, 249)),
+                Background = user ? new SolidColorBrush(System.Windows.Media.Color.FromRgb(232, 246, 250)) : Brushes.Transparent,
                 CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(10, 8, 10, 8),
-                Margin = new Thickness(user ? 24 : 0, 4,
-                    user ? 0 : 24, 0),
-                Child = new TextBlock
-                {
-                    Text = message, TextWrapping = TextWrapping.Wrap,
-                    FontSize = 12.5,
-                    Foreground = new SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(40, 73, 87))
-                }
+                Padding = new Thickness(16),
+                Margin = new Thickness(user ? 24 : 0, 10, user ? 0 : 0, 10),
+                Child = body
             };
+        }
+
+        internal async void CaptureFromDesktop()
+        {
+            if (_capturePrompt != null) { _capturePrompt.DialogResult = true; return; }
+            await CaptureImage();
+        }
+
+        private async Task PrepareCapture()
+        {
+            if (IsCapturing || _capturePrompt != null) return;
+            if (_images.Count >= 5) { _status.Text = "每次沟通最多添加 5 张图片，请先删除不需要的附件。"; return; }
+            IsCapturing = true;
+            Hide();
+            var panel = new StackPanel { Margin = new Thickness(16) };
+            panel.Children.Add(new TextBlock { Text = "切换到要截图的应用，再开始框选。", Margin = new Thickness(0, 0, 0, 12) });
+            var prompt = new Window { Title = "准备截图", Width = 340, SizeToContent = SizeToContent.Height,
+                Topmost = true, ResizeMode = ResizeMode.NoResize, ShowInTaskbar = false, Content = panel };
+            _capturePrompt = prompt;
+            IntPtr captureHandle = IntPtr.Zero;
+            prompt.SourceInitialized += delegate
+            {
+                captureHandle = new System.Windows.Interop.WindowInteropHelper(prompt).Handle;
+                System.Windows.Interop.HwndSource.FromHwnd(captureHandle).AddHook(
+                    delegate(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+                    {
+                        if (message == NativeMethods.WM_HOTKEY && wParam.ToInt32() == 7)
+                        { prompt.DialogResult = false; handled = true; }
+                        return IntPtr.Zero;
+                    });
+                NativeHotKey.Register(captureHandle, 7, NativeMethods.MOD_NOREPEAT, NativeMethods.VK_ESCAPE);
+            };
+            prompt.Closed += delegate { if (captureHandle != IntPtr.Zero) NativeHotKey.Unregister(captureHandle, 7); };
+            panel.Children.Add(Action("开始框选 · " + _settings.AssistantCaptureHotkey,
+                delegate { prompt.DialogResult = true; }));
+            panel.Children.Add(Action("取消", delegate { prompt.DialogResult = false; }));
+            prompt.PreviewKeyDown += delegate(object sender, KeyEventArgs args)
+                { if (args.Key == Key.Escape) prompt.DialogResult = false; };
+            bool capture = prompt.ShowDialog() == true;
+            _capturePrompt = null;
+            IsCapturing = false;
+            if (capture) await CaptureImage();
+            else { Show(); Activate(); }
         }
 
         private async Task CaptureImage()
@@ -853,40 +1104,28 @@ namespace GlobalTranslator
             }
         }
 
-        private void PasteImage()
+        private async void PasteImage()
+        {
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try { PasteImageData(Clipboard.GetDataObject()); return; }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    if (attempt == 2) { _status.Text = "剪贴板正忙，请稍后重新粘贴。"; return; }
+                }
+                await Task.Delay(80);
+            }
+        }
+
+        private void PasteImageData(IDataObject data)
         {
             try
             {
-                if (!Clipboard.ContainsImage())
-                { _status.Text = "剪贴板中没有图片。"; return; }
-                BitmapSource source = Clipboard.GetImage();
-                var encoder = new PngBitmapEncoder();
-                encoder.Frames.Add(BitmapFrame.Create(source));
-                using (var stream = new MemoryStream())
-                {
-                    encoder.Save(stream);
-                    AddImage(stream.ToArray());
-                }
+                var images = ClipboardImages.Read(data);
+                if (images.Count == 0) { _status.Text = "没有可读取的图片，请重新复制截图。"; return; }
+                foreach (byte[] bytes in images) AddImage(bytes);
             }
-            catch (Exception error) { _status.Text = "粘贴图片失败：" + error.Message; }
-        }
-
-        private void AddFiles()
-        {
-            var dialog = new OpenFileDialog
-            {
-                Title = "选择聊天截图",
-                Filter = "图片|*.png;*.jpg;*.jpeg",
-                Multiselect = true
-            };
-            if (dialog.ShowDialog(this) != true) return;
-            foreach (string path in dialog.FileNames)
-            {
-                if (_images.Count >= 5)
-                { _status.Text = "每次沟通最多添加 5 张图片。"; break; }
-                try { using (var bitmap = new Bitmap(path)) AddBitmap(bitmap); }
-                catch (Exception error) { _status.Text = "添加图片失败：" + error.Message; }
-            }
+            catch (Exception) { _status.Text = "无法读取图片，请确认剪贴板中复制的是图片。已有图片保留。"; }
         }
 
         private void AddBitmap(Bitmap bitmap)
@@ -904,10 +1143,11 @@ namespace GlobalTranslator
             { _status.Text = "每次沟通最多添加 5 张图片。"; return; }
             if (bytes == null || bytes.Length == 0 || bytes.Length > 10 * 1024 * 1024)
             { _status.Text = "单张图片需小于 10 MB。"; return; }
+            PreviewSource(bytes); // Reject malformed images before changing the attachment list.
             _images.Add(bytes);
             OnMaterialChanged();
             RefreshImages();
-            _status.Text = "已添加 " + _images.Count + " 张图片。";
+            _status.Text = "";
         }
 
         private static BitmapImage PreviewSource(byte[] bytes,
@@ -925,7 +1165,33 @@ namespace GlobalTranslator
 
         private void RefreshImages()
         {
+            ScheduleSave();
+            UpdateContextNotice();
             _imageList.Children.Clear();
+            if (_chatLayout)
+            {
+                for (int i = 0; i < _images.Count; i++)
+                {
+                    int index = i;
+                    var tile = new WrapPanel { Margin = new Thickness(0, 0, 5, 5),
+                        Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 249, 251)) };
+                    var preview = new Image { Source = PreviewSource(_images[index]), Width = 64,
+                        Height = 44, Stretch = Stretch.Uniform, Margin = new Thickness(3), ToolTip = "查看图片", Cursor = Cursors.Hand };
+                    preview.MouseLeftButtonUp += delegate { ShowImage(index); };
+                    tile.Children.Add(preview);
+                    var remove = Action("×", delegate { _images.RemoveAt(index); OnMaterialChanged(); RefreshImages(); });
+                    remove.Width = 24; remove.MinHeight = 24; remove.Height = 24; remove.Padding = new Thickness(0);
+                    remove.ToolTip = "移除图片"; tile.Children.Add(remove);
+                    var menu = new ContextMenu();
+                    var up = new MenuItem { Header = "向前移动" };
+                    up.Click += delegate { MoveImage(index, -1); };
+                    var down = new MenuItem { Header = "向后移动" };
+                    down.Click += delegate { MoveImage(index, 1); };
+                    menu.Items.Add(up); menu.Items.Add(down); tile.ContextMenu = menu;
+                    _imageList.Children.Add(tile);
+                }
+                return;
+            }
             for (int i = 0; i < _images.Count; i++)
             {
                 int index = i;

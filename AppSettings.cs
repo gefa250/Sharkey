@@ -105,6 +105,7 @@ namespace GlobalTranslator
         public string CommunicationLanguage = "auto";
         public bool CommerceSearchEnabled = false;
         public string CommerceSearchApiKey = "";
+        public string CommerceSearchBackend = "Auto";
         public string GoogleApiKey = "";
         public string MicrosoftApiKey = "";
         public string MicrosoftRegion = "";
@@ -138,6 +139,7 @@ namespace GlobalTranslator
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
         public string WritingHotkey = "F7";
+        public string AssistantCaptureHotkey = "Ctrl+Alt+A";
         public string OcrHotkey = "F9";
         public string SettingsHotkey = "F10";
         public bool StartWithWindows = StartupManager.IsEnabled();
@@ -194,6 +196,7 @@ namespace GlobalTranslator
                         case "CommunicationLanguage": settings.CommunicationLanguage = value; break;
                         case "CommerceSearchEnabled": settings.CommerceSearchEnabled = value == "true"; break;
                         case "CommerceSearchApiKey": settings.CommerceSearchApiKey = value; break;
+                        case "CommerceSearchBackend": settings.CommerceSearchBackend = value; break;
                         case "GoogleApiKey": settings.GoogleApiKey = value; break;
                         case "MicrosoftApiKey": settings.MicrosoftApiKey = value; break;
                         case "MicrosoftRegion": settings.MicrosoftRegion = value; break;
@@ -225,6 +228,7 @@ namespace GlobalTranslator
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
                         case "WritingHotkey": settings.WritingHotkey = value; break;
+                        case "AssistantCaptureHotkey": settings.AssistantCaptureHotkey = value; break;
                         case "OcrHotkey": settings.OcrHotkey = value; break;
                         case "SettingsHotkey": settings.SettingsHotkey = value; break;
                         case "StartWithWindows": settings.StartWithWindows = value == "true"; break;
@@ -303,6 +307,7 @@ namespace GlobalTranslator
                 "CommunicationLanguage=" + Encode(CommunicationLanguage) + "\n" +
                 "CommerceSearchEnabled=" + Encode(CommerceSearchEnabled ? "true" : "false") + "\n" +
                 "CommerceSearchApiKey=" + Encode(CommerceSearchApiKey) + "\n" +
+                "CommerceSearchBackend=" + Encode(CommerceSearchBackend) + "\n" +
                 "GoogleApiKey=" + Encode(GoogleApiKey) + "\n" +
                 "MicrosoftApiKey=" + Encode(MicrosoftApiKey) + "\n" +
                 "MicrosoftRegion=" + Encode(MicrosoftRegion) + "\n" +
@@ -333,6 +338,7 @@ namespace GlobalTranslator
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
                 "WritingHotkey=" + Encode(WritingHotkey) + "\n" +
+                "AssistantCaptureHotkey=" + Encode(AssistantCaptureHotkey) + "\n" +
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +
                 "SettingsHotkey=" + Encode(SettingsHotkey) + "\n" +
                 "PopupFontSize=" + Encode(PopupFontSize) + "\n" +

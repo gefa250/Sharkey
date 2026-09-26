@@ -412,6 +412,9 @@ namespace GlobalTranslator
                 Adjustment = input.Adjustment,
                 Language = input.Language,
                 AdviceOnly = input.AdviceOnly,
+                TaskMode = input.TaskMode,
+                UnifiedInput = input.UnifiedInput,
+                ImageContext = input.ImageContext,
                 Images = input.Images,
                 Turns = input.Turns,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
@@ -463,7 +466,7 @@ namespace GlobalTranslator
                                 if (++searches > 3)
                                     throw new InvalidOperationException(
                                         "本次搜索已达上限，请继续下一轮沟通。");
-                                if (!settings.CommerceSearchEnabled)
+                                if (!modelSnapshot.CommerceSearchEnabled)
                                     throw new InvalidOperationException(
                                         "联网搜索未启用，请提供数据或在设置中启用。");
                                 if (SensitiveCommerceSearch(request.Query) &&
@@ -471,8 +474,8 @@ namespace GlobalTranslator
                                      !work.ApproveSensitiveSearch(request.Query)))
                                     throw new InvalidOperationException(
                                         "搜索词包含可能敏感的信息，未获得确认。");
-                                outcome = await search.SearchAsync(request.Query,
-                                    settings.CommerceSearchApiKey, token);
+                                outcome = await search.SearchConfiguredAsync(request.Query,
+                                    modelSnapshot, token);
                             }
                             else throw new InvalidOperationException(
                                 "不支持的助手工具。");
@@ -527,6 +530,7 @@ namespace GlobalTranslator
             token.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(input.Background) &&
                 string.IsNullOrWhiteSpace(input.Intent) &&
+                string.IsNullOrWhiteSpace(input.Adjustment) &&
                 (input.Images == null || input.Images.Length == 0))
                 throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
             if (input.Images != null && input.Images.Length > 5)

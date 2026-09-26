@@ -404,6 +404,10 @@ namespace GlobalTranslator
         {
             if (_messageWindow == null) return;
             IntPtr handle = _messageWindow.Handle;
+            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE);
+            HotkeyGesture assistantCapture = ParsedHotkey(_settings.AssistantCaptureHotkey, "Ctrl+Alt+A");
+            bool assistantCaptureRegistered = NativeHotKey.Register(handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE,
+                assistantCapture.Modifiers | NativeMethods.MOD_NOREPEAT, assistantCapture.VirtualKey);
             NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_WRITING);
             HotkeyGesture writing = ParsedHotkey(_settings.WritingHotkey, "F7");
             bool writingRegistered = NativeHotKey.Register(handle, NativeMethods.HOTKEY_WRITING,
@@ -443,11 +447,12 @@ namespace GlobalTranslator
                 translateRegistered +
                 "; ocr=" + screenshotRegistered +
                 "; settings=" + settingsRegistered);
-            if (!writingRegistered || !translateRegistered ||
+            if (!assistantCaptureRegistered || !writingRegistered || !translateRegistered ||
                 !screenshotRegistered ||
                 !settingsRegistered)
             {
                 string message = "";
+                if (!assistantCaptureRegistered) message += assistantCapture.Display + " 截图到助手不可用，请在设置中更换快捷键。\n";
                 if (!writingRegistered) message += writing.Display + " 外贸沟通助手不可用。请在设置中更换快捷键。\n";
                 if (!translateRegistered)
                     message += translate.Display + " 选中翻译不可用。";
@@ -482,6 +487,19 @@ namespace GlobalTranslator
 
         private IntPtr WindowProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (message == NativeMethods.WM_HOTKEY && wParam.ToInt32() == NativeMethods.HOTKEY_ASSISTANT_CAPTURE)
+            {
+                handled = true;
+                if (_screenshotSelecting) return IntPtr.Zero;
+                if (_writingWindow == null)
+                {
+                    _writingWindow = new WritingWindow(_settings, _client, ShowModelSettings);
+                    _writingWindow.Closed += delegate { _writingWindow = null; };
+                }
+                if (_popup != null) _popup.DismissImmediately();
+                _writingWindow.CaptureFromDesktop();
+                return IntPtr.Zero;
+            }
             if (message == NativeMethods.WM_HOTKEY &&
                 wParam.ToInt32() == NativeMethods.HOTKEY_TRANSLATE)
             {
@@ -631,6 +649,7 @@ namespace GlobalTranslator
         private async void CaptureScreenshotAndTranslate()
         {
             if (_screenshotSelecting) return;
+            if (_writingWindow != null && _writingWindow.IsCapturing) return;
             if (_ocrCancellation != null) _ocrCancellation.Cancel();
             var activeCancellation = new CancellationTokenSource();
             _ocrCancellation = activeCancellation;
@@ -859,6 +878,7 @@ namespace GlobalTranslator
             {
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_TRANSLATE);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_WRITING);
+                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SCREENSHOT);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SETTINGS);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_DISMISS);

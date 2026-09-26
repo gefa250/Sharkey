@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using ShapePath = System.Windows.Shapes.Path;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -19,6 +20,9 @@ internal static class PopupInteractionProbe
         try
         {
             Assembly app = Assembly.LoadFrom(args[0]);
+            app.GetType("GlobalTranslator.ConversationStore", true)
+                .GetField("DirectoryPath", BindingFlags.Static | BindingFlags.NonPublic)
+                .SetValue(null, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Sharkey-tests-" + Guid.NewGuid().ToString("N")));
             Type popupType = app.GetType("GlobalTranslator.PopupWindow", true);
             popup = (Window)Activator.CreateInstance(popupType, true);
             TextBox source = (TextBox)popupType
@@ -72,17 +76,21 @@ internal static class PopupInteractionProbe
             var writingCopy = (Button)writingType.GetField("_copy", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
             writingSource.Text = "请确认交期"; writingResult.Text = "Please confirm the delivery date.";
             Require(writingCopy.IsEnabled, "Completed writing result cannot be copied.");
-            writing.Show(); writing.UpdateLayout();
+            writing.Show(); writing.UpdateLayout(); PumpDispatcher(); writing.UpdateLayout();
             SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace-150.png", 144);
+            SaveWindowPreview(writing, "tmp/tests/writing-workspace-200.png", 192);
             writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
             Require(writingSource.ActualHeight > 35,
                 "Communication input collapsed at minimum size.");
+            Require(((Border)Field(writing, "_chatSidebar")).Visibility == Visibility.Collapsed,
+                "Narrow assistant did not collapse the sidebar.");
             writingType.GetField("_showingReply", BindingFlags.Instance |
                 BindingFlags.NonPublic).SetValue(writing, true);
             writingType.GetMethod("UpdateWorkbenchLayout", BindingFlags.Instance |
                 BindingFlags.NonPublic).Invoke(writing, null);
             writing.UpdateLayout();
-            Require(writingResult.ActualHeight > 35,
+            Require(((RichTextBox)Field(writing, "_chatAnswer")).ActualHeight > 15,
                 "Communication result collapsed in narrow layout.");
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-small.png", 96);
             writingSource.Text = "请确认数量";
@@ -108,6 +116,7 @@ internal static class PopupInteractionProbe
             moveImage.Invoke(writing, new object[] { 0, 1 });
             Require(ReferenceEquals(firstImage, images[1]),
                 "Communication image reorder changed the wrong item.");
+            ProbeAssistantExperience(app, writing, writingType, settings, client);
             writing.Close();
             object ocrResult = Activator.CreateInstance(ocrResultType, true);
             settingsType.GetField("Provider").SetValue(settings, "Microsoft");
@@ -303,8 +312,8 @@ internal static class PopupInteractionProbe
                 expandButton.Width == 30 &&
                 collapseButton.BorderThickness.Left == 0 &&
                 expandButton.BorderThickness.Left == 0 &&
-                collapseButton.Content is Path &&
-                expandButton.Content is Path,
+                collapseButton.Content is ShapePath &&
+                expandButton.Content is ShapePath,
                 "Modern ghost window controls are missing.");
             Canvas resizeDots = resizeGrip as Canvas;
             Require(
@@ -576,7 +585,7 @@ internal static class PopupInteractionProbe
             CheckBox ocrEnabled = (CheckBox)Field(window, "_ocrAiFallback");
             ocrEnabled.ApplyTemplate();
             Require(ocrEnabled.Template.FindName("CheckChrome", ocrEnabled) is Border &&
-                ocrEnabled.Template.FindName("CheckMark", ocrEnabled) is Path,
+                ocrEnabled.Template.FindName("CheckMark", ocrEnabled) is ShapePath,
                 "Rounded checkbox template was not applied.");
             Rect assistantCancelBounds = cancel.TransformToAncestor(window)
                 .TransformBounds(new Rect(cancel.RenderSize));
@@ -651,22 +660,24 @@ internal static class PopupInteractionProbe
     private static void SaveWindowPreview(
         Window window, string path, double dpi)
     {
+        var surface = window.Content as FrameworkElement;
+        if (surface == null) throw new InvalidOperationException("Preview window has no content.");
         double scale = dpi / 96.0;
         int width = Math.Max(
             1,
             (int)Math.Ceiling(
-                window.ActualWidth * scale));
+                surface.ActualWidth * scale));
         int height = Math.Max(
             1,
             (int)Math.Ceiling(
-                window.ActualHeight * scale));
+                surface.ActualHeight * scale));
         var bitmap = new RenderTargetBitmap(
             width,
             height,
             dpi,
             dpi,
             PixelFormats.Pbgra32);
-        bitmap.Render(window);
+        bitmap.Render(surface);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using (var output =
@@ -944,6 +955,86 @@ internal static class PopupInteractionProbe
             Console.WriteLine("READING font=3 presets pin=isolated divider=preserved fit=rendered toolbar=compact");
         }
         finally { window.Close(); }
+    }
+
+    private static void ProbeAssistantExperience(Assembly app, Window writing, Type writingType, object settings, object client)
+    {
+        const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
+        Type clipboard = app.GetType("GlobalTranslator.ClipboardImages", true);
+        var encode = clipboard.GetMethod("Encode", hidden);
+        byte[] pixels = { 20, 40, 200, 0 };
+        BitmapSource transparent = BitmapSource.Create(1, 1, 96, 96, PixelFormats.Bgra32, null, pixels, 4);
+        byte[] original = (byte[])encode.Invoke(null, new object[] { transparent, false });
+        byte[] repaired = (byte[])encode.Invoke(null, new object[] { transparent, true });
+        using (var stream = new System.IO.MemoryStream(repaired))
+        {
+            var frame = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            byte[] decoded = new byte[4]; bgra.CopyPixels(decoded, 4, 0);
+            Require(decoded[3] == 255 && decoded[2] == 200, "CF_BITMAP alpha repair lost color.");
+        }
+        var data = new DataObject(); data.SetData("PNG", new System.IO.MemoryStream(original));
+        var read = (System.Collections.IList)clipboard.GetMethod("Read", hidden).Invoke(null, new object[] { data });
+        using (var stream = new System.IO.MemoryStream((byte[])read[0]))
+        {
+            var frame = BitmapFrame.Create(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var bgra = new FormatConvertedBitmap(frame, PixelFormats.Bgra32, null, 0);
+            byte[] decoded = new byte[4]; bgra.CopyPixels(decoded, 4, 0);
+            Require(decoded[3] == 0, "PNG transparency should be preserved.");
+        }
+        const BindingFlags instance = BindingFlags.Instance | BindingFlags.NonPublic;
+        var language = (ComboBox)Field(writing, "_language");
+        language.SelectedIndex = -1; language.Text = "巴西葡萄牙语";
+        Require((string)writingType.GetMethod("SelectedLanguage", instance).Invoke(writing, null) == "巴西葡萄牙语",
+            "Custom reply language lost.");
+        Require((bool)writingType.GetMethod("SaveConversation", instance).Invoke(writing, null), "Conversation save failed.");
+        Type store = app.GetType("GlobalTranslator.ConversationStore", true);
+        string[] paths = (string[])store.GetMethod("Files", hidden).Invoke(null, null);
+        Require(paths.Length == 1, "Conversation did not persist.");
+        Require(!System.Text.Encoding.UTF8.GetString(System.IO.File.ReadAllBytes(paths[0])).Contains("请确认数量"),
+            "Conversation stored plaintext.");
+        object saved = store.GetMethod("Load", hidden).Invoke(null, new object[] { paths[0] });
+        writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+        Require(((TextBox)Field(writing, "_intent")).Text.Length == 0, "New conversation did not reset editor.");
+        Require(System.IO.File.Exists(paths[0]), "New conversation deleted prior session.");
+        writingType.GetMethod("RestoreConversation", instance).Invoke(writing, new[] { saved });
+        Require(((TextBox)Field(writing, "_intent")).Text == "请确认数量", "Saved material did not restore.");
+        var directoryField = store.GetField("DirectoryPath", hidden);
+        object actualDirectory = directoryField.GetValue(null);
+        directoryField.SetValue(null, paths[0]); // Existing file cannot serve as a directory.
+        try
+        {
+            writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+            Require(((TextBox)Field(writing, "_intent")).Text == "请确认数量", "Failed save discarded material.");
+        }
+        finally { directoryField.SetValue(null, actualDirectory); }
+        Require(((System.Collections.IList)Field(writing, "_images")).Count == 5, "Saved attachments did not restore.");
+        Require((string)writingType.GetMethod("SelectedLanguage", instance).Invoke(writing, null) == "巴西葡萄牙语",
+            "Saved custom language did not restore.");
+        Type resultType = app.GetType("GlobalTranslator.CommunicationResult", true);
+        object inquiry = resultType.GetMethod("Parse").Invoke(null, new object[] {
+            "{\"reply\":\"Thanks\",\"meaning_zh\":\"谢谢\",\"advice_zh\":\"核对\",\"inquiry_fields\":[{\"field\":\"数量\",\"value\":\"0012\"}],\"missing_fields\":[\"交期\"]}", false });
+        Require(((Array)resultType.GetField("InquiryFields").GetValue(inquiry)).Length == 1 &&
+            ((string[])resultType.GetField("MissingFields").GetValue(inquiry))[0] == "交期",
+            "Inquiry structure was not parsed.");
+        writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+        Type turnType = app.GetType("GlobalTranslator.CommunicationTurn", true);
+        object turn = Activator.CreateInstance(turnType, true);
+        turnType.GetField("Instruction").SetValue(turn, "请整理这份询盘");
+        ((System.Collections.IList)Field(writing, "_turns")).Add(turn);
+        Require((bool)writingType.GetMethod("SaveConversation", instance).Invoke(writing, null), "Sent conversation save failed.");
+        object session = Field(writing, "_session");
+        Require((string)session.GetType().GetField("Title").GetValue(session) == "请整理这份询盘",
+            "Sent conversation lost its title after the composer cleared.");
+        Type search = app.GetType("GlobalTranslator.CommerceSearch", true);
+        var parse = search.GetMethod("ParseNativeResult", hidden);
+        bool rejected = false;
+        try { parse.Invoke(null, new object[] { "{\"content\":[{\"type\":\"text\",\"text\":\"pretend search\"}]}" }); }
+        catch (TargetInvocationException) { rejected = true; }
+        Require(rejected, "Native search accepted ungrounded text as search.");
+        object outcome = parse.Invoke(null, new object[] { "{\"content\":[{\"type\":\"web_search_tool_result\",\"content\":[{\"title\":\"Source\",\"url\":\"https://example.com\"}]},{\"type\":\"text\",\"text\":\"Evidence\"}]}" });
+        Require(outcome.GetType().GetField("Sources").GetValue(outcome).ToString().Contains("https://example.com"), "Native search dropped source.");
+        Console.WriteLine("ASSISTANT_EXPERIENCE clipboard/alpha/sessions/encryption/custom-language/native-search=True");
     }
 
     private static void Require(bool condition, string message)

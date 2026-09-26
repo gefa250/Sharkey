@@ -269,9 +269,7 @@ namespace GlobalTranslator
                     request, token))
                 {
                     if (!response.IsSuccessStatusCode)
-                        throw new InvalidOperationException(
-                            "联网搜索失败（HTTP " +
-                            (int)response.StatusCode + "）。请检查搜索 Key。");
+                        throw new InvalidOperationException(SearchError((int)response.StatusCode, "Tavily"));
                     string body = await response.Content.ReadAsStringAsync();
                     if (body.Length > 1000000)
                         throw new InvalidOperationException(
@@ -316,6 +314,92 @@ namespace GlobalTranslator
                     };
                 }
             }
+        }
+
+        internal static bool CanUseNative(string vendor, ModelConnectionSettings connection)
+        {
+            Uri uri;
+            return vendor == "DeepSeek" && connection != null &&
+                Uri.TryCreate(connection.BaseUrl, UriKind.Absolute, out uri) &&
+                uri.Scheme == "https" && uri.Host.Equals("api.deepseek.com", StringComparison.OrdinalIgnoreCase) &&
+                uri.IsDefaultPort && uri.UserInfo.Length == 0 &&
+                !string.IsNullOrWhiteSpace(connection.ApiKey);
+        }
+
+        internal Task<CommerceToolOutcome> SearchConfiguredAsync(string query, AppSettings settings, CancellationToken token)
+        {
+            var connection = settings.GetActiveAiConnection();
+            if (settings.CommerceSearchBackend != "Tavily" && CanUseNative(settings.ModelVendor, connection))
+                return SearchNativeAsync(query, connection, token);
+            return SearchAsync(query, settings.CommerceSearchApiKey, token);
+        }
+
+        internal async Task<CommerceToolOutcome> SearchNativeAsync(string query, ModelConnectionSettings connection, CancellationToken token)
+        {
+            if (!CanUseNative("DeepSeek", connection))
+                throw new InvalidOperationException("原生搜索仅用于 DeepSeek 官方账户。");
+            if (string.IsNullOrWhiteSpace(query) || query.Length > 400)
+                throw new InvalidOperationException("搜索词应在 1–400 字符之间。");
+            var payload = new JavaScriptSerializer().Serialize(new
+            {
+                model = connection.Model, max_tokens = 1500, stream = false,
+                tools = new[] { new { type = "web_search_20250305", name = "web_search", max_uses = 1 } },
+                messages = new[] { new { role = "user", content =
+                    "Search the web for the following query and summarize the retrieved evidence. Do not answer from memory. Query: " + query } }
+            });
+            using (var request = new HttpRequestMessage(HttpMethod.Post, "https://api.deepseek.com/anthropic/v1/messages"))
+            {
+                request.Headers.TryAddWithoutValidation("x-api-key", connection.ApiKey.Trim());
+                request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+                request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+                using (var response = await _http.SendAsync(request, token))
+                {
+                    if (!response.IsSuccessStatusCode)
+                        throw new InvalidOperationException(SearchError((int)response.StatusCode, "DeepSeek 原生搜索"));
+                    string body = await response.Content.ReadAsStringAsync();
+                    return ParseNativeResult(body);
+                }
+            }
+        }
+
+        internal static CommerceToolOutcome ParseNativeResult(string body)
+        {
+            if (body.Length > 1000000) throw new InvalidOperationException("搜索结果过大。");
+            var data = new JavaScriptSerializer().DeserializeObject(body) as Dictionary<string, object>;
+            object raw;
+            object[] blocks = data != null && data.TryGetValue("content", out raw) ? raw as object[] : null;
+            var text = new List<string>(); var sources = new List<string>();
+            bool searched = false;
+            foreach (object item in blocks ?? new object[0])
+            {
+                var block = item as Dictionary<string, object>; if (block == null) continue;
+                if (Read(block, "type") == "text") text.Add(Read(block, "text"));
+                if (Read(block, "type") != "web_search_tool_result") continue;
+                object content;
+                if (!block.TryGetValue("content", out content)) continue;
+                var hits = content as object[];
+                if (hits == null) throw new InvalidOperationException("原生搜索未完成或被限流，请稍后重试。未自动切换到 Tavily。");
+                searched = true;
+                foreach (object entry in hits)
+                {
+                    var hit = entry as Dictionary<string, object>; if (hit == null) continue;
+                    Uri uri; string url = Read(hit, "url");
+                    if (Uri.TryCreate(url, UriKind.Absolute, out uri) && (uri.Scheme == "https" || uri.Scheme == "http"))
+                        sources.Add(Read(hit, "title") + " · " + url);
+                }
+            }
+            if (!searched) throw new InvalidOperationException("接口未返回真实搜索结果，无法确认原生搜索可用；可在高级搜索设置选择 Tavily。");
+            return new CommerceToolOutcome { Title = "DeepSeek 联网资料",
+                Detail = sources.Count == 0 ? "没有找到可用来源。" : string.Join("\n", text),
+                Sources = sources.Count == 0 ? "" : "检索于 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + "\n" + string.Join("\n", sources.Distinct()) };
+        }
+
+        private static string SearchError(int code, string service)
+        {
+            return service + "（HTTP " + code + "）：" +
+                (code == 401 ? "密钥认证失败，请检查该服务的密钥。" :
+                 code == 403 ? "账户没有访问权限。" : code == 429 ? "额度不足或请求过于频繁，请稍后重试。" :
+                 code == 400 || code == 404 ? "接口或模型不支持此搜索请求。" : "服务暂不可用，请稍后重试。");
         }
 
         private static string Read(Dictionary<string, object> data, string key)

@@ -605,12 +605,20 @@ internal static class FeatureProbe
     {
         internal string Body;
         internal string Authorization;
+        internal string Endpoint;
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Body = request.Content.ReadAsStringAsync().GetAwaiter()
                 .GetResult();
+            Endpoint = request.RequestUri.AbsoluteUri;
+            if (request.Headers.Contains("x-api-key"))
+            {
+                Authorization = string.Join("", request.Headers.GetValues("x-api-key"));
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                { Content = new StringContent("{\"content\":[{\"type\":\"web_search_tool_result\",\"content\":[{\"title\":\"Source\",\"url\":\"https://example.test/native\"}]},{\"type\":\"text\",\"text\":\"Evidence\"}]}" ) });
+            }
             Authorization = request.Headers.Authorization.ToString();
             return Task.FromResult(new HttpResponseMessage(
                 System.Net.HttpStatusCode.OK)
@@ -648,6 +656,17 @@ internal static class FeatureProbe
                 !handler.Body.Contains("\"max_results\":5") ||
                 !sources.Contains("https://example.test/source"))
                 throw new Exception("Search request or source display is incorrect.");
+            Type connectionType = app.GetType("GlobalTranslator.ModelConnectionSettings", true);
+            object connection = Activator.CreateInstance(connectionType, true);
+            connectionType.GetField("BaseUrl").SetValue(connection, "https://api.deepseek.com");
+            connectionType.GetField("ApiKey").SetValue(connection, "probe-model-key");
+            connectionType.GetField("Model").SetValue(connection, "configured-model");
+            var nativeTask = (Task)searchType.GetMethod("SearchNativeAsync", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(search, new object[] { "public product information", connection, CancellationToken.None });
+            nativeTask.GetAwaiter().GetResult();
+            if (handler.Endpoint != "https://api.deepseek.com/anthropic/v1/messages" ||
+                handler.Authorization != "probe-model-key" || !handler.Body.Contains("web_search_20250305") ||
+                !handler.Body.Contains("configured-model")) throw new Exception("Native search request is incorrect.");
         }
         finally { ((IDisposable)search).Dispose(); }
         Console.WriteLine("COMMERCE_SEARCH bearer/basic/sources=True");
