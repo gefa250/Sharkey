@@ -41,10 +41,13 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Data" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.Security" />
     <Reference Include="System.Xml" />
+    <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.Xaml" />
@@ -56,6 +59,13 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="assets\shark-logo.png" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Core.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.DocumentLayoutAnalysis.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Fonts.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Tokenization.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Tokens.dll" />
+    <EmbeddedResource Include="third_party\PdfPig\System.ValueTuple.dll" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="VersionInfo.cs" />
@@ -63,6 +73,8 @@
     <Compile Include="Communication.cs" />
     <Compile Include="CommerceTools.cs" />
     <Compile Include="CommerceWindow.cs" />
+    <Compile Include="CommerceChatLayout.cs" />
+    <Compile Include="CommerceDocuments.cs" />
     <Compile Include="ClipboardImages.cs" />
     <Compile Include="ConversationStore.cs" />
     <Compile Include="Program.cs" />

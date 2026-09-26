@@ -2191,7 +2191,7 @@ namespace GlobalTranslator
             return template;
         }
 
-        private static Style CreateTextBoxStyle()
+        internal static Style CreateTextBoxStyle()
         {
             var style = new Style(typeof(TextBox));
             style.Setters.Add(new Setter(Control.BackgroundProperty,

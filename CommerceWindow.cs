@@ -15,7 +15,7 @@ using Bitmap = System.Drawing.Bitmap;
 
 namespace GlobalTranslator
 {
-    internal sealed class WritingWindow : Window
+    internal sealed partial class WritingWindow : Window
     {
         private readonly AppSettings _settings;
         private readonly TranslationClient _client;
@@ -410,6 +410,7 @@ namespace GlobalTranslator
                 try { RestoreConversation(ConversationStore.Load(path)); break; }
                 catch { _status.Text = "部分历史记录无法读取，原文件已保留。"; }
             }
+            BuildChatInterface();
         }
 
         internal void CloseForExit()
@@ -638,22 +639,14 @@ namespace GlobalTranslator
             if (_loading) return;
             if (_request != null) CancelRequest();
             if (_turns.Count > 0)
-            {
-                _turns.Clear();
-                _successful = 0;
-                _lastResult = null;
-                _status.Text = "背景或需求已改变，请重新生成。已有回复仍可复制。";
-                _staleNotice.Visibility = Visibility.Visible;
-                _conversationHistory.Children.Clear();
-                _conversationHistory.Visibility = Visibility.Collapsed;
-            }
+            { _status.Text = "输入已修改，发送后生成新回复。"; }
         }
 
         private async Task Generate(bool adviceOnly)
         {
             if (_request != null) return;
             if (string.IsNullOrWhiteSpace(_background.Text) &&
-                string.IsNullOrWhiteSpace(_intent.Text) && _images.Count == 0)
+                string.IsNullOrWhiteSpace(_intent.Text) && _images.Count == 0 && _documents.Count == 0)
             {
                 _status.Text = "请填写想法、客户消息或添加截图。";
                 return;
@@ -670,10 +663,12 @@ namespace GlobalTranslator
                 turns[turns.Length - 1].Reply = _result.Text;
             var input = new CommunicationRequest
             {
-                Background = _background.Text,
-                Intent = _intent.Text,
-                Adjustment = _adjustment.Text,
+                Background = CombinedCustomerMaterials(),
+                Intent = _chatLayout && _turns.Count > 0 ? "" : _intent.Text,
+                Adjustment = _chatLayout && _turns.Count > 0 ? _intent.Text : _adjustment.Text,
                 Language = SelectedLanguage(),
+                TaskMode = _chatTaskMode == "inquiry" || _intent.Text.Contains("整理询盘") ? "inquiry" : "",
+                UnifiedInput = _chatLayout,
                 AdviceOnly = adviceOnly,
                 Images = _images.ToArray(),
                 Turns = turns,
@@ -699,7 +694,10 @@ namespace GlobalTranslator
                 _loading = true;
                 if (!adviceOnly && !answer.ToolLimitReached)
                 {
+                    if (_chatLayout && _lastResult != null)
+                        _conversationHistory.Children.Add(HistoryBubble("Sharkey · " + _result.Text, false));
                     _lastResult = answer;
+                    if (_chatLayout) RefreshInquiry();
                     _result.Text = answer.Reply;
                     _meaning.Text = answer.MeaningZh;
                     _staleNotice.Visibility = Visibility.Collapsed;
@@ -732,12 +730,16 @@ namespace GlobalTranslator
                 {
                     _turns.Add(new CommunicationTurn
                         { Instruction = string.IsNullOrWhiteSpace(input.Adjustment) ? input.Intent : input.Adjustment,
-                          Reply = adviceOnly ? _result.Text : answer.Reply });
+                          Reply = adviceOnly ? _result.Text : answer.Reply,
+                          Meaning = answer.MeaningZh, Advice = answer.AdviceZh,
+                          Calculation = answer.CalculationDetails, Sources = answer.Sources });
                     _successful++;
                 }
                 AddHistoryTurn(input, answer);
                 _loading = true;
                 _adjustment.Clear();
+                if (_chatLayout) _intent.Clear();
+                if (_chatLayout) _chatTaskMode = "";
                 _loading = false;
                 ScheduleSave();
                 _status.Text = answer.ToolLimitReached
@@ -818,19 +820,27 @@ namespace GlobalTranslator
             if (_loading) return true;
             _saveTimer.Stop();
             string[] texts = SessionEditors().Select(editor => editor.Text).ToArray();
-            if (texts.All(string.IsNullOrWhiteSpace) && _images.Count == 0 && _turns.Count == 0 &&
+            if (texts.All(string.IsNullOrWhiteSpace) && _images.Count == 0 && _turns.Count == 0 && _documents.Count == 0 &&
                 _session.Texts.Length == 0) return true;
             _session.Texts = texts; _session.Images = _images.ToArray();
             _session.Turns = _turns.ToArray(); _session.Language = SelectedLanguage();
+            _session.Documents = _documents.ToArray();
+            _session.InquiryFields = _lastResult == null ? new InquiryField[0] : _lastResult.InquiryFields;
+            _session.MissingFields = _lastResult == null ? new string[0] : _lastResult.MissingFields;
             _session.Stale = _staleNotice.Visibility == Visibility.Visible;
             _session.Edited = _editNotice.Visibility == Visibility.Visible;
-            if (_session.Title == "新沟通")
+            bool newTitle = _session.Title == "新沟通";
+            if (newTitle)
             {
                 string title = string.IsNullOrWhiteSpace(_intent.Text) ? _background.Text : _intent.Text;
+                if (string.IsNullOrWhiteSpace(title) && _turns.Count > 0)
+                    title = _turns[0].Instruction;
+                if (string.IsNullOrWhiteSpace(title) && _documents.Count > 0)
+                    title = _documents[0].Name;
                 title = title.Replace('\r', ' ').Replace('\n', ' ').Trim();
                 _session.Title = title.Length == 0 ? "图片沟通" : title.Substring(0, Math.Min(36, title.Length));
             }
-            try { ConversationStore.Save(_session); return true; }
+            try { ConversationStore.Save(_session); if (_chatLayout && newTitle) RefreshSessionList(); return true; }
             catch { _status.Text = "会话保存失败，请检查磁盘空间和目录权限；当前内容仍保留，请勿退出。"; return false; }
         }
 
@@ -840,6 +850,7 @@ namespace GlobalTranslator
             CancelRequest(); _saveTimer.Stop(); _loading = true;
             try
             {
+                _chatTaskMode = "";
                 _session = value;
                 TextBox[] editors = SessionEditors();
                 for (int i = 0; i < editors.Length; i++)
@@ -848,10 +859,16 @@ namespace GlobalTranslator
                 _language.SelectedIndex = index;
                 if (index < 0) _language.Text = value.Language;
                 _images.Clear(); _images.AddRange(value.Images);
+                _documents.Clear(); _documents.AddRange(value.Documents ?? new CommerceDocument[0]);
+                foreach (CommerceDocument document in _documents)
+                    if (string.IsNullOrWhiteSpace(document.Text))
+                        document.Status = "读取未完成，请重新添加";
                 _turns.Clear(); _turns.AddRange(value.Turns);
                 _successful = _turns.Count;
                 _lastResult = string.IsNullOrWhiteSpace(_result.Text) ? null : new CommunicationResult
-                { Reply = _result.Text, MeaningZh = _meaning.Text, AdviceZh = _advice.Text };
+                { Reply = _result.Text, MeaningZh = _meaning.Text, AdviceZh = _advice.Text,
+                  InquiryFields = value.InquiryFields ?? new InquiryField[0],
+                  MissingFields = value.MissingFields ?? new string[0] };
                 _adjustmentLabel.Visibility = _adjustment.Visibility = _lastResult == null ? Visibility.Collapsed : Visibility.Visible;
                 _calculationLabel.Visibility = _calculation.Visibility = _calculationActions.Visibility =
                     string.IsNullOrWhiteSpace(_calculation.Text) ? Visibility.Collapsed : Visibility.Visible;
@@ -866,7 +883,8 @@ namespace GlobalTranslator
                     _conversationHistory.Children.Add(HistoryBubble("助手 · " + turn.Reply, false));
                 }
                 _conversationHistory.Visibility = _turns.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-                RefreshImages(); _status.Text = "已恢复：" + value.Title;
+                if (_chatLayout) { RebuildChatHistory(); RefreshInquiry(); }
+                RefreshImages(); RefreshComposerAttachments(); _status.Text = "已恢复：" + value.Title;
             }
             finally { _loading = false; }
         }
@@ -945,12 +963,15 @@ namespace GlobalTranslator
             _adjustmentLabel.Visibility = Visibility.Collapsed;
             _adjustment.Visibility = Visibility.Collapsed;
             _images.Clear(); _turns.Clear();
+            _chatTaskMode = "";
+            _documents.Clear(); RefreshComposerAttachments();
             _conversationHistory.Children.Clear();
             _conversationHistory.Visibility = Visibility.Collapsed;
             _lastResult = null; _successful = 0;
             RefreshImages();
             _status.Text = "已新建沟通。";
             _loading = false;
+            if (_chatLayout) { RefreshSessionList(); UpdateChatResult(); }
             _intent.Focus();
         }
 
@@ -968,6 +989,7 @@ namespace GlobalTranslator
                 _conversationHistory.Children.Add(Label("本次对话"));
             _conversationHistory.Children.Add(HistoryBubble(
                 "你 · " + question, true));
+            if (_chatLayout) return;
             string preview = input.AdviceOnly ||
                 string.IsNullOrWhiteSpace(answer.Reply)
                 ? answer.AdviceZh : answer.Reply;
@@ -1153,6 +1175,31 @@ namespace GlobalTranslator
         {
             ScheduleSave();
             _imageList.Children.Clear();
+            if (_chatLayout)
+            {
+                for (int i = 0; i < _images.Count; i++)
+                {
+                    int index = i;
+                    var tile = new WrapPanel { Margin = new Thickness(0, 0, 5, 5),
+                        Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 249, 251)) };
+                    var preview = new Image { Source = PreviewSource(_images[index]), Width = 54,
+                        Height = 40, Stretch = Stretch.Uniform, Margin = new Thickness(3) };
+                    preview.MouseLeftButtonUp += delegate { ShowImage(index); };
+                    tile.Children.Add(preview);
+                    tile.Children.Add(new TextBlock { Text = "截图 " + (index + 1), FontSize = 12,
+                        VerticalAlignment = VerticalAlignment.Center });
+                    tile.Children.Add(Action("×", delegate
+                    { _images.RemoveAt(index); OnMaterialChanged(); RefreshImages(); }));
+                    var menu = new ContextMenu();
+                    var up = new MenuItem { Header = "向前移动" };
+                    up.Click += delegate { MoveImage(index, -1); };
+                    var down = new MenuItem { Header = "向后移动" };
+                    down.Click += delegate { MoveImage(index, 1); };
+                    menu.Items.Add(up); menu.Items.Add(down); tile.ContextMenu = menu;
+                    _imageList.Children.Add(tile);
+                }
+                return;
+            }
             for (int i = 0; i < _images.Count; i++)
             {
                 int index = i;

@@ -1,5 +1,11 @@
 using System;
 using System.Reflection;
+using File = System.IO.File;
+using Directory = System.IO.Directory;
+using Path = System.IO.Path;
+using ShapePath = System.Windows.Shapes.Path;
+using StreamWriter = System.IO.StreamWriter;
+using System.IO.Compression;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -19,6 +25,7 @@ internal static class PopupInteractionProbe
         try
         {
             Assembly app = Assembly.LoadFrom(args[0]);
+            ProbeCommerceDocuments(app);
             app.GetType("GlobalTranslator.ConversationStore", true)
                 .GetField("DirectoryPath", BindingFlags.Static | BindingFlags.NonPublic)
                 .SetValue(null, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Sharkey-tests-" + Guid.NewGuid().ToString("N")));
@@ -75,13 +82,15 @@ internal static class PopupInteractionProbe
             var writingCopy = (Button)writingType.GetField("_copy", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(writing);
             writingSource.Text = "请确认交期"; writingResult.Text = "Please confirm the delivery date.";
             Require(writingCopy.IsEnabled, "Completed writing result cannot be copied.");
-            writing.Show(); writing.UpdateLayout();
+            writing.Show(); writing.UpdateLayout(); PumpDispatcher(); writing.UpdateLayout();
             SaveWindowPreview(writing, "tmp/tests/writing-workspace.png", 96);
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-150.png", 144);
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-200.png", 192);
             writing.Width = 540; writing.Height = 480; writing.UpdateLayout();
             Require(writingSource.ActualHeight > 35,
                 "Communication input collapsed at minimum size.");
+            Require(((Border)Field(writing, "_chatSidebar")).Visibility == Visibility.Collapsed,
+                "Narrow assistant did not collapse the sidebar.");
             writingType.GetField("_showingReply", BindingFlags.Instance |
                 BindingFlags.NonPublic).SetValue(writing, true);
             writingType.GetMethod("UpdateWorkbenchLayout", BindingFlags.Instance |
@@ -309,8 +318,8 @@ internal static class PopupInteractionProbe
                 expandButton.Width == 30 &&
                 collapseButton.BorderThickness.Left == 0 &&
                 expandButton.BorderThickness.Left == 0 &&
-                collapseButton.Content is Path &&
-                expandButton.Content is Path,
+                collapseButton.Content is ShapePath &&
+                expandButton.Content is ShapePath,
                 "Modern ghost window controls are missing.");
             Canvas resizeDots = resizeGrip as Canvas;
             Require(
@@ -582,7 +591,7 @@ internal static class PopupInteractionProbe
             CheckBox ocrEnabled = (CheckBox)Field(window, "_ocrAiFallback");
             ocrEnabled.ApplyTemplate();
             Require(ocrEnabled.Template.FindName("CheckChrome", ocrEnabled) is Border &&
-                ocrEnabled.Template.FindName("CheckMark", ocrEnabled) is Path,
+                ocrEnabled.Template.FindName("CheckMark", ocrEnabled) is ShapePath,
                 "Rounded checkbox template was not applied.");
             Rect assistantCancelBounds = cancel.TransformToAncestor(window)
                 .TransformBounds(new Rect(cancel.RenderSize));
@@ -657,22 +666,24 @@ internal static class PopupInteractionProbe
     private static void SaveWindowPreview(
         Window window, string path, double dpi)
     {
+        var surface = window.Content as FrameworkElement;
+        if (surface == null) throw new InvalidOperationException("Preview window has no content.");
         double scale = dpi / 96.0;
         int width = Math.Max(
             1,
             (int)Math.Ceiling(
-                window.ActualWidth * scale));
+                surface.ActualWidth * scale));
         int height = Math.Max(
             1,
             (int)Math.Ceiling(
-                window.ActualHeight * scale));
+                surface.ActualHeight * scale));
         var bitmap = new RenderTargetBitmap(
             width,
             height,
             dpi,
             dpi,
             PixelFormats.Pbgra32);
-        bitmap.Render(window);
+        bitmap.Render(surface);
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using (var output =
@@ -952,6 +963,84 @@ internal static class PopupInteractionProbe
         finally { window.Close(); }
     }
 
+    private static void ProbeCommerceDocuments(Assembly app)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "Sharkey-doc-probe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string csv = Path.Combine(dir, "inquiry.csv");
+            File.WriteAllText(csv, "Item,Quantity\r\n\"Cup, black\",0012\r\n", System.Text.Encoding.UTF8);
+            string legacyCsv = Path.Combine(dir, "chinese.csv");
+            File.WriteAllText(legacyCsv, "品名,数量\r\n杯子,0012\r\n", System.Text.Encoding.GetEncoding(936));
+            string docx = Path.Combine(dir, "spec.docx");
+            using (var zip = ZipFile.Open(docx, ZipArchiveMode.Create))
+                WriteZip(zip, "word/document.xml", "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body><w:p><w:r><w:t>Logo size</w:t></w:r></w:p></w:body></w:document>");
+            string xlsx = Path.Combine(dir, "quote.xlsx");
+            using (var zip = ZipFile.Open(xlsx, ZipArchiveMode.Create))
+            {
+                WriteZip(zip, "xl/workbook.xml", "<workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets><sheet name='Prices' r:id='rId1'/></sheets></workbook>");
+                WriteZip(zip, "xl/_rels/workbook.xml.rels", "<Relationships><Relationship Id='rId1' Target='worksheets/sheet1.xml'/></Relationships>");
+                WriteZip(zip, "xl/sharedStrings.xml", "<sst xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><si><t>Product code</t></si><si><t>0012</t></si></sst>");
+                WriteZip(zip, "xl/worksheets/sheet1.xml", "<worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><sheetData><row r='1'><c r='A1' t='s'><v>0</v></c><c r='B1' t='s'><v>1</v></c></row></sheetData></worksheet>");
+            }
+            string pdf = Path.Combine(dir, "inquiry.pdf");
+            WriteTextPdf(pdf);
+            Type reader = app.GetType("GlobalTranslator.CommerceDocuments", true);
+            MethodInfo read = reader.GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic);
+            string csvText = DocumentText(read, csv);
+            string legacyText = DocumentText(read, legacyCsv);
+            string wordText = DocumentText(read, docx);
+            string excelText = DocumentText(read, xlsx);
+            string pdfText = DocumentText(read, pdf);
+            Require(csvText.Contains("0012") && csvText.Contains("Cup, black"), "CSV values were changed.");
+            Require(legacyText.Contains("杯子") && legacyText.Contains("0012"), "Legacy Chinese CSV was garbled.");
+            Require(wordText.Contains("Logo size"), "DOCX text missing.");
+            Require(excelText.Contains("Prices") && excelText.Contains("B1: 0012"), "XLSX provenance or text missing.");
+            Require(pdfText.Contains("Hello PDF sample"), "PDF text missing.");
+            Console.WriteLine("ASSISTANT_DOCUMENTS csv/docx/xlsx/pdf=True");
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
+    private static void WriteZip(ZipArchive zip, string name, string value)
+    {
+        using (var writer = new StreamWriter(zip.CreateEntry(name).Open(), new System.Text.UTF8Encoding(false)))
+            writer.Write(value);
+    }
+
+    private static void WriteTextPdf(string path)
+    {
+        const string stream = "BT /F1 12 Tf 72 720 Td (Hello PDF sample) Tj ET";
+        string[] objects = {
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Length " + stream.Length + " >>\nstream\n" + stream + "\nendstream"
+        };
+        var pdf = new System.Text.StringBuilder("%PDF-1.4\n");
+        var offsets = new System.Collections.Generic.List<int> { 0 };
+        for (int i = 0; i < objects.Length; i++)
+        {
+            offsets.Add(pdf.Length);
+            pdf.Append(i + 1).Append(" 0 obj\n").Append(objects[i]).Append("\nendobj\n");
+        }
+        int xref = pdf.Length;
+        pdf.Append("xref\n0 ").Append(offsets.Count).Append("\n0000000000 65535 f \n");
+        for (int i = 1; i < offsets.Count; i++)
+            pdf.Append(offsets[i].ToString("D10")).Append(" 00000 n \n");
+        pdf.Append("trailer\n<< /Size ").Append(offsets.Count).Append(" /Root 1 0 R >>\nstartxref\n")
+            .Append(xref).Append("\n%%EOF\n");
+        File.WriteAllBytes(path, System.Text.Encoding.ASCII.GetBytes(pdf.ToString()));
+    }
+
+    private static string DocumentText(MethodInfo read, string path)
+    {
+        object value = read.Invoke(null, new object[] { path });
+        return (string)value.GetType().GetField("Text").GetValue(value);
+    }
+
     private static void ProbeAssistantExperience(Assembly app, Window writing, Type writingType, object settings, object client)
     {
         const BindingFlags hidden = BindingFlags.Static | BindingFlags.NonPublic;
@@ -1006,6 +1095,21 @@ internal static class PopupInteractionProbe
         Require(((System.Collections.IList)Field(writing, "_images")).Count == 5, "Saved attachments did not restore.");
         Require((string)writingType.GetMethod("SelectedLanguage", instance).Invoke(writing, null) == "巴西葡萄牙语",
             "Saved custom language did not restore.");
+        Type resultType = app.GetType("GlobalTranslator.CommunicationResult", true);
+        object inquiry = resultType.GetMethod("Parse").Invoke(null, new object[] {
+            "{\"reply\":\"Thanks\",\"meaning_zh\":\"谢谢\",\"advice_zh\":\"核对\",\"inquiry_fields\":[{\"field\":\"数量\",\"value\":\"0012\"}],\"missing_fields\":[\"交期\"]}", false });
+        Require(((Array)resultType.GetField("InquiryFields").GetValue(inquiry)).Length == 1 &&
+            ((string[])resultType.GetField("MissingFields").GetValue(inquiry))[0] == "交期",
+            "Inquiry structure was not parsed.");
+        writingType.GetMethod("NewConversation", instance).Invoke(writing, null);
+        Type turnType = app.GetType("GlobalTranslator.CommunicationTurn", true);
+        object turn = Activator.CreateInstance(turnType, true);
+        turnType.GetField("Instruction").SetValue(turn, "请整理这份询盘");
+        ((System.Collections.IList)Field(writing, "_turns")).Add(turn);
+        Require((bool)writingType.GetMethod("SaveConversation", instance).Invoke(writing, null), "Sent conversation save failed.");
+        object session = Field(writing, "_session");
+        Require((string)session.GetType().GetField("Title").GetValue(session) == "请整理这份询盘",
+            "Sent conversation lost its title after the composer cleared.");
         Type search = app.GetType("GlobalTranslator.CommerceSearch", true);
         var parse = search.GetMethod("ParseNativeResult", hidden);
         bool rejected = false;

@@ -18,6 +18,7 @@ if errorlevel 1 exit /b 1
   /r:System.dll /r:System.Core.dll /r:System.Drawing.dll ^
   /r:System.Xaml.dll ^
   /r:System.Data.dll ^
+  /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll ^
   /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" ^
   /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" ^
   /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" ^

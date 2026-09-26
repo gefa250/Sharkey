@@ -21,7 +21,9 @@ try {
     if (Test-Path -LiteralPath $stage) { throw "Trial output already exists; choose another output directory." }
     New-Item -ItemType Directory -Path $stage | Out-Null
     Copy-Item -LiteralPath $exe -Destination $stage
-    foreach ($file in @("README.md", "CHANGELOG.md", "LICENSE")) { Copy-Item -LiteralPath $file -Destination $stage }
+    foreach ($file in @("README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) { Copy-Item -LiteralPath $file -Destination $stage }
+    Copy-Item -LiteralPath "third_party\PdfPig\LICENSE.txt" -Destination (Join-Path $stage "PdfPig-APACHE-2.0.txt")
+    Copy-Item -LiteralPath "third_party\PdfPig\ValueTuple-LICENSE.txt" -Destination $stage
     $hash = (Get-FileHash -LiteralPath (Join-Path $stage "Sharkey.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText((Join-Path $stage "Sharkey.exe.sha256"), "$hash  Sharkey.exe`r`n")
     $zip = "$stage-win-x64.zip"

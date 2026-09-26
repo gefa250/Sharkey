@@ -412,6 +412,8 @@ namespace GlobalTranslator
                 Adjustment = input.Adjustment,
                 Language = input.Language,
                 AdviceOnly = input.AdviceOnly,
+                TaskMode = input.TaskMode,
+                UnifiedInput = input.UnifiedInput,
                 Images = input.Images,
                 Turns = input.Turns,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
