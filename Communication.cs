@@ -161,7 +161,8 @@ namespace GlobalTranslator
             "Never invent prices, stock, delivery dates, discounts, specifications, promises or commitments. " +
             "When facts are missing, draft a useful noncommittal reply and list what needs confirmation in advice_zh. " +
             "If no responsible reply is possible, leave reply and meaning_zh empty and explain in advice_zh. " +
-            "Return ONLY a JSON object with string keys reply, meaning_zh, advice_zh; no Markdown fences. " +
+            "Return ONLY a JSON object with required string keys reply, meaning_zh, advice_zh; no Markdown fences. " +
+            "For inquiry organization, also include inquiry_fields as an array of {field,value} facts and missing_fields as an array of strings. " +
             "reply is the sendable message only; meaning_zh is its faithful Simplified Chinese meaning; advice_zh contains concise strategy and caveats.";
         internal const string Tools =
             " If precise calculation or current web information is needed, return ONLY JSON with tool_requests array instead of a final answer. " +
