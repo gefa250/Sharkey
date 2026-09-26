@@ -14,6 +14,13 @@ namespace GlobalTranslator
         public string Meaning;
         public string Calculation;
         public string Sources;
+        [ScriptIgnore]
+        public byte[][] Images = new byte[0][];
+        public string[] EncodedImages
+        {
+            get { return (Images ?? new byte[0][]).Select(Convert.ToBase64String).ToArray(); }
+            set { Images = (value ?? new string[0]).Select(Convert.FromBase64String).ToArray(); }
+        }
     }
 
     internal sealed class InquiryField
@@ -31,6 +38,7 @@ namespace GlobalTranslator
         public bool AdviceOnly;
         public string TaskMode = "";
         public bool UnifiedInput;
+        public string ImageContext = "";
         public byte[][] Images = new byte[0][];
         public CommunicationTurn[] Turns = new CommunicationTurn[0];
         public string ToolResults = "";
@@ -217,8 +225,12 @@ namespace GlobalTranslator
                 result.Append("\nNew adjustment to the last reply:\n")
                     .Append(request.Adjustment);
             if (request.Images != null && request.Images.Length > 0)
+            {
+                result.Append("\nImage provenance (image numbers refer to attachment order):\n")
+                    .Append(request.ImageContext ?? "");
                 result.Append("\nRead the attached screenshots in the listed order. " +
                     "Preserve speaker attribution and visual context where discernible.");
+            }
             return result.ToString();
         }
     }

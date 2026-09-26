@@ -1,11 +1,6 @@
 using System;
 using System.Reflection;
-using File = System.IO.File;
-using Directory = System.IO.Directory;
-using Path = System.IO.Path;
 using ShapePath = System.Windows.Shapes.Path;
-using StreamWriter = System.IO.StreamWriter;
-using System.IO.Compression;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -25,7 +20,6 @@ internal static class PopupInteractionProbe
         try
         {
             Assembly app = Assembly.LoadFrom(args[0]);
-            ProbeCommerceDocuments(app);
             app.GetType("GlobalTranslator.ConversationStore", true)
                 .GetField("DirectoryPath", BindingFlags.Static | BindingFlags.NonPublic)
                 .SetValue(null, System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Sharkey-tests-" + Guid.NewGuid().ToString("N")));
@@ -961,84 +955,6 @@ internal static class PopupInteractionProbe
             Console.WriteLine("READING font=3 presets pin=isolated divider=preserved fit=rendered toolbar=compact");
         }
         finally { window.Close(); }
-    }
-
-    private static void ProbeCommerceDocuments(Assembly app)
-    {
-        string dir = Path.Combine(Path.GetTempPath(), "Sharkey-doc-probe-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        try
-        {
-            string csv = Path.Combine(dir, "inquiry.csv");
-            File.WriteAllText(csv, "Item,Quantity\r\n\"Cup, black\",0012\r\n", System.Text.Encoding.UTF8);
-            string legacyCsv = Path.Combine(dir, "chinese.csv");
-            File.WriteAllText(legacyCsv, "品名,数量\r\n杯子,0012\r\n", System.Text.Encoding.GetEncoding(936));
-            string docx = Path.Combine(dir, "spec.docx");
-            using (var zip = ZipFile.Open(docx, ZipArchiveMode.Create))
-                WriteZip(zip, "word/document.xml", "<w:document xmlns:w='http://schemas.openxmlformats.org/wordprocessingml/2006/main'><w:body><w:p><w:r><w:t>Logo size</w:t></w:r></w:p></w:body></w:document>");
-            string xlsx = Path.Combine(dir, "quote.xlsx");
-            using (var zip = ZipFile.Open(xlsx, ZipArchiveMode.Create))
-            {
-                WriteZip(zip, "xl/workbook.xml", "<workbook xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships'><sheets><sheet name='Prices' r:id='rId1'/></sheets></workbook>");
-                WriteZip(zip, "xl/_rels/workbook.xml.rels", "<Relationships><Relationship Id='rId1' Target='worksheets/sheet1.xml'/></Relationships>");
-                WriteZip(zip, "xl/sharedStrings.xml", "<sst xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><si><t>Product code</t></si><si><t>0012</t></si></sst>");
-                WriteZip(zip, "xl/worksheets/sheet1.xml", "<worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><sheetData><row r='1'><c r='A1' t='s'><v>0</v></c><c r='B1' t='s'><v>1</v></c></row></sheetData></worksheet>");
-            }
-            string pdf = Path.Combine(dir, "inquiry.pdf");
-            WriteTextPdf(pdf);
-            Type reader = app.GetType("GlobalTranslator.CommerceDocuments", true);
-            MethodInfo read = reader.GetMethod("Read", BindingFlags.Static | BindingFlags.NonPublic);
-            string csvText = DocumentText(read, csv);
-            string legacyText = DocumentText(read, legacyCsv);
-            string wordText = DocumentText(read, docx);
-            string excelText = DocumentText(read, xlsx);
-            string pdfText = DocumentText(read, pdf);
-            Require(csvText.Contains("0012") && csvText.Contains("Cup, black"), "CSV values were changed.");
-            Require(legacyText.Contains("杯子") && legacyText.Contains("0012"), "Legacy Chinese CSV was garbled.");
-            Require(wordText.Contains("Logo size"), "DOCX text missing.");
-            Require(excelText.Contains("Prices") && excelText.Contains("B1: 0012"), "XLSX provenance or text missing.");
-            Require(pdfText.Contains("Hello PDF sample"), "PDF text missing.");
-            Console.WriteLine("ASSISTANT_DOCUMENTS csv/docx/xlsx/pdf=True");
-        }
-        finally { Directory.Delete(dir, true); }
-    }
-
-    private static void WriteZip(ZipArchive zip, string name, string value)
-    {
-        using (var writer = new StreamWriter(zip.CreateEntry(name).Open(), new System.Text.UTF8Encoding(false)))
-            writer.Write(value);
-    }
-
-    private static void WriteTextPdf(string path)
-    {
-        const string stream = "BT /F1 12 Tf 72 720 Td (Hello PDF sample) Tj ET";
-        string[] objects = {
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-            "<< /Length " + stream.Length + " >>\nstream\n" + stream + "\nendstream"
-        };
-        var pdf = new System.Text.StringBuilder("%PDF-1.4\n");
-        var offsets = new System.Collections.Generic.List<int> { 0 };
-        for (int i = 0; i < objects.Length; i++)
-        {
-            offsets.Add(pdf.Length);
-            pdf.Append(i + 1).Append(" 0 obj\n").Append(objects[i]).Append("\nendobj\n");
-        }
-        int xref = pdf.Length;
-        pdf.Append("xref\n0 ").Append(offsets.Count).Append("\n0000000000 65535 f \n");
-        for (int i = 1; i < offsets.Count; i++)
-            pdf.Append(offsets[i].ToString("D10")).Append(" 00000 n \n");
-        pdf.Append("trailer\n<< /Size ").Append(offsets.Count).Append(" /Root 1 0 R >>\nstartxref\n")
-            .Append(xref).Append("\n%%EOF\n");
-        File.WriteAllBytes(path, System.Text.Encoding.ASCII.GetBytes(pdf.ToString()));
-    }
-
-    private static string DocumentText(MethodInfo read, string path)
-    {
-        object value = read.Invoke(null, new object[] { path });
-        return (string)value.GetType().GetField("Text").GetValue(value);
     }
 
     private static void ProbeAssistantExperience(Assembly app, Window writing, Type writingType, object settings, object client)

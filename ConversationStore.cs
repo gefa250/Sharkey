@@ -7,6 +7,15 @@ using System.Web.Script.Serialization;
 
 namespace GlobalTranslator
 {
+    // Legacy payload shape retained only so old encrypted sessions can be read and their document data ignored.
+    internal sealed class CommerceDocument
+    {
+        public string Name = "";
+        public string Kind = "";
+        public string Text = "";
+        public string Status = "";
+    }
+
     internal sealed class SavedConversation
     {
         public string Id = Guid.NewGuid().ToString("N");
@@ -21,6 +30,7 @@ namespace GlobalTranslator
             set { Images = (value ?? new string[0]).Select(Convert.FromBase64String).ToArray(); }
         }
         public CommunicationTurn[] Turns = new CommunicationTurn[0];
+        public int[] TopicBreaks = new int[0];
         public CommerceDocument[] Documents = new CommerceDocument[0];
         public InquiryField[] InquiryFields = new InquiryField[0];
         public string[] MissingFields = new string[0];
@@ -65,6 +75,11 @@ namespace GlobalTranslator
                 result.Images.Any(image => image.Length == 0 || image.Length > 10 * 1024 * 1024))
                 throw new InvalidDataException("会话内容无效，原文件已保留。");
             if (result.Documents == null) result.Documents = new CommerceDocument[0];
+            result.TopicBreaks = (result.TopicBreaks ?? new int[0]).Where(i => i >= 0 && i <= result.Turns.Length).Distinct().OrderBy(i => i).ToArray();
+            foreach (CommunicationTurn turn in result.Turns)
+                if (turn == null || (turn.Images ?? new byte[0][]).Length > 5 ||
+                    (turn.Images ?? new byte[0][]).Any(image => image == null || image.Length == 0 || image.Length > 10 * 1024 * 1024))
+                    throw new InvalidDataException("会话图片无效，原文件已保留。");
             return result;
         }
         internal static string[] Files()

@@ -414,6 +414,7 @@ namespace GlobalTranslator
                 AdviceOnly = input.AdviceOnly,
                 TaskMode = input.TaskMode,
                 UnifiedInput = input.UnifiedInput,
+                ImageContext = input.ImageContext,
                 Images = input.Images,
                 Turns = input.Turns,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
@@ -529,6 +530,7 @@ namespace GlobalTranslator
             token.ThrowIfCancellationRequested();
             if (string.IsNullOrWhiteSpace(input.Background) &&
                 string.IsNullOrWhiteSpace(input.Intent) &&
+                string.IsNullOrWhiteSpace(input.Adjustment) &&
                 (input.Images == null || input.Images.Length == 0))
                 throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
             if (input.Images != null && input.Images.Length > 5)

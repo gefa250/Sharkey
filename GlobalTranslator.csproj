@@ -59,13 +59,6 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="assets\shark-logo.png" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Core.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.DocumentLayoutAnalysis.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Fonts.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Tokenization.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\UglyToad.PdfPig.Tokens.dll" />
-    <EmbeddedResource Include="third_party\PdfPig\System.ValueTuple.dll" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="VersionInfo.cs" />
@@ -75,9 +68,9 @@
     <Compile Include="CommerceWindow.cs" />
     <Compile Include="CommerceChatLayout.cs" />
     <Compile Include="ChatReadingView.cs" />
-    <Compile Include="CommerceDocuments.cs" />
     <Compile Include="ClipboardImages.cs" />
     <Compile Include="ConversationStore.cs" />
+    <Compile Include="ConversationContext.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="HotkeyGesture.cs" />
     <Compile Include="StartupManager.cs" />
