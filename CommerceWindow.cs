@@ -613,6 +613,8 @@ namespace GlobalTranslator
                 return;
             }
             if (e.Key != Key.Enter || e.IsRepeat || _composing) return;
+            // The composer owns Enter handling so Shift+Enter can remain a literal newline.
+            if (_chatLayout) return;
             if (e.Key == Key.ImeProcessed || e.ImeProcessedKey == Key.Enter)
                 return;
             ModifierKeys modifiers = Keyboard.Modifiers;
@@ -694,6 +696,7 @@ namespace GlobalTranslator
                 _loading = true;
                 if (!adviceOnly && !answer.ToolLimitReached)
                 {
+                    _editingAnswer = false;
                     if (_chatLayout && _lastResult != null)
                         _conversationHistory.Children.Add(HistoryBubble("Sharkey · " + _result.Text, false));
                     _lastResult = answer;
@@ -736,6 +739,10 @@ namespace GlobalTranslator
                     _successful++;
                 }
                 AddHistoryTurn(input, answer);
+                if (_chatLayout)
+                {
+                    var scrollRequest = Dispatcher.BeginInvoke(new Action(delegate { _chatResultCard.BringIntoView(); }));
+                }
                 _loading = true;
                 _adjustment.Clear();
                 if (_chatLayout) _intent.Clear();
@@ -792,7 +799,7 @@ namespace GlobalTranslator
             if (string.IsNullOrWhiteSpace(_result.Text)) return;
             try
             {
-                Clipboard.SetText(_result.Text);
+                Clipboard.SetText(_chatLayout ? ChatReadingView.ToPlainText(_result.Text) : _result.Text);
                 _status.Text = "已复制回复。";
             }
             catch { _status.Text = "剪贴板正忙，请重试。"; }
@@ -846,6 +853,7 @@ namespace GlobalTranslator
 
         private void RestoreConversation(SavedConversation value)
         {
+            _editingAnswer = false;
             foreach (byte[] bytes in value.Images) PreviewSource(bytes);
             CancelRequest(); _saveTimer.Stop(); _loading = true;
             try
@@ -946,6 +954,7 @@ namespace GlobalTranslator
         private void NewConversation()
         {
             if (!SaveConversation()) return;
+            _editingAnswer = false;
             _session = new SavedConversation();
             CancelRequest();
             _loading = true;
@@ -1006,22 +1015,28 @@ namespace GlobalTranslator
 
         private static Border HistoryBubble(string message, bool user)
         {
+            int split = message.IndexOf(" · ", StringComparison.Ordinal);
+            string role = split < 0 ? (user ? "你" : "Sharkey") : message.Substring(0, split);
+            string text = split < 0 ? message : message.Substring(split + 3);
+            var body = new StackPanel();
+            body.Children.Add(new TextBlock { Text = role, FontSize = 12,
+                Foreground = new SolidColorBrush(System.Windows.Media.Color.FromRgb(92, 114, 128)),
+                Margin = new Thickness(0, 0, 0, 8) });
+            body.Children.Add(ChatReadingView.Create(text));
+            var copy = Action("复制", delegate
+            { try { Clipboard.SetText(text); } catch { } });
+            copy.HorizontalAlignment = HorizontalAlignment.Left;
+            copy.Margin = new Thickness(0, 9, 0, 0);
+            body.Children.Add(copy);
             return new Border
             {
                 Background = new SolidColorBrush(user
                     ? System.Windows.Media.Color.FromRgb(232, 246, 250)
                     : System.Windows.Media.Color.FromRgb(244, 248, 249)),
                 CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(10, 8, 10, 8),
-                Margin = new Thickness(user ? 24 : 0, 4,
-                    user ? 0 : 24, 0),
-                Child = new TextBlock
-                {
-                    Text = message, TextWrapping = TextWrapping.Wrap,
-                    FontSize = 12.5,
-                    Foreground = new SolidColorBrush(
-                        System.Windows.Media.Color.FromRgb(40, 73, 87))
-                }
+                Padding = new Thickness(16),
+                Margin = new Thickness(user ? 24 : 0, 10, user ? 0 : 0, 10),
+                Child = body
             };
         }
 

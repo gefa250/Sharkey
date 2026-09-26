@@ -96,7 +96,7 @@ internal static class PopupInteractionProbe
             writingType.GetMethod("UpdateWorkbenchLayout", BindingFlags.Instance |
                 BindingFlags.NonPublic).Invoke(writing, null);
             writing.UpdateLayout();
-            Require(writingResult.ActualHeight > 35,
+            Require(((RichTextBox)Field(writing, "_chatAnswer")).ActualHeight > 15,
                 "Communication result collapsed in narrow layout.");
             SaveWindowPreview(writing, "tmp/tests/writing-workspace-small.png", 96);
             writingSource.Text = "请确认数量";

@@ -163,7 +163,9 @@ namespace GlobalTranslator
             "If no responsible reply is possible, leave reply and meaning_zh empty and explain in advice_zh. " +
             "Return ONLY a JSON object with required string keys reply, meaning_zh, advice_zh; no Markdown fences. " +
             "For inquiry organization, also include inquiry_fields as an array of {field,value} facts and missing_fields as an array of strings. " +
-            "reply is the sendable message only; meaning_zh is its faithful Simplified Chinese meaning; advice_zh contains concise strategy and caveats.";
+            "For drafting, reply is the sendable message only. For questions, extraction, comparison and analysis, reply directly answers the user's task without a customer-email greeting. " +
+            "Use short paragraphs and headings for long answers. When asked for a table, use a Markdown pipe table with a header separator row inside the reply string; preserve every requested row and value. " +
+            "meaning_zh is its faithful Simplified Chinese meaning; advice_zh contains concise strategy and caveats.";
         internal const string Tools =
             " If precise calculation or current web information is needed, return ONLY JSON with tool_requests array instead of a final answer. " +
             "Each request has tool (calculate or search), operation, query, and inputs object of string or numeric values. " +
@@ -182,11 +184,13 @@ namespace GlobalTranslator
             var result = new StringBuilder();
             result.Append("Task: ").Append(request.AdviceOnly
                 ? "Give advice only. Set reply and meaning_zh to empty strings."
+                : request.UnifiedInput ? "Answer the user's actual task. Only draft a customer message when requested."
                 : "Draft one sendable reply and explain it in Chinese.");
             result.Append("\nReply language: ");
             result.Append(string.IsNullOrWhiteSpace(request.Language) ||
                 request.Language == "auto"
-                ? "Match the customer's language if clear from customer context; otherwise English."
+                ? request.UnifiedInput ? "For questions and analysis, match the user's latest request language. For customer-message drafting, match the customer's language if clear; otherwise English."
+                : "Match the customer's language if clear from customer context; otherwise English."
                 : request.Language + ".");
             if (request.TaskMode == "inquiry")
                 result.Append("\nAlso organize the inquiry in JSON: inquiry_fields array of {field,value} for facts explicitly present in the customer materials; missing_fields array of strings for important unspecified facts. Do not guess values. Keep reply, meaning_zh, advice_zh as usual.");

@@ -30,6 +30,10 @@ namespace GlobalTranslator
         private bool _sidebarOpen = true;
         private bool _wasNarrow;
         private bool _refreshingSessions;
+        private RichTextBox _chatAnswer;
+        private Button _editAnswer;
+        private bool _editingAnswer;
+        private string _renderedAnswer;
 
         private static readonly Brush ChatInk = new SolidColorBrush(Color.FromRgb(25, 53, 70));
         private static readonly Brush ChatLine = new SolidColorBrush(Color.FromRgb(215, 229, 235));
@@ -146,27 +150,43 @@ namespace GlobalTranslator
             _intent.BorderThickness = new Thickness(0);
             _intent.Padding = new Thickness(2, 4, 2, 4);
             _intent.ToolTip = "输入你的要求，或粘贴客户消息、截图和文档";
+            _intent.PreviewKeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key != Key.Enter || e.IsRepeat || _composing ||
+                    e.ImeProcessedKey == Key.Enter || Keyboard.Modifiers != ModifierKeys.None) return;
+                e.Handled = true;
+                if (_request == null) { var ignored = Generate(false); }
+            };
             _intent.PreviewKeyDown += async delegate(object sender, KeyEventArgs e)
             {
                 if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control) return;
                 try
                 {
                     if (!Clipboard.ContainsFileDropList()) return;
-                    string[] paths = Clipboard.GetFileDropList().Cast<string>().ToArray();
-                    if (!paths.Any(CommerceDocuments.IsSupported)) return;
+                    string[] paths = Clipboard.GetFileDropList().Cast<string>()
+                        .Where(IsAssistantMaterial).ToArray();
+                    if (paths.Length == 0) return;
                     e.Handled = true; await AddMaterialPaths(paths);
                 }
-                catch { _status.Text = "剪贴板文件读取失败，请使用“添加材料”。"; }
+                catch { _status.Text = "剪贴板文件读取失败，请重新复制或拖入文件。"; }
+            };
+            _intent.PreviewDragOver += delegate(object sender, DragEventArgs e)
+            {
+                string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
+                if (paths != null && paths.Any(IsAssistantMaterial))
+                { e.Effects = DragDropEffects.Copy; e.Handled = true; }
             };
             _intent.PreviewDrop += async delegate(object sender, DragEventArgs e)
             {
                 string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
-                if (paths == null || !paths.Any(CommerceDocuments.IsSupported)) return;
+                if (paths == null) return;
+                paths = paths.Where(IsAssistantMaterial).ToArray();
+                if (paths.Length == 0) return;
                 e.Handled = true; await AddMaterialPaths(paths);
             };
             var inputHost = new Grid();
             inputHost.Children.Add(_intent);
-            var hint = new TextBlock { Text = "输入要求，或粘贴客户消息、截图和文档…",
+            var hint = new TextBlock { Text = "输入要求；截图可 Ctrl+V，图片或文件可 Ctrl+V 或拖入…",
                 Foreground = ChatMuted, FontSize = 13, IsHitTestVisible = false,
                 Margin = new Thickness(6, 9, 0, 0) };
             inputHost.Children.Add(hint);
@@ -183,19 +203,17 @@ namespace GlobalTranslator
             Detach(_generate); _generate.Content = "发送"; sendGroup.Children.Add(_generate);
             Detach(_stop); sendGroup.Children.Add(_stop);
             var attachGroup = new WrapPanel(); controls.Children.Add(attachGroup);
-            var addMenu = new ContextMenu();
-            var addFile = new MenuItem { Header = "选择文件或图片…" };
-            addFile.Click += delegate { AddMaterials(); };
-            var paste = new MenuItem { Header = "粘贴截图" };
-            paste.Click += delegate { PasteImage(); };
-            addMenu.Items.Add(addFile); addMenu.Items.Add(paste);
-            var attach = Action("＋ 添加材料", delegate { addMenu.IsOpen = true; });
-            addMenu.PlacementTarget = attach; attachGroup.Children.Add(attach);
             attachGroup.Children.Add(Action("截图", async delegate { await PrepareCapture(); }));
+            var moreMenu = new ContextMenu();
+            var addFile = new MenuItem { Header = "浏览文件…" };
+            addFile.Click += delegate { AddMaterials(); };
+            moreMenu.Items.Add(addFile);
             Detach(_adviceOnly);
             var adviceMenu = new MenuItem { Header = "仅给建议" };
             adviceMenu.Click += async delegate { await Generate(true); };
-            addMenu.Items.Add(adviceMenu);
+            moreMenu.Items.Add(adviceMenu);
+            var more = Action("更多", delegate { moreMenu.IsOpen = true; });
+            moreMenu.PlacementTarget = more; attachGroup.Children.Add(more);
             composerArea.Children.Add(composer);
             composerArea.Children.Add(new TextBlock { Text = "Enter 发送 · Shift+Enter 换行",
                 FontSize = 11.5, Foreground = ChatMuted, Margin = new Thickness(4, 5, 0, 0) });
@@ -205,7 +223,7 @@ namespace GlobalTranslator
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 Padding = new Thickness(22, 5, 24, 8) };
             _chatFeed = new StackPanel(); _chatScroll.Content = _chatFeed; main.Children.Add(_chatScroll);
-            _chatWelcome = new TextBlock { Text = "粘贴客户消息或添加材料，然后输入你想做的事。",
+            _chatWelcome = new TextBlock { Text = "直接输入要求，或将客户消息、截图和文件粘贴或拖入输入框。",
                 FontSize = 14, Foreground = ChatMuted, Margin = new Thickness(4, 28, 0, 0) };
             _chatFeed.Children.Add(_chatWelcome);
             Detach(_conversationHistory); _conversationHistory.Margin = new Thickness(0);
@@ -215,7 +233,7 @@ namespace GlobalTranslator
                 CornerRadius = new CornerRadius(11), Padding = new Thickness(15),
                 Margin = new Thickness(0, 15, 0, 14) };
             var result = new StackPanel(); _chatResultCard.Child = result;
-            result.Children.Add(new TextBlock { Text = "Sharkey · 建议回复", FontSize = 14,
+            result.Children.Add(new TextBlock { Text = "Sharkey", FontSize = 13, Margin = new Thickness(0, 0, 0, 12),
                 FontWeight = FontWeights.SemiBold, Foreground = ChatInk });
             _inquiryPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 9), Visibility = Visibility.Collapsed };
             result.Children.Add(_inquiryPanel);
@@ -223,11 +241,20 @@ namespace GlobalTranslator
             Detach(_editNotice); result.Children.Add(_editNotice);
             Detach(_emptyResult); _emptyResult.Text = "粘贴客户材料或输入要求，发送后在这里查看结果。";
             result.Children.Add(_emptyResult);
-            Detach(_result); _result.Height = 150; _result.MinHeight = 90;
+            _chatAnswer = ChatReadingView.Create("");
+            result.Children.Add(_chatAnswer);
+            Detach(_result); _result.Height = double.NaN; _result.MinHeight = 90;
+            _result.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
             _result.Style = SettingsWindow.CreateTextBoxStyle();
             result.Children.Add(_result);
             var resultActions = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
             Detach(_copy); resultActions.Children.Add(_copy);
+            _editAnswer = Action("编辑", delegate
+            {
+                _editingAnswer = !_editingAnswer; UpdateChatResult();
+                if (_editingAnswer) _result.Focus();
+            });
+            resultActions.Children.Add(_editAnswer);
             var details = new Expander { Header = "中文对照与核对信息", Margin = new Thickness(0, 12, 0, 0) };
             _detailsExpander = details;
             var detailBody = new StackPanel(); details.Content = detailBody;
@@ -254,6 +281,13 @@ namespace GlobalTranslator
         {
             return Action(label, delegate { _chatTaskMode = mode; _intent.Text = prompt;
                 _intent.Focus(); _intent.CaretIndex = _intent.Text.Length; });
+        }
+
+        private static bool IsAssistantMaterial(string path)
+        {
+            string extension = Path.GetExtension(path ?? "").ToLowerInvariant();
+            return extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
+                CommerceDocuments.IsSupported(path ?? "");
         }
 
         private void RefreshInquiry()
@@ -288,6 +322,19 @@ namespace GlobalTranslator
         private void UpdateChatResult()
         {
             if (_chatResultCard == null) return;
+            if (_chatAnswer != null)
+            {
+                if (_renderedAnswer != _result.Text)
+                {
+                    _renderedAnswer = _result.Text;
+                    ChatReadingView.SetText(_chatAnswer, _renderedAnswer);
+                }
+                bool hasAnswer = !string.IsNullOrWhiteSpace(_result.Text);
+                _chatAnswer.Visibility = hasAnswer && !_editingAnswer ? Visibility.Visible : Visibility.Collapsed;
+                _result.Visibility = hasAnswer && _editingAnswer ? Visibility.Visible : Visibility.Collapsed;
+                _editAnswer.Visibility = hasAnswer ? Visibility.Visible : Visibility.Collapsed;
+                _editAnswer.Content = _editingAnswer ? "完成编辑" : "编辑";
+            }
             _chatResultCard.Visibility = _turns.Count > 0 || !string.IsNullOrWhiteSpace(_result.Text) ||
                 !string.IsNullOrWhiteSpace(_advice.Text) ? Visibility.Visible : Visibility.Collapsed;
             if (_chatWelcome != null)
@@ -295,7 +342,6 @@ namespace GlobalTranslator
                     _conversationHistory.Children.Count > 0 ? Visibility.Collapsed : Visibility.Visible;
             if (_detailsExpander != null && !string.IsNullOrWhiteSpace(_calculation.Text))
                 _detailsExpander.IsExpanded = true;
-            if (_chatScroll != null) Dispatcher.BeginInvoke(new Action(delegate { _chatScroll.ScrollToEnd(); }));
         }
 
         private void RebuildChatHistory()

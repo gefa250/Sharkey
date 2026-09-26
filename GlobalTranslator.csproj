@@ -74,6 +74,7 @@
     <Compile Include="CommerceTools.cs" />
     <Compile Include="CommerceWindow.cs" />
     <Compile Include="CommerceChatLayout.cs" />
+    <Compile Include="ChatReadingView.cs" />
     <Compile Include="CommerceDocuments.cs" />
     <Compile Include="ClipboardImages.cs" />
     <Compile Include="ConversationStore.cs" />
