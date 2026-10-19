@@ -23,12 +23,12 @@ namespace GlobalTranslator
 {
     internal sealed class SettingsWindow : Window
     {
-        private static readonly Brush Ink = Brush("#17324A");
-        private static readonly Brush Subtle = Brush("#647B8D");
-        private static readonly Brush Accent = Brush("#1682A6");
-        private static readonly Brush BorderLine = Brush("#D9E7EF");
-        private static readonly Brush Canvas = Brush("#F6FAFC");
-        private static readonly Brush Surface = Brush("#FFFFFF");
+        private static readonly Brush Ink = Ui.Palette.Ink;
+        private static readonly Brush Subtle = Ui.Palette.InkMuted;
+        private static readonly Brush Accent = Ui.Palette.Brand;
+        private static readonly Brush BorderLine = Ui.Palette.Line;
+        private static readonly Brush Canvas = Ui.Palette.Canvas;
+        private static readonly Brush Surface = Ui.Palette.Surface;
         private static readonly string[] LanguageCodes =
             { "zh-Hans", "zh-Hant", "en", "ja", "ko", "fr", "de", "es" };
         private static readonly string[] LanguageNames =
@@ -219,9 +219,7 @@ namespace GlobalTranslator
             {
                 Background = SystemParameters.HighContrast
                     ? (Brush)SystemColors.ControlBrush
-                    : new LinearGradientBrush(
-                        Color.FromRgb(224, 242, 250),
-                        Color.FromRgb(240, 248, 252), 90),
+                    : Canvas,
                 BorderBrush = BorderLine,
                 BorderThickness = new Thickness(0, 0, 1, 0)
             };
@@ -264,10 +262,10 @@ namespace GlobalTranslator
             layout.Children.Add(brand);
 
             _navigation = new StackPanel { Margin = new Thickness(13, 0, 13, 8) };
-            AddNavigation("Model", "✦", "AI 模型");
-            AddNavigation("Assistant", "◈", "助手偏好");
-            AddNavigation("Shortcuts", "⌨", "快捷键");
-            AddNavigation("General", "⚙", "通用");
+            AddNavigation("Model", Icons.Sparkle, "AI 模型");
+            AddNavigation("Assistant", Icons.Tune, "助手偏好");
+            AddNavigation("Shortcuts", Icons.Keyboard, "快捷键");
+            AddNavigation("General", Icons.Settings, "通用");
             Grid.SetRow(_navigation, 1);
             layout.Children.Add(_navigation);
 
@@ -284,34 +282,31 @@ namespace GlobalTranslator
             return sidebar;
         }
 
-        private void AddNavigation(string code, string glyph, string title)
+        private void AddNavigation(string code, Geometry glyph, string title)
         {
             var content = new Grid();
             content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(34) });
             content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            content.Children.Add(new TextBlock
-            {
-                Text = glyph, FontFamily = new FontFamily("Segoe UI Symbol"),
-                FontSize = 17, Foreground = Accent,
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
-            });
+            var icon = Ui.Glyph(glyph, Ui.Palette.BrandText, 16, 1.6);
+            icon.HorizontalAlignment = HorizontalAlignment.Left;
+            icon.Margin = new Thickness(6, 0, 0, 0);
+            content.Children.Add(icon);
             var label = new TextBlock
             {
-                Text = title, FontSize = 14, Foreground = Ink,
+                Text = title, FontSize = Ui.Type.Body, Foreground = Ink,
                 VerticalAlignment = VerticalAlignment.Center
             };
             Grid.SetColumn(label, 1);
             content.Children.Add(label);
             var button = new Button
             {
-                Content = content, Tag = code, Height = 48,
-                Margin = new Thickness(0, 3, 0, 5), Padding = new Thickness(10, 5, 10, 5),
+                Content = content, Tag = code, Height = 44,
+                Margin = new Thickness(0, 2, 0, 2), Padding = new Thickness(10, 4, 10, 4),
                 BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent,
                 Background = Brushes.Transparent, HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Cursor = Cursors.Hand, ToolTip = title
             };
-            ApplyButtonTemplate(button, 11);
+            ApplyButtonTemplate(button, Ui.Radius.Control);
             button.Click += delegate { Navigate(code); };
             _navigationButtons[code] = button;
             _navigation.Children.Add(button);
@@ -413,8 +408,8 @@ namespace GlobalTranslator
             {
                 bool selected = string.Equals(item.Key, key,
                     StringComparison.OrdinalIgnoreCase);
-                item.Value.Background = selected ? Brush("#DDF1FA") : Brushes.Transparent;
-                item.Value.BorderBrush = selected ? Brush("#C7E8F4") : Brushes.Transparent;
+                item.Value.Background = selected ? Ui.Palette.BrandTint : Brushes.Transparent;
+                item.Value.BorderBrush = selected ? Ui.Palette.BrandTintStrong : Brushes.Transparent;
                 item.Value.Foreground = selected ? Accent : Ink;
             }
             UpdateHeaderSummary();
@@ -555,7 +550,7 @@ namespace GlobalTranslator
             // are the modern segmented control.
             var bar = new Border
             {
-                Background = Brush("#EDF4F7"), BorderBrush = BorderLine,
+                Background = Ui.Palette.SurfaceSubtle, BorderBrush = BorderLine,
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(4)
             };
@@ -858,9 +853,9 @@ namespace GlobalTranslator
             {
                 bool selected = string.Equals(item.Key, _activeModelVendor,
                     StringComparison.OrdinalIgnoreCase);
-                item.Value.Background = selected ? Brush("#E1F3FA") : Brushes.White;
+                item.Value.Background = selected ? Ui.Palette.BrandTint : Brushes.White;
                 item.Value.Foreground = selected ? Accent : Ink;
-                item.Value.BorderBrush = selected ? Brush("#9FD6E6") : Brushes.Transparent;
+                item.Value.BorderBrush = selected ? Ui.Palette.Brand : Brushes.Transparent;
                 item.Value.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
             }
         }
@@ -961,7 +956,7 @@ namespace GlobalTranslator
             if (error.Length > 0)
             {
                 _modelTestStatus.Text = error;
-                _modelTestStatus.Foreground = Brush("#B25A28");
+                _modelTestStatus.Foreground = Ui.Palette.Warning;
                 return;
             }
             int generation = BeginModelTest("正在测试文本连接…");
@@ -973,14 +968,14 @@ namespace GlobalTranslator
                         connection.Copy(), cancellation.Token);
                 if (generation != _testGeneration || cancellation.IsCancellationRequested) return;
                 _modelTestStatus.Text = "文本通过";
-                _modelTestStatus.Foreground = Brush("#27805A");
+                _modelTestStatus.Foreground = Ui.Palette.Success;
             }
             catch (OperationCanceledException) { }
             catch (Exception errorTest)
             {
                 if (generation != _testGeneration) return;
                 _modelTestStatus.Text = CompactError(errorTest.Message);
-                _modelTestStatus.Foreground = Brush("#B25A28");
+                _modelTestStatus.Foreground = Ui.Palette.Warning;
             }
             finally
             {
@@ -1002,7 +997,7 @@ namespace GlobalTranslator
             if (error.Length > 0)
             {
                 _modelTestStatus.Text = error;
-                _modelTestStatus.Foreground = Brush("#B25A28");
+                _modelTestStatus.Foreground = Ui.Palette.Warning;
                 return;
             }
             int generation = BeginModelTest("正在测试图片识别…");
@@ -1019,14 +1014,14 @@ namespace GlobalTranslator
                 }
                 if (generation != _testGeneration || cancellation.IsCancellationRequested) return;
                 _modelTestStatus.Text = "图片通过";
-                _modelTestStatus.Foreground = Brush("#27805A");
+                _modelTestStatus.Foreground = Ui.Palette.Success;
             }
             catch (OperationCanceledException) { }
             catch (Exception errorTest)
             {
                 if (generation != _testGeneration) return;
                 _modelTestStatus.Text = CompactError(errorTest.Message);
-                _modelTestStatus.Foreground = Brush("#B25A28");
+                _modelTestStatus.Foreground = Ui.Palette.Warning;
             }
             finally
             {
@@ -1109,12 +1104,12 @@ namespace GlobalTranslator
                 using (var search = new CommerceSearch())
                     await search.SearchConfiguredAsync("international trade", searchDraft, CancellationToken.None);
                 _searchStatus.Text = "搜索连接通过";
-                _searchStatus.Foreground = Brush("#27805A");
+                _searchStatus.Foreground = Ui.Palette.Success;
             }
             catch (Exception error)
             {
                 _searchStatus.Text = CompactError(error.Message);
-                _searchStatus.Foreground = Brush("#B25A28");
+                _searchStatus.Foreground = Ui.Palette.Warning;
             }
             finally { button.IsEnabled = true; }
         }
@@ -1302,7 +1297,7 @@ namespace GlobalTranslator
             {
                 Navigate("Model");
                 _modelTestStatus.Text = validation;
-                _modelTestStatus.Foreground = Brush("#B25A28");
+                _modelTestStatus.Foreground = Ui.Palette.Warning;
                 if (string.IsNullOrWhiteSpace(active.ApiKey) && _pendingModelVendor != "Custom")
                     _modelApiKey.Focus();
                 else if (string.IsNullOrWhiteSpace(active.Model)) _modelName.Focus();
@@ -1466,7 +1461,7 @@ namespace GlobalTranslator
                 Height = 38, IsReadOnly = true, Cursor = Cursors.Hand,
                 TextAlignment = TextAlignment.Center, VerticalContentAlignment = VerticalAlignment.Center,
                 FontWeight = FontWeights.SemiBold, Foreground = Accent,
-                Background = Brush("#F3FAFC"), BorderBrush = BorderLine,
+                Background = Ui.Palette.SurfaceSubtle, BorderBrush = BorderLine,
                 ToolTip = "点击后按下快捷键"
             };
             recorder.PreviewKeyDown += HotkeyRecorderKeyDown;
@@ -1859,12 +1854,12 @@ namespace GlobalTranslator
             var button = new Button
             {
                 Content = text, MinHeight = 38, Padding = new Thickness(14, 8, 14, 8),
-                Background = Accent, Foreground = Brushes.White,
-                BorderBrush = Accent, BorderThickness = new Thickness(1),
-                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                Background = Ui.Palette.Brand, Foreground = Ui.Palette.OnBrand,
+                BorderBrush = Ui.Palette.Brand, BorderThickness = new Thickness(1),
+                FontSize = Ui.Type.BodySmall, FontWeight = FontWeights.SemiBold,
                 Cursor = Cursors.Hand
             };
-            ApplyButtonTemplate(button, 10);
+            Ui.Style(button, Ui.ButtonKind.Primary);
             return button;
         }
 
@@ -1873,11 +1868,11 @@ namespace GlobalTranslator
             var button = new Button
             {
                 Content = text, MinHeight = 34, Padding = new Thickness(12, 6, 12, 6),
-                Background = Brushes.White, Foreground = Ink,
-                BorderBrush = BorderLine, BorderThickness = new Thickness(1),
-                FontSize = 13, Cursor = Cursors.Hand
+                Background = Ui.Palette.Surface, Foreground = Ui.Palette.Ink,
+                BorderBrush = Ui.Palette.Line, BorderThickness = new Thickness(1),
+                FontSize = Ui.Type.BodySmall, Cursor = Cursors.Hand
             };
-            ApplyButtonTemplate(button, 9);
+            Ui.Style(button, Ui.ButtonKind.Secondary);
             return button;
         }
 
@@ -2073,7 +2068,7 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Border.BorderBrushProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#B7D2DF"),
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.BrandTintStrong,
                 "Chrome"));
             template.Triggers.Add(hover);
             var focused = new Trigger
@@ -2118,7 +2113,7 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Border.BackgroundProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#EDF6FA"),
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.SurfaceHover,
                 "ToggleChrome"));
             template.Triggers.Add(hover);
             return template;
@@ -2144,9 +2139,9 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Control.BackgroundProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#F0F8FB")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.SurfaceHover));
             hover.Setters.Add(new Setter(Control.BorderBrushProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#F0F8FB")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.SurfaceHover));
             hover.Setters.Add(new Setter(Control.ForegroundProperty,
                 SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Ink));
             style.Triggers.Add(hover);
@@ -2156,9 +2151,9 @@ namespace GlobalTranslator
                 Value = true
             };
             selected.Setters.Add(new Setter(Control.BackgroundProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#E6F4F9")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.SurfaceSubtle));
             selected.Setters.Add(new Setter(Control.BorderBrushProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#D4EBF4")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.BrandTint));
             selected.Setters.Add(new Setter(Control.ForegroundProperty,
                 SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Ink));
             style.Triggers.Add(selected);
@@ -2247,7 +2242,7 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Border.BorderBrushProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#B7D2DF"),
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.BrandTintStrong,
                 "Chrome"));
             template.Triggers.Add(hover);
             var focused = new Trigger
@@ -2279,7 +2274,7 @@ namespace GlobalTranslator
             style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(Control.ForegroundProperty,
-                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Brush("#A9C2CD")));
+                SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Ui.Palette.Thumb));
             style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
             style.Setters.Add(new Setter(Control.FocusableProperty, false));
             var vertical = new Trigger
@@ -2303,7 +2298,7 @@ namespace GlobalTranslator
         {
             var style = new Style(typeof(Thumb));
             style.Setters.Add(new Setter(Control.BackgroundProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#BFD3DC")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.Thumb));
             style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
             var template = new ControlTemplate(typeof(Thumb));
@@ -2319,7 +2314,7 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Control.BackgroundProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#8FB5C5")));
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.ThumbHover));
             style.Triggers.Add(hover);
             var dragging = new Trigger
             {
@@ -2386,7 +2381,7 @@ namespace GlobalTranslator
                 Value = true
             };
             hover.Setters.Add(new Setter(Border.BorderBrushProperty,
-                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#8FBCCF"),
+                SystemParameters.HighContrast ? SystemColors.HighlightBrush : Ui.Palette.Focus,
                 "CheckChrome"));
             template.Triggers.Add(hover);
             var checkedState = new Trigger

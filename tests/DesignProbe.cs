@@ -22,7 +22,9 @@ internal static class DesignProbe
     // here must be free of literal colours; the list grows phase by phase.
     static readonly string[] Migrated =
     {
-        "Ui/DesignSystem.cs", "Ui/Icons.cs", "Ui/Motion.cs"
+        "Ui/DesignSystem.cs", "Ui/Icons.cs", "Ui/Motion.cs",
+        "ChatReadingView.cs", "CommerceChatLayout.cs", "PopupWindow.cs",
+        "SettingsWindow.cs"
     };
 
     static int failures;

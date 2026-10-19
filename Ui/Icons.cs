@@ -61,6 +61,11 @@ namespace GlobalTranslator
             "M 8,2 L 8,10 M 4.6,6.8 L 8,10.2 L 11.4,6.8 M 2.6,13.4 L 13.4,13.4");
         internal static readonly Geometry Settings = Geometry.Parse(
             "M 2,4.6 L 14,4.6 M 2,11.4 L 14,11.4 M 5.6,2.4 L 5.6,6.8 M 10.4,9.2 L 10.4,13.6");
+        internal static readonly Geometry Tune = Geometry.Parse(
+            "M 2,5 L 14,5 M 2,11 L 14,11 M 6.4,2.4 L 6.4,7.6 M 9.6,8.4 L 9.6,13.6");
+        internal static readonly Geometry Keyboard = Geometry.Parse(
+            "M 1.6,4.4 L 14.4,4.4 L 14.4,11.6 L 1.6,11.6 Z " +
+            "M 4,7 L 4.9,7 M 7.5,7 L 8.4,7 M 11,7 L 11.9,7 M 5,9.4 L 11,9.4");
         internal static readonly Geometry Sparkle = Geometry.Parse(
             "M 8,1.4 L 9.7,6.3 L 14.6,8 L 9.7,9.7 L 8,14.6 L 6.3,9.7 L 1.4,8 L 6.3,6.3 Z");
         internal static readonly Geometry Check = Geometry.Parse(

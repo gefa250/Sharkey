@@ -35,11 +35,11 @@ namespace GlobalTranslator
         private const int HtBottomRight = 17;
         private const double OcrHorizontalLayoutWidth = 760;
 
-        private static readonly Brush Navy = Brush("#0B2942");
-        private static readonly Brush Ocean = Brush("#087EA4");
-        private static readonly Brush Cyan = Brush("#27C3D6");
-        private static readonly Brush Muted = Brush("#64778A");
-        private static readonly Brush Paper = Brush("#F7FBFD");
+        private static readonly Brush Navy = Ui.Palette.Ink;
+        private static readonly Brush Ocean = Ui.Palette.Brand;
+        private static readonly Brush Cyan = Ui.Palette.Accent;
+        private static readonly Brush Muted = Ui.Palette.InkMuted;
+        private static readonly Brush Paper = Ui.Palette.SurfaceSubtle;
 
         private readonly TextBox _source;
         private readonly TextBox _translation;
@@ -255,17 +255,11 @@ namespace GlobalTranslator
 
             var card = new Border
             {
-                Background = Brush("#FAFCFE"),
-                CornerRadius = new CornerRadius(18),
-                BorderBrush = Brush("#D2DDE7EA"),
+                Background = Ui.Palette.Surface,
+                CornerRadius = new CornerRadius(Ui.Radius.Window),
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    BlurRadius = 26,
-                    ShadowDepth = 5,
-                    Opacity = .16,
-                    Color = Color.FromRgb(11, 57, 72)
-                }
+                Effect = Ui.Elevation.Popup()
             };
             var root = new Grid();
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -313,7 +307,7 @@ namespace GlobalTranslator
             _sourceCard = new Border
             {
                 Background = Paper,
-                BorderBrush = Brush("#D7E6EA"),
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(11),
                 Padding = new Thickness(3),
@@ -351,7 +345,7 @@ namespace GlobalTranslator
             _sourceState = new TextBlock
             {
                 FontSize = 10.5,
-                Foreground = Brush("#A46717"),
+                Foreground = Ui.Palette.Warning,
                 Margin = new Thickness(6, -8, 0, 5),
                 Visibility = Visibility.Collapsed
             };
@@ -373,8 +367,8 @@ namespace GlobalTranslator
             _translationPanel.Children.Add(translationLabel);
             _translationCard = new Border
             {
-                Background = Brush("#FCFEFE"),
-                BorderBrush = Brush("#D5E5E9"),
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(8, 5, 3, 5),
@@ -407,16 +401,16 @@ namespace GlobalTranslator
             _progress = new ProgressBar
             {
                 IsIndeterminate = true,
-                Height = 3,
-                Margin = new Thickness(0, 9, 0, 0),
-                Foreground = Cyan,
-                Background = Brush("#E3F1F3")
+                Height = 2,
+                Margin = new Thickness(0, 8, 0, 0),
+                Foreground = Ui.Palette.Accent,
+                Background = Ui.Palette.Line
             };
             _loadingText = new TextBlock
             {
                 Text = "正在翻译…",
-                FontSize = 11,
-                Foreground = Muted,
+                FontSize = Ui.Type.Caption,
+                Foreground = Ui.Palette.InkMuted,
                 Margin = new Thickness(0, 6, 0, 0),
                 Visibility = Visibility.Collapsed
             };
@@ -1054,7 +1048,7 @@ namespace GlobalTranslator
                     ToolTip = "拖动调整原文与译文空间；聚焦后可用方向键调整",
                     KeyboardIncrement = 10
                 };
-                _divider.MouseEnter += delegate { _divider.Background = Brush("#CCE2E9"); };
+                _divider.MouseEnter += delegate { _divider.Background = Ui.Palette.BrandTintStrong; };
                 _divider.MouseLeave += delegate { _divider.Background = Brushes.Transparent; };
                 _divider.DragStarted += delegate { _draggingDivider = true; _manualLayout = true; };
                 _divider.DragCompleted += delegate { RememberDividerShare(); };
@@ -1089,7 +1083,7 @@ namespace GlobalTranslator
                 var hitArea = new FrameworkElementFactory(typeof(Grid));
                 hitArea.SetValue(Panel.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
                 var grip = new FrameworkElementFactory(typeof(Border));
-                grip.SetValue(Border.BackgroundProperty, Brush("#BDD4DD"));
+                grip.SetValue(Border.BackgroundProperty, Ui.Palette.LineStrong);
                 grip.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
                 grip.SetValue(FrameworkElement.WidthProperty, split ? 3.0 : 36.0);
                 grip.SetValue(FrameworkElement.HeightProperty, split ? 36.0 : 3.0);
@@ -1233,8 +1227,8 @@ namespace GlobalTranslator
             }
             if (_sourceCard != null)
                 _sourceCard.BorderBrush = dirty
-                    ? Brush("#E8C98E")
-                    : Brush("#D7E6EA");
+                    ? Ui.Palette.Warning
+                    : Ui.Palette.Line;
             _editProtected = dirty;
             _isPinned = _manualPinned || _editProtected;
             UpdatePinGlyph();
@@ -1249,7 +1243,7 @@ namespace GlobalTranslator
             };
             _errorText = new TextBlock
             {
-                Foreground = Brush("#A23D4A"),
+                Foreground = Ui.Palette.Danger,
                 FontSize = 12.5,
                 TextWrapping = TextWrapping.Wrap
             };
@@ -1418,7 +1412,7 @@ namespace GlobalTranslator
             _translationPanel.Visibility = Visibility.Visible;
             _sourceState.Visibility = Visibility.Collapsed;
             _translation.Visibility = Visibility.Visible;
-            _translation.Foreground = Brush("#7A5B1A");
+            _translation.Foreground = Ui.Palette.Warning;
             _translation.Text = message ?? "操作未完成。";
             _errorPanel.Visibility = Visibility.Collapsed;
             _progress.Visibility = Visibility.Collapsed;
@@ -1513,18 +1507,18 @@ namespace GlobalTranslator
             _modelBadgeText = new TextBlock
             {
                 Text = "AI",
-                Foreground = Ocean,
-                FontSize = 9,
-                FontWeight = FontWeights.Bold,
+                Foreground = Ui.Palette.BrandText,
+                FontSize = 10,
+                FontWeight = FontWeights.SemiBold,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
             _modelBadge = new Border
             {
-                Width = 19,
-                Height = 19,
-                CornerRadius = new CornerRadius(9.5),
-                Background = Brush("#D9F2F7"),
+                Width = 20,
+                Height = 20,
+                CornerRadius = new CornerRadius(10),
+                Background = Ui.Palette.BrandTint,
                 Margin = new Thickness(0, 0, 8, 0),
                 Child = _modelBadgeText
             };
@@ -1532,8 +1526,8 @@ namespace GlobalTranslator
             _modelButtonText = new TextBlock
             {
                 Text = "选择可用模型",
-                Foreground = Navy,
-                FontSize = 12,
+                Foreground = Ui.Palette.Ink,
+                FontSize = Ui.Type.Meta,
                 FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center
@@ -1563,29 +1557,21 @@ namespace GlobalTranslator
                 MinWidth = 190,
                 MaxWidth = 315,
                 Padding = new Thickness(8, 4, 11, 4),
-                Background = Brush("#E8F8FCFD"),
-                BorderBrush = Brush("#B8D8EAF0"),
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Cursor = Cursors.Hand,
                 Content = buttonContent,
-                Template = RoundedButtonTemplate(16)
+                Template = RoundedButtonTemplate(Ui.Radius.Control)
             };
-            _modelButton.Effect =
-                new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    BlurRadius = 9,
-                    ShadowDepth = 1,
-                    Opacity = .1,
-                    Color = Color.FromRgb(6, 70, 91)
-                };
             _modelButton.MouseEnter += delegate
             {
-                _modelButton.Background = Brush("#FAFFFFFF");
+                _modelButton.Background = Ui.Palette.SurfaceHover;
             };
             _modelButton.MouseLeave += delegate
             {
-                _modelButton.Background = Brush("#E8F8FCFD");
+                _modelButton.Background = Ui.Palette.Surface;
             };
             _modelButton.Click += delegate
             {
@@ -1614,19 +1600,13 @@ namespace GlobalTranslator
             _modelPopupCard = new Border
             {
                 Width = 310,
-                Background = Brush("#FCFFFFFF"),
-                BorderBrush = Brush("#BFD7E7EC"),
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(16),
+                CornerRadius = new CornerRadius(Ui.Radius.Card),
                 Padding = new Thickness(7),
                 Child = menuScroll,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    BlurRadius = 24,
-                    ShadowDepth = 6,
-                    Opacity = .2,
-                    Color = Color.FromRgb(5, 45, 63)
-                }
+                Effect = Ui.Elevation.Menu()
             };
             _modelPopup = new Popup
             {
@@ -1696,7 +1676,7 @@ namespace GlobalTranslator
                 _modelMenuItems.Children.Add(new Border
                 {
                     Height = 1,
-                    Background = Brush("#DCEAEF"),
+                    Background = Ui.Palette.Line,
                     Margin = new Thickness(8, 6, 8, 5)
                 });
             }
@@ -1720,7 +1700,7 @@ namespace GlobalTranslator
             };
             manage.MouseEnter += delegate
             {
-                manage.Background = Brush("#EAF7FA");
+                manage.Background = Ui.Palette.SurfaceSubtle;
             };
             manage.MouseLeave += delegate
             {
@@ -1767,8 +1747,8 @@ namespace GlobalTranslator
                 Height = 28,
                 CornerRadius = new CornerRadius(14),
                 Background = selected
-                    ? Brush("#CDEEF4")
-                    : Brush("#EDF6F8"),
+                    ? Ui.Palette.BrandTintStrong
+                    : Ui.Palette.SurfaceSubtle,
                 Margin = new Thickness(0, 0, 10, 0),
                 Child = new TextBlock
                 {
@@ -1831,7 +1811,7 @@ namespace GlobalTranslator
                 Margin = new Thickness(0, 1, 0, 1),
                 Padding = new Thickness(9, 5, 9, 5),
                 Background = selected
-                    ? Brush("#E9F7FA")
+                    ? Ui.Palette.BrandTint
                     : Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -1842,12 +1822,12 @@ namespace GlobalTranslator
             };
             item.MouseEnter += delegate
             {
-                item.Background = Brush("#E3F4F7");
+                item.Background = Ui.Palette.SurfaceHover;
             };
             item.MouseLeave += delegate
             {
                 item.Background = selected
-                    ? Brush("#E9F7FA")
+                    ? Ui.Palette.BrandTint
                     : Brushes.Transparent;
             };
             PopupModelChoice selectedChoice = choice;
@@ -1866,14 +1846,14 @@ namespace GlobalTranslator
             _modelButton.ToolTip = text;
             _modelBadgeText.Text = warning ? "!" : "AI";
             _modelBadge.Background = warning
-                ? Brush("#FFF0D2")
-                : Brush("#D9F2F7");
+                ? Ui.Palette.WarningTint
+                : Ui.Palette.BrandTint;
             _modelBadgeText.Foreground = warning
-                ? Brush("#A46717")
+                ? Ui.Palette.Warning
                 : Ocean;
             _modelButton.BorderBrush = warning
-                ? Brush("#E8C98E")
-                : Brush("#B8D8EAF0");
+                ? Ui.Palette.Warning
+                : Ui.Palette.Line;
         }
 
         private static bool IsPopupModelAvailable(
@@ -1979,11 +1959,11 @@ namespace GlobalTranslator
         {
             var header = new Border
             {
-                Background = new LinearGradientBrush(Color.FromRgb(232, 245, 251), Color.FromRgb(247, 251, 253), 0),
-                BorderBrush = Brush("#D5E8EB"),
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                CornerRadius = new CornerRadius(18, 18, 0, 0),
-                Padding = new Thickness(12, 7, 10, 7),
+                CornerRadius = new CornerRadius(Ui.Radius.Window, Ui.Radius.Window, 0, 0),
+                Padding = new Thickness(12, 8, 10, 8),
                 Cursor = Cursors.SizeAll
             };
             header.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
@@ -2042,9 +2022,9 @@ namespace GlobalTranslator
 
             var logo = new Image
             {
-                Width = 28,
-                Height = 28,
-                Margin = new Thickness(0, 0, 8, 0),
+                Width = 24,
+                Height = 24,
+                Margin = new Thickness(2, 0, 8, 0),
                 Stretch = Stretch.Uniform,
                 Source = new BitmapImage(new Uri(
                     "pack://application:,,,/Sharkey;component/assets/shark-logo.png"))
@@ -2056,16 +2036,16 @@ namespace GlobalTranslator
             _brandTitle = new TextBlock
             {
                 Text = "鲨译",
-                Foreground = Navy,
-                FontSize = 15.5,
+                Foreground = Ui.Palette.Ink,
+                FontSize = Ui.Type.Subtitle,
                 FontWeight = FontWeights.SemiBold
             };
             identity.Children.Add(_brandTitle);
             _meta = new TextBlock
             {
                 Text = "正在翻译…",
-                Foreground = Muted,
-                FontSize = 11,
+                Foreground = Ui.Palette.InkMuted,
+                FontSize = Ui.Type.Caption,
                 Margin = new Thickness(0, 2, 0, 0),
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
@@ -2087,19 +2067,13 @@ namespace GlobalTranslator
             _layoutPopupCard = new Border
             {
                 Width = 210,
-                Background = Brush("#FCFFFFFF"),
-                BorderBrush = Brush("#BFD7E7EC"),
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(14),
+                CornerRadius = new CornerRadius(Ui.Radius.Card),
                 Padding = new Thickness(7),
                 Child = _layoutMenuItems,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    BlurRadius = 24,
-                    ShadowDepth = 6,
-                    Opacity = .2,
-                    Color = Color.FromRgb(5, 45, 63)
-                }
+                Effect = Ui.Elevation.Menu()
             };
             _layoutPopup = new Popup
             {
@@ -2205,7 +2179,7 @@ namespace GlobalTranslator
                 Height = 48,
                 Margin = new Thickness(0, 1, 0, 1),
                 Padding = new Thickness(9, 5, 9, 5),
-                Background = selected ? Brush("#E9F7FA") : Brushes.Transparent,
+                Background = selected ? Ui.Palette.BrandTint : Brushes.Transparent,
                 BorderThickness = new Thickness(0),
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Cursor = Cursors.Hand,
@@ -2213,10 +2187,10 @@ namespace GlobalTranslator
                 Content = content,
                 Template = RoundedButtonTemplate(11)
             };
-            item.MouseEnter += delegate { item.Background = Brush("#E3F4F7"); };
+            item.MouseEnter += delegate { item.Background = Ui.Palette.SurfaceHover; };
             item.MouseLeave += delegate
             {
-                item.Background = selected ? Brush("#E9F7FA") : Brushes.Transparent;
+                item.Background = selected ? Ui.Palette.BrandTint : Brushes.Transparent;
             };
             item.Click += delegate
             {
@@ -2324,7 +2298,7 @@ namespace GlobalTranslator
         private DockPanel BuildActions()
         {
             var actions = new DockPanel { Margin = new Thickness(0, 9, 0, 0) };
-            _copyTranslation = MakeSecondaryButton("复制译文");
+            _copyTranslation = MakePrimaryButton("复制译文");
             _copyTranslation.Click += delegate
             {
                 if (!string.IsNullOrEmpty(_translatedText))
@@ -2612,13 +2586,7 @@ namespace GlobalTranslator
 
         private static TextBlock SectionLabel(string text)
         {
-            return new TextBlock
-            {
-                Text = text,
-                FontSize = 11,
-                FontWeight = FontWeights.Bold,
-                Foreground = Ocean
-            };
+            return Ui.Text(text, Ui.Type.Caption, Ui.Palette.InkMuted, FontWeights.SemiBold);
         }
 
         private static FrameworkElement BuildResizeGrip()
@@ -2640,7 +2608,7 @@ namespace GlobalTranslator
                 {
                     Width = 2.4,
                     Height = 2.4,
-                    Fill = Brush("#769AA8")
+                    Fill = Ui.Palette.InkFaint
                 };
                 Canvas.SetLeft(dot, points[i]);
                 Canvas.SetTop(dot, points[i + 1]);
@@ -2688,7 +2656,7 @@ namespace GlobalTranslator
             };
             button.MouseEnter += delegate
             {
-                button.Background = Brush("#DCEEF1");
+                button.Background = Ui.Palette.SurfaceHover;
                 glyph.Stroke = Ocean;
             };
             button.MouseLeave += delegate
@@ -2698,7 +2666,7 @@ namespace GlobalTranslator
             };
             button.PreviewMouseLeftButtonDown += delegate
             {
-                button.Background = Brush("#C9E6EA");
+                button.Background = Ui.Palette.BrandTintStrong;
             };
             return button;
         }
@@ -2742,40 +2710,42 @@ namespace GlobalTranslator
 
         private static Button MakePrimaryButton(string text)
         {
-            return new Button
+            var button = new Button
             {
                 Content = text,
                 MinWidth = 96,
                 Height = 32,
                 Padding = new Thickness(12, 5, 12, 5),
-                Background = Ocean,
-                Foreground = Brushes.White,
+                Background = Ui.Palette.Brand,
+                Foreground = Ui.Palette.OnBrand,
                 BorderThickness = new Thickness(0),
                 FontWeight = FontWeights.SemiBold,
-                FontSize = 12,
-                Cursor = Cursors.Hand,
-                Template = RoundedButtonTemplate(10)
+                FontSize = Ui.Type.Meta,
+                Cursor = Cursors.Hand
             };
+            Ui.Style(button, Ui.ButtonKind.Primary);
+            return button;
         }
 
         private static Button MakeSecondaryButton(string text)
         {
-            return new Button
+            var button = new Button
             {
                 Content = text,
                 MinWidth = 70,
                 Height = 32,
                 Margin = new Thickness(0, 0, 6, 0),
                 Padding = new Thickness(9, 5, 9, 5),
-                Background = Brush("#EFF7FA"),
-                Foreground = Ocean,
-                BorderBrush = Brush("#C9E1E8"),
+                Background = Ui.Palette.Surface,
+                Foreground = Ui.Palette.BrandText,
+                BorderBrush = Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
                 FontWeight = FontWeights.SemiBold,
-                FontSize = 12,
-                Cursor = Cursors.Hand,
-                Template = RoundedButtonTemplate(9)
+                FontSize = Ui.Type.Meta,
+                Cursor = Cursors.Hand
             };
+            Ui.Style(button, Ui.ButtonKind.Secondary);
+            return button;
         }
 
         private static ControlTemplate RoundedButtonTemplate(
