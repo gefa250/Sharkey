@@ -65,7 +65,7 @@ git worktree add ..\Sharkey-checkpoint 62d397d
 - 布局用 `Ui.Space` 的 4/8/12/16/20/24/32 组合；正文行高约 1.55，阅读区宽度不超过 820px。
 - 改完界面先跑 `build.cmd` 与 `test.cmd`，再看 `tmp/tests/` 下 100/150/200% 渲染图；`DesignProbe` 还会校验 WCAG AA 对比度与 32px 点击区。
 - 探针里写死的模板部件名（`Chrome`、`CheckChrome`、`PART_ContentHost`）与字段名属于测试契约，改动需同步更新探针并在 CHANGELOG 说明原因。
-- 品牌图标：`assets/shark-logo.svg` 是母版（128 网格、扁平两色）；`shark-logo.png` 是窗口内透明标识（256）；`shark-logo.ico` 必须包含 16/24/32/48/64/128/256 七档，且 ≤32 使用简化稿（去掉鱼鳃、减少牙齿）。改图标时这几个文件一起更新，托盘图标从 ICO 取小图，不要再缩放 256 位图。
+- 品牌图标：`assets/shark-logo.svg` 是母版（128 网格、扁平两色）；`shark-logo.png` 是窗口内透明标识（256）；`shark-logo.ico` 需包含 16/24/32/48/64/128/256 多档（现有文件已是七档）。改图标时这几个文件一起更新；托盘图标从 ICO 取小图，不要缩放 256 位图。
 
 ## 版本与发布
 
