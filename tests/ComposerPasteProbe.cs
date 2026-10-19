@@ -70,6 +70,21 @@ internal static class ComposerPasteProbe
         using (var stream = new MemoryStream()) { encoder.Save(stream); return stream.ToArray(); }
     }
 
+    // Another process may hold the clipboard open; the OS then rejects Flush().
+    static void Clip(Action action)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try { action(); return; }
+            catch (Exception)
+            {
+                if (attempt >= 4) throw;
+                Thread.Sleep(60);
+                PumpFor(40);
+            }
+        }
+    }
+
     static void HoldCtrl()
     {
         if (ctrlHeld) return;
@@ -143,14 +158,14 @@ internal static class ComposerPasteProbe
 
             // Screenshot in the clipboard (CF_DIB only) has no text, so the TextBox
             // never raises the paste event; the composer has to claim Ctrl+V itself.
-            Clipboard.Clear(); Clipboard.SetImage(Quote());
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetImage(Quote()); });
             images.Clear(); input.Text = ""; status.Text = "";
             bool handled = RaisePasteKey(window, input);
             Check(handled && images.Count == 1 && imageList.Children.Count == 1,
                 "screenshot Ctrl+V did not attach an image");
 
             // Snipping Tool and browser "copy image" often expose only a PNG stream.
-            Clipboard.Clear(); Clipboard.SetData("PNG", new MemoryStream(png));
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetData("PNG", new MemoryStream(png)); });
             images.Clear(); status.Text = "";
             handled = RaisePasteKey(window, input);
             Check(handled && images.Count == 1, "PNG-only clipboard was not pasted");
@@ -158,13 +173,13 @@ internal static class ComposerPasteProbe
             // Copied image files keep working.
             string pngPath = Path.Combine(isolated, "quote.png"); File.WriteAllBytes(pngPath, png);
             var files = new StringCollection(); files.Add(pngPath);
-            Clipboard.Clear(); Clipboard.SetFileDropList(files);
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetFileDropList(files); });
             images.Clear(); status.Text = "";
             handled = RaisePasteKey(window, input);
             Check(handled && images.Count == 1, "copied image file was not pasted");
 
             // Empty clipboard must not be reported as a busy clipboard.
-            Clipboard.Clear();
+            Clip(delegate { Clipboard.Clear(); });
             IDataObject empty = Clipboard.GetDataObject();
             images.Clear(); status.Text = "";
             handled = RaisePasteKey(window, input);
@@ -172,20 +187,20 @@ internal static class ComposerPasteProbe
                 "empty clipboard was not left to the TextBox");
 
             // Text and non-image files must keep their existing behavior.
-            Clipboard.Clear(); Clipboard.SetText("customer arrives Monday");
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetText("customer arrives Monday"); });
             images.Clear(); status.Text = "";
             handled = RaisePasteKey(window, input);
             Check(!handled && images.Count == 0, "text Ctrl+V was stolen from the TextBox");
             string textPath = Path.Combine(isolated, "notes.txt"); File.WriteAllText(textPath, "hello");
             files = new StringCollection(); files.Add(textPath);
-            Clipboard.Clear(); Clipboard.SetFileDropList(files);
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetFileDropList(files); });
             images.Clear(); status.Text = "";
             handled = RaisePasteKey(window, input);
             Check(handled && images.Count == 0 && status.Text.Contains("仅支持图片"),
                 "copied non-image file was not explained");
 
             // Five attachments stay the cap.
-            Clipboard.Clear(); Clipboard.SetImage(Quote());
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetImage(Quote()); });
             images.Clear(); status.Text = "";
             for (int i = 0; i < 7; i++) RaisePasteKey(window, input);
             Check(images.Count == 5 && status.Text.Contains("5 张"), "attachment cap regressed");
@@ -202,7 +217,7 @@ internal static class ComposerPasteProbe
 
             // The context menu exposes image paste because WPF's own Paste item
             // stays disabled for an image-only clipboard.
-            Clipboard.Clear(); Clipboard.SetImage(Quote());
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetImage(Quote()); });
             images.Clear(); input.Text = ""; status.Text = "";
             ContextMenu menu = input.ContextMenu;
             Check(menu != null, "composer has no context menu");
@@ -219,13 +234,13 @@ internal static class ComposerPasteProbe
             pasteImage.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             PumpFor(60);
             Check(images.Count == 1, "context-menu image paste did nothing");
-            Clipboard.Clear(); Clipboard.SetText("menu-text");
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetText("menu-text"); });
             images.Clear();
             menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
             Check(pasteText.IsEnabled && !pasteImage.IsEnabled, "text clipboard did not gate the menu");
 
             // Real keystroke, only when the probe window owns the foreground.
-            Clipboard.Clear(); Clipboard.SetImage(Quote());
+            Clip(delegate { Clipboard.Clear(); Clipboard.SetImage(Quote()); });
             images.Clear(); input.Text = ""; status.Text = "";
             window.Activate(); input.Focus(); Keyboard.Focus(input); PumpFor(250);
             IntPtr handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
@@ -235,7 +250,7 @@ internal static class ComposerPasteProbe
                 SendCtrlV();
                 Check(images.Count == 1 && input.Text.Length == 0, "real Ctrl+V did not attach the screenshot");
                 images.Clear(); input.Text = "";
-                Clipboard.Clear(); Clipboard.SetText("real-paste-text");
+                Clip(delegate { Clipboard.Clear(); Clipboard.SetText("real-paste-text"); });
                 SendCtrlV();
                 Check(images.Count == 0 && input.Text.Contains("real-paste-text"),
                     "real Ctrl+V stopped pasting text");

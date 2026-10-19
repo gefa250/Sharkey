@@ -24,7 +24,7 @@ internal static class DesignProbe
     {
         "Ui/DesignSystem.cs", "Ui/Icons.cs", "Ui/Motion.cs",
         "ChatReadingView.cs", "CommerceChatLayout.cs", "PopupWindow.cs",
-        "SettingsWindow.cs"
+        "SettingsWindow.cs", "ImageTableWindow.cs", "UpdateWindow.cs"
     };
 
     static int failures;

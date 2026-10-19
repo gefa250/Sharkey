@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -27,7 +28,7 @@ namespace GlobalTranslator
             ClipboardCopyMode = DataGridClipboardCopyMode.None,
             CanUserSortColumns = false, CanUserReorderColumns = false, SelectionUnit = DataGridSelectionUnit.CellOrRowHeader,
             GridLinesVisibility = DataGridGridLinesVisibility.Horizontal, RowHeight = 34,
-            AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(245, 249, 251)), FontSize = 14
+            AlternatingRowBackground = null, FontSize = 14
         };
         private readonly ComboBox _sheets = new ComboBox { MinWidth = 160, Height = 32, DisplayMemberPath = "TableName" };
         private readonly TextBlock _status = new TextBlock { Text = "添加截图或图片，识别后可逐格修改。", TextWrapping = TextWrapping.Wrap };
@@ -45,63 +46,187 @@ namespace GlobalTranslator
             Height = Math.Min(700, SystemParameters.WorkArea.Height);
             MinWidth = 500; MinHeight = 360;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            Background = new SolidColorBrush(Color.FromRgb(245, 249, 252));
+            Background = Ui.Palette.Canvas;
             Ui.ApplyWindow(this);
-            var root = new DockPanel { Margin = new Thickness(20) }; Content = root;
-            var heading = new TextBlock { Text = "识图转表格", FontSize = 22, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) };
-            DockPanel.SetDock(heading, Dock.Top); root.Children.Add(heading);
-            var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-            actions.Children.Add(ActionButton("框选截图", async delegate { await Capture(); }));
-            actions.Children.Add(ActionButton("添加图片", delegate { AddImage(); }));
-            actions.Children.Add(ActionButton("粘贴图片", delegate { PasteImage(); }));
-            _recognize = ActionButton("识别表格", async delegate { await Recognize(); });
+            Ui.InstallTextInputStyles(this);
+
+            var root = new DockPanel { Margin = new Thickness(24, 18, 24, 18) };
+            Content = root;
+
+            var header = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+            header.Children.Add(Ui.Text("识图转表格", Ui.Type.Title, Ui.Palette.Ink, FontWeights.SemiBold));
+            TextBlock subtitle = Ui.Text("从截图提取表格，识别后可逐格修改，再复制到 Excel 或导出 CSV。",
+                Ui.Type.BodySmall, Ui.Palette.InkMuted);
+            subtitle.TextWrapping = TextWrapping.Wrap;
+            subtitle.TextTrimming = TextTrimming.None;
+            subtitle.Margin = new Thickness(0, 4, 0, 0);
+            header.Children.Add(subtitle);
+            DockPanel.SetDock(header, Dock.Top);
+            root.Children.Add(header);
+
+            var actions = new WrapPanel { Margin = new Thickness(0, 0, 0, 14) };
+            actions.Children.Add(ActionButton("框选截图", async delegate { await Capture(); }, true));
+            actions.Children.Add(ActionButton("添加图片", delegate { AddImage(); }, false));
+            actions.Children.Add(ActionButton("粘贴图片", delegate { PasteImage(); }, false));
+            _recognize = ActionButton("识别表格", async delegate { await Recognize(); }, true);
             actions.Children.Add(_recognize);
-            _stop = ActionButton("停止", delegate { if (_request != null) _request.Cancel(); });
-            _stop.Visibility = Visibility.Collapsed; actions.Children.Add(_stop);
-            DockPanel.SetDock(actions, Dock.Top); root.Children.Add(actions);
-            var footer = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
-            _copy = ActionButton("复制到 Excel", delegate { Export(false); });
-            _save = ActionButton("导出 CSV…", delegate { Export(true); });
+            _stop = ActionButton("停止", delegate { if (_request != null) _request.Cancel(); }, false);
+            _stop.Visibility = Visibility.Collapsed;
+            actions.Children.Add(_stop);
+            DockPanel.SetDock(actions, Dock.Top);
+            root.Children.Add(actions);
+
+            var footer = new DockPanel { Margin = new Thickness(0, 14, 0, 0) };
+            var footerActions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            DockPanel.SetDock(footerActions, Dock.Right);
+            footer.Children.Add(footerActions);
+            _copy = ActionButton("复制到 Excel", delegate { Export(false); }, false);
+            _save = ActionButton("导出 CSV…", delegate { Export(true); }, false);
             _copy.IsEnabled = _save.IsEnabled = false;
-            footer.Children.Add(_copy); footer.Children.Add(_save);
-            DockPanel.SetDock(footer, Dock.Bottom); root.Children.Add(footer);
-            _status.Margin = new Thickness(0, 10, 0, 0);
-            DockPanel.SetDock(_status, Dock.Bottom); root.Children.Add(_status);
+            footerActions.Children.Add(_copy);
+            footerActions.Children.Add(_save);
+            _status.Margin = new Thickness(2, 0, 12, 0);
+            _status.VerticalAlignment = VerticalAlignment.Center;
+            footer.Children.Add(_status);
+            DockPanel.SetDock(footer, Dock.Bottom);
+            root.Children.Add(footer);
+
             var content = new Grid();
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.3, GridUnitType.Star) });
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.7, GridUnitType.Star) });
-            var imageBorder = new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), Padding = new Thickness(10), Margin = new Thickness(0, 0, 12, 0), Child = _preview };
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.32, GridUnitType.Star) });
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0.68, GridUnitType.Star) });
+            var imageBorder = new Border
+            {
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(Ui.Radius.Card),
+                Padding = new Thickness(8),
+                Margin = new Thickness(0, 0, 12, 0),
+                Child = _preview
+            };
             content.Children.Add(imageBorder);
-            var result = new DockPanel(); Grid.SetColumn(result, 1); content.Children.Add(result);
-            _sheets.Margin = new Thickness(0, 0, 0, 8); DockPanel.SetDock(_sheets, Dock.Top); result.Children.Add(_sheets); result.Children.Add(_grid);
-            _sheets.SelectionChanged += delegate { var table = _sheets.SelectedItem as DataTable; _grid.ItemsSource = table == null ? null : table.DefaultView; };
+            var right = new Border
+            {
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Line,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(Ui.Radius.Card),
+                Padding = new Thickness(12)
+            };
+            Grid.SetColumn(right, 1);
+            content.Children.Add(right);
+            var result = new DockPanel();
+            _sheets.Margin = new Thickness(0, 0, 0, 10);
+            _sheets.FontSize = Ui.Type.BodySmall;
+            _sheets.Style = SettingsWindow.CreateComboBoxStyle();
+            _sheets.Height = 34;
+            _sheets.MinHeight = 34;
+            DockPanel.SetDock(_sheets, Dock.Top);
+            result.Children.Add(_sheets);
+            result.Children.Add(_grid);
+            right.Child = result;
+            _sheets.SelectionChanged += delegate
+            {
+                var table = _sheets.SelectedItem as DataTable;
+                _grid.ItemsSource = table == null ? null : table.DefaultView;
+            };
             root.Children.Add(content);
+
+            _status.FontSize = Ui.Type.Meta;
+            _status.Foreground = Ui.Palette.InkMuted;
+            _grid.FontFamily = Ui.Type.Family;
+            _grid.FontSize = Ui.Type.BodySmall;
+            _grid.RowHeight = 36;
+            _grid.Background = Ui.Palette.Surface;
+            _grid.BorderThickness = new Thickness(0);
+            _grid.HorizontalGridLinesBrush = Ui.Palette.Line;
+            _grid.VerticalGridLinesBrush = Brushes.Transparent;
+            _grid.AlternatingRowBackground = null;
+            _grid.RowHeaderWidth = 0;
+            _grid.ColumnHeaderStyle = TableHeaderStyle();
+            _grid.CellStyle = TableCellStyle();
+            _grid.RowStyle = TableRowStyle();
+
             Closed += delegate { if (_request != null) _request.Cancel(); if (_image != null) { _image.Dispose(); _image = null; } };
             PreviewKeyDown += delegate(object sender, KeyEventArgs e)
             {
-                if (e.Key == Key.Escape) { if (_request != null) _request.Cancel(); else Close(); e.Handled = true; }
+                if (e.Key == Key.Escape)
+                {
+                    if (_request != null) _request.Cancel(); else Close();
+                    e.Handled = true;
+                    return;
+                }
+                if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control) return;
+                if (Keyboard.FocusedElement is TextBox) return;
+                e.Handled = true;
+                PasteImage();
             };
             if (image != null) { SetImage(new Bitmap(image)); Loaded += async delegate { await Recognize(); }; }
         }
 
-        private static Button ActionButton(string text, RoutedEventHandler handler)
+        private static Style TableHeaderStyle()
         {
-            var button = new Button { Content = text, Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 0, 8, 4), MinHeight = 34,
-                Background = Brushes.White, Foreground = new SolidColorBrush(Color.FromRgb(18, 85, 107)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(205, 224, 233)), BorderThickness = new Thickness(1), Cursor = Cursors.Hand };
+            var style = new Style(typeof(DataGridColumnHeader));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Ui.Palette.SurfaceSubtle));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Ui.Palette.InkMuted));
+            style.Setters.Add(new Setter(Control.FontSizeProperty, Ui.Type.Meta));
+            style.Setters.Add(new Setter(Control.FontWeightProperty, FontWeights.SemiBold));
+            style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 8, 10, 8)));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Ui.Palette.Line));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0, 0, 0, 1)));
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
+            return style;
+        }
+
+        private static Style TableCellStyle()
+        {
+            var style = new Style(typeof(DataGridCell));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, null));
+            var template = new ControlTemplate(typeof(DataGridCell));
             var border = new FrameworkElementFactory(typeof(Border));
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(9));
-            border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
-            border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
-            border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
-            border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+            border.Name = "CellChrome";
+            border.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            border.SetValue(Border.BorderThicknessProperty, new Thickness(0));
+            border.SetValue(Border.PaddingProperty, new Thickness(10, 0, 10, 0));
             var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
-            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
             border.AppendChild(presenter);
-            button.Template = new ControlTemplate(typeof(Button)) { VisualTree = border };
-            button.IsEnabledChanged += delegate { button.Opacity = button.IsEnabled ? 1 : .45; };
-            button.Click += handler; return button;
+            template.VisualTree = border;
+            var selected = new Trigger { Property = DataGridCell.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Border.BackgroundProperty, Ui.Palette.BrandTint, "CellChrome"));
+            template.Triggers.Add(selected);
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            return style;
+        }
+
+        private static Style TableRowStyle()
+        {
+            var style = new Style(typeof(DataGridRow));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Ui.Palette.Surface));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, Ui.Palette.SurfaceHover));
+            style.Triggers.Add(hover);
+            var selected = new Trigger { Property = DataGridRow.IsSelectedProperty, Value = true };
+            selected.Setters.Add(new Setter(Control.BackgroundProperty, Ui.Palette.BrandTint));
+            style.Triggers.Add(selected);
+            return style;
+        }
+
+        private static Button ActionButton(string text, RoutedEventHandler handler, bool primary)
+        {
+            Button button = primary ? Ui.PrimaryButton(text) : Ui.SecondaryButton(text);
+            button.MinHeight = 34;
+            button.MinWidth = 0;
+            button.Padding = new Thickness(14, 6, 14, 6);
+            button.Margin = new Thickness(0, 0, 8, 4);
+            button.Click += handler;
+            return button;
         }
 
         private bool CanReplace()
@@ -119,6 +244,7 @@ namespace GlobalTranslator
                 var source = new BitmapImage(); source.BeginInit(); source.CacheOption = BitmapCacheOption.OnLoad; source.StreamSource = stream; source.EndInit(); source.Freeze(); _preview.Source = source;
             }
             _tables = new DataTable[0]; _sheets.ItemsSource = _tables; _grid.ItemsSource = null;
+            _sheets.Visibility = Visibility.Collapsed;
             _copy.IsEnabled = _save.IsEnabled = false;
             _status.Text = "图片已就绪 · 点击识别表格";
         }
@@ -190,6 +316,7 @@ namespace GlobalTranslator
                     return table;
                 }).ToArray();
                 _sheets.ItemsSource = _tables; _sheets.SelectedIndex = 0;
+                _sheets.Visibility = Visibility.Visible;
                 _copy.IsEnabled = _save.IsEnabled = true;
                 _status.Text = "已识别 " + _tables.Length + " 张表格 · 可双击修改单元格，请核对金额与看不清的内容。";
             }

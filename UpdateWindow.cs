@@ -9,10 +9,10 @@ namespace GlobalTranslator
 {
     internal sealed class UpdateWindow : Window
     {
-        private static readonly Brush Navy = Brush("#0B2942");
-        private static readonly Brush Ocean = Brush("#087EA4");
-        private static readonly Brush Muted = Brush("#65798B");
-        private static readonly Brush Line = Brush("#DCE9EF");
+        private static readonly Brush Navy = Ui.Palette.Ink;
+        private static readonly Brush Ocean = Ui.Palette.Brand;
+        private static readonly Brush Muted = Ui.Palette.InkMuted;
+        private static readonly Brush Line = Ui.Palette.Line;
 
         private readonly UpdateInfo _update;
         private readonly UpdateService _service;
@@ -41,7 +41,7 @@ namespace GlobalTranslator
             Background = Brushes.White;
             Ui.ApplyWindow(this);
 
-            var root = new Grid { Margin = new Thickness(22) };
+            var root = new Grid { Margin = new Thickness(24, 22, 24, 20) };
             root.RowDefinitions.Add(new RowDefinition
             {
                 Height = GridLength.Auto
@@ -59,19 +59,20 @@ namespace GlobalTranslator
             heading.Children.Add(new TextBlock
             {
                 Text = "发现新版本 " + update.Version,
-                FontSize = 20,
+                FontSize = Ui.Type.Title,
                 FontWeight = FontWeights.SemiBold,
-                Foreground = Navy
+                Foreground = Ui.Palette.Ink
             });
             heading.Children.Add(new TextBlock
             {
                 Text = "当前版本 " + VersionInfo.SemanticVersion,
-                FontSize = 11.5,
-                Foreground = Muted,
+                FontSize = Ui.Type.Meta,
+                Foreground = Ui.Palette.InkMuted,
                 Margin = new Thickness(0, 5, 0, 14)
             });
             root.Children.Add(heading);
 
+            Ui.InstallTextInputStyles(this);
             var notes = new TextBox
             {
                 Text = string.IsNullOrWhiteSpace(update.Notes)
@@ -83,10 +84,10 @@ namespace GlobalTranslator
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 BorderBrush = Line,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(12),
-                Background = Brush("#F7FAFB"),
-                Foreground = Navy,
-                FontSize = 12
+                Padding = new Thickness(14, 12, 14, 12),
+                Background = Ui.Palette.SurfaceSubtle,
+                Foreground = Ui.Palette.Ink,
+                FontSize = Ui.Type.BodySmall
             };
             Grid.SetRow(notes, 1);
             root.Children.Add(notes);
@@ -110,8 +111,8 @@ namespace GlobalTranslator
             _status = new TextBlock
             {
                 Text = "下载后会校验文件并自动重启鲨译。",
-                Foreground = Muted,
-                FontSize = 11,
+                Foreground = Ui.Palette.InkMuted,
+                FontSize = Ui.Type.Meta,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextWrapping = TextWrapping.Wrap
             };
@@ -180,19 +181,21 @@ namespace GlobalTranslator
             string text,
             bool primary)
         {
-            return new Button
+            var button = new Button
             {
                 Content = text,
                 Width = primary ? 104 : 78,
                 Height = 38,
-                Background = primary ? Ocean : Brushes.White,
-                Foreground = primary ? Brushes.White : Navy,
-                BorderBrush = primary ? Ocean : Line,
+                Background = primary ? Ui.Palette.Brand : Ui.Palette.Surface,
+                Foreground = primary ? Ui.Palette.OnBrand : Ui.Palette.Ink,
+                BorderBrush = primary ? Ui.Palette.Brand : Ui.Palette.Line,
                 BorderThickness = new Thickness(1),
-                FontSize = 12.5,
+                FontSize = Ui.Type.BodySmall,
                 FontWeight = FontWeights.SemiBold,
                 Cursor = Cursors.Hand
             };
+            Ui.Style(button, primary ? Ui.ButtonKind.Primary : Ui.ButtonKind.Secondary);
+            return button;
         }
 
         private static Brush Brush(string color)
