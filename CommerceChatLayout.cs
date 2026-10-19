@@ -157,32 +157,27 @@ namespace GlobalTranslator
             _intent.PreviewKeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control) return;
-                try
-                {
-                    if (!Clipboard.ContainsFileDropList()) return;
-                    string[] copiedPaths = Clipboard.GetFileDropList().Cast<string>().ToArray();
-                    string[] paths = copiedPaths.Where(IsImagePath).ToArray();
-                    if (paths.Length == 0)
-                    {
-                        e.Handled = true;
-                        _status.Text = "仅支持图片；请复制截图或 PNG/JPEG 图片。";
-                        return;
-                    }
-                    if (paths.Length != copiedPaths.Length)
-                        _status.Text = "文档不会添加；已忽略非图片文件。";
-                    e.Handled = true; AddImagePaths(paths);
-                }
-                catch { _status.Text = "剪贴板读取失败，请重新复制图片。"; }
+                // WPF leaves the built-in Paste command disabled while the clipboard holds
+                // no text, so a screenshot never reaches the box through the normal path.
+                // Read the image first and only swallow Ctrl+V when there really is one.
+                e.Handled = PasteClipboardImage();
             };
             _intent.PreviewDragOver += delegate(object sender, DragEventArgs e)
             {
                 string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
-                if (paths == null) return;
+                if (paths == null)
+                {
+                    e.Handled = HasDroppedImage(e.Data);
+                    if (e.Handled) e.Effects = DragDropEffects.Copy;
+                    return;
+                }
                 e.Handled = true;
                 e.Effects = paths.Any(IsImagePath) ? DragDropEffects.Copy : DragDropEffects.None;
             };
             _intent.PreviewDrop += delegate(object sender, DragEventArgs e)
             {
+                if (HasDroppedImage(e.Data))
+                { e.Handled = true; PasteImageData(e.Data); return; }
                 string[] paths = e.Data.GetData(DataFormats.FileDrop) as string[];
                 if (paths == null) return;
                 if (paths.Any(path => !IsImagePath(path)))
@@ -515,6 +510,45 @@ namespace GlobalTranslator
                 try { using (var bitmap = new System.Drawing.Bitmap(path)) AddBitmap(bitmap); }
                 catch { _status.Text = "图片读取失败，已有图片保留。"; }
             }
+        }
+
+        // Drag data reaches us from arbitrary apps; never let a probing failure
+        // escape into the drag event.
+        private static bool HasDroppedImage(IDataObject data)
+        {
+            try { return ClipboardImages.HasImage(data); }
+            catch { return false; }
+        }
+
+        // Returns true when Ctrl+V was consumed as an image paste; false lets the
+        // TextBox paste text exactly as before.
+        private bool PasteClipboardImage()
+        {
+            IDataObject data = null;
+            for (int attempt = 0; attempt < 3 && data == null; attempt++)
+            {
+                try { data = Clipboard.GetDataObject(); }
+                catch (System.Runtime.InteropServices.ExternalException)
+                { if (attempt < 2) System.Threading.Thread.Sleep(40); }
+            }
+            if (data == null)
+            { _status.Text = "剪贴板正忙，请稍后重新粘贴。"; return true; }
+            try
+            {
+                if (ClipboardImages.HasImage(data)) { PasteImageData(data); return true; }
+                if (!data.GetDataPresent(DataFormats.FileDrop)) return false;
+                string[] copied = data.GetData(DataFormats.FileDrop) as string[];
+                if (copied == null || copied.Length == 0) return false;
+                string[] paths = copied.Where(IsImagePath).ToArray();
+                if (paths.Length == 0)
+                { _status.Text = "仅支持图片；请复制截图或 PNG/JPEG 图片。"; return true; }
+                if (paths.Length != copied.Length)
+                    _status.Text = "文档不会添加；已忽略非图片文件。";
+                AddImagePaths(paths);
+                return true;
+            }
+            catch
+            { _status.Text = "剪贴板读取失败，请重新复制图片。"; return true; }
         }
     }
 }
