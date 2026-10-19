@@ -48,5 +48,15 @@ if errorlevel 1 exit /b 1
 "%OUT%\ComposerPasteProbe.exe" "%APP%"
 if errorlevel 1 exit /b 1
 
+"%CSC%" /nologo /target:exe /out:"%OUT%\DesignProbe.exe" ^
+  /r:System.dll /r:System.Core.dll /r:System.Xaml.dll ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" ^
+  tests\DesignProbe.cs
+if errorlevel 1 exit /b 1
+"%OUT%\DesignProbe.exe" "%APP%"
+if errorlevel 1 exit /b 1
+
 echo Sharkey tests passed.
 endlocal

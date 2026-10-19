@@ -141,6 +141,7 @@ namespace GlobalTranslator
             Title = "鲨译 Sharkey";
             Width = 480;
             Height = 230;
+            Ui.ApplyWindow(this);
             MinWidth = 360;
             MinHeight = 160;
             SizeToContent = SizeToContent.Manual;

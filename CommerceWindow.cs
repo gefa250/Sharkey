@@ -106,7 +106,7 @@ namespace GlobalTranslator
             _openModelSettings = openModelSettings;
             Title = "鲨译 · 外贸沟通助手";
             Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(245, 250, 253));
-            FontFamily = new FontFamily("Microsoft YaHei UI");
+            Ui.ApplyWindow(this);
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             ResizeMode = ResizeMode.CanResize;
             FitToWorkArea();

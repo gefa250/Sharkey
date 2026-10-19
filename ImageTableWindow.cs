@@ -46,7 +46,7 @@ namespace GlobalTranslator
             MinWidth = 500; MinHeight = 360;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Background = new SolidColorBrush(Color.FromRgb(245, 249, 252));
-            FontFamily = new FontFamily("Microsoft YaHei UI"); FontSize = 14;
+            Ui.ApplyWindow(this);
             var root = new DockPanel { Margin = new Thickness(20) }; Content = root;
             var heading = new TextBlock { Text = "识图转表格", FontSize = 22, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) };
             DockPanel.SetDock(heading, Dock.Top); root.Children.Add(heading);

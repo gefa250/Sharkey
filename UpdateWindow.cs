@@ -39,7 +39,7 @@ namespace GlobalTranslator
             ResizeMode = ResizeMode.CanResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             Background = Brushes.White;
-            FontFamily = new FontFamily("Microsoft YaHei UI");
+            Ui.ApplyWindow(this);
 
             var root = new Grid { Margin = new Thickness(22) };
             root.RowDefinitions.Add(new RowDefinition

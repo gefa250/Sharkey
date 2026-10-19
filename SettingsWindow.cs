@@ -122,8 +122,7 @@ namespace GlobalTranslator
             ResizeMode = ResizeMode.CanResize;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : Canvas;
-            FontFamily = new FontFamily("Microsoft YaHei UI");
-            FontSize = 14;
+            Ui.ApplyWindow(this);
             KeyDown += SettingsWindowKeyDown;
             SizeChanged += SettingsWindowSizeChanged;
             IsVisibleChanged += SettingsVisibilityChanged;

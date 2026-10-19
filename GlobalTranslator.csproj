@@ -62,6 +62,9 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="VersionInfo.cs" />
+    <Compile Include="Ui\DesignSystem.cs" />
+    <Compile Include="Ui\Icons.cs" />
+    <Compile Include="Ui\Motion.cs" />
     <Compile Include="TextTools.cs" />
     <Compile Include="Communication.cs" />
     <Compile Include="CommerceTools.cs" />
