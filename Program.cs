@@ -582,18 +582,18 @@ namespace GlobalTranslator
 
         private void UpdateTrayLabels()
         {
-            if (_writingMenuItem != null) _writingMenuItem.Text = "外贸沟通助手  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
+            if (_writingMenuItem != null) _writingMenuItem.Text = "外贸沟通助手  ·  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
             if (_settingsMenuItem == null) return;
             _settingsMenuItem.Text =
-                "鲨译设置    " +
+                "设置  ·  " +
                 ParsedHotkey(
                     _settings.SettingsHotkey, "F10").Display;
             _translateMenuItem.Text =
-                "翻译当前选区    " +
+                "翻译选中文字  ·  " +
                 ParsedHotkey(
                     _settings.TranslateHotkey, "F8").Display;
             _ocrMenuItem.Text =
-                "截图 OCR 翻译    " +
+                "截图识别并翻译  ·  " +
                 ParsedHotkey(
                     _settings.OcrHotkey, "F9").Display;
             RefreshStartupMenu();

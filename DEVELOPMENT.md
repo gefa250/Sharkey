@@ -57,6 +57,15 @@ git worktree add ..\Sharkey-checkpoint 62d397d
 如需撤销已经提交的功能，先保证工作区干净，再使用 `git revert <提交号>` 创建反向提交。
 不要用 `git reset --hard` 清理还没有保存的修改。
 
+## 界面改动约定
+
+- 颜色、字号、圆角、间距一律取自 `Ui/DesignSystem.cs` 的 `Palette / Type / Radius / Space`，不要在窗口里写 `Brush("#RRGGBB")`；`DesignProbe` 会扫描已迁移文件并让硬编码颜色直接失败。
+- 新图标加到 `Ui/Icons.cs`，统一 16×16 网格与 1.6 描边；不要再用 `✦ ◈ ⌨` 这类符号字体或一次性 Path 字符串。
+- 按钮、输入框优先用 `Ui.PrimaryButton / SecondaryButton / GhostButton / IconButton`，已有按钮可以用 `Ui.Style(button, kind)` 补上 hover/pressed/focus/disabled 状态。
+- 布局用 `Ui.Space` 的 4/8/12/16/20/24/32 组合；正文行高约 1.55，阅读区宽度不超过 820px。
+- 改完界面先跑 `build.cmd` 与 `test.cmd`，再看 `tmp/tests/` 下 100/150/200% 渲染图；`DesignProbe` 还会校验 WCAG AA 对比度与 32px 点击区。
+- 探针里写死的模板部件名（`Chrome`、`CheckChrome`、`PART_ContentHost`）与字段名属于测试契约，改动需同步更新探针并在 CHANGELOG 说明原因。
+
 ## 版本与发布
 
 版本唯一来源为 `VersionInfo.cs`，当前正式版本为 `0.3.2`。
