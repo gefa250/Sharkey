@@ -18,7 +18,7 @@ namespace GlobalTranslator
             {
                 IsReadOnly = true, IsReadOnlyCaretVisible = true,
                 BorderThickness = new Thickness(0), Padding = new Thickness(0),
-                Background = Brushes.Transparent, FontSize = 15,
+                Background = Brushes.Transparent, FontSize = Ui.Type.Body + 1,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 IsDocumentEnabled = false
@@ -31,9 +31,11 @@ namespace GlobalTranslator
         {
             var document = new FlowDocument
             {
-                FontFamily = new FontFamily("Microsoft YaHei UI"), FontSize = 15,
-                Foreground = new SolidColorBrush(Color.FromRgb(35, 54, 67)),
-                PagePadding = new Thickness(0), LineHeight = 25,
+                FontFamily = Ui.Type.Family,
+                FontSize = Ui.Type.Body + 1,
+                Foreground = Ui.Palette.Ink,
+                PagePadding = new Thickness(0),
+                LineHeight = Ui.Type.Body + 12,
                 ColumnWidth = double.PositiveInfinity
             };
             string[] lines = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -59,28 +61,38 @@ namespace GlobalTranslator
                 }
                 if (line.StartsWith("```"))
                 {
-                    var code = new Paragraph { FontFamily = new FontFamily("Consolas"), FontSize = 13,
-                        Background = new SolidColorBrush(Color.FromRgb(240, 245, 248)),
-                        Padding = new Thickness(10), Margin = new Thickness(0, 8, 0, 12) };
+                    var code = new Paragraph
+                    {
+                        FontFamily = Ui.Type.Mono,
+                        FontSize = Ui.Type.BodySmall,
+                        Background = Ui.Palette.SurfaceSubtle,
+                        BorderBrush = Ui.Palette.Line,
+                        BorderThickness = new Thickness(3, 0, 0, 0),
+                        Padding = new Thickness(12, 9, 12, 9),
+                        Margin = new Thickness(0, 8, 0, 14),
+                        LineHeight = Ui.Type.BodySmall + 8
+                    };
                     for (i++; i < lines.Length && !lines[i].TrimStart().StartsWith("```"); i++)
                     { if (code.Inlines.Count > 0) code.Inlines.Add(new LineBreak()); code.Inlines.Add(new Run(lines[i])); }
                     document.Blocks.Add(code); continue;
                 }
                 var heading = Regex.Match(line, @"^(#{1,6})\s+(.+)$");
                 var item = Regex.Match(line, @"^(?:([-*+])\s+|(\d+[.)、])\s*)(.+)$");
-                var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 10) };
+                var paragraph = new Paragraph { Margin = new Thickness(0, 0, 0, 10), LineHeight = Ui.Type.Body + 12 };
+                Typography.SetNumeralAlignment(paragraph, FontNumeralAlignment.Tabular);
                 if (heading.Success)
                 {
-                    paragraph.FontSize = heading.Groups[1].Length <= 2 ? 18 : 16;
+                    paragraph.FontSize = heading.Groups[1].Length <= 2 ? Ui.Type.Subtitle + 2 : Ui.Type.Subtitle;
                     paragraph.FontWeight = FontWeights.SemiBold;
-                    paragraph.Margin = new Thickness(0, 14, 0, 9);
+                    paragraph.Margin = new Thickness(0, 14, 0, 8);
                     AddInline(paragraph, heading.Groups[2].Value);
                 }
                 else if (item.Success)
                 {
-                    paragraph.Margin = new Thickness(20, 0, 0, 6);
-                    paragraph.TextIndent = -18;
-                    paragraph.Inlines.Add(new Run(item.Groups[2].Success ? item.Groups[2].Value + "  " : "•  "));
+                    paragraph.Margin = new Thickness(18, 0, 0, 6);
+                    paragraph.TextIndent = -16;
+                    paragraph.Inlines.Add(new Run(item.Groups[2].Success ? item.Groups[2].Value + "  " : "•  ")
+                    { Foreground = Ui.Palette.InkMuted });
                     AddInline(paragraph, item.Groups[3].Value);
                 }
                 else AddInline(paragraph, line);
@@ -120,7 +132,12 @@ namespace GlobalTranslator
             {
                 if (match.Index > start) paragraph.Inlines.Add(new Run(text.Substring(start, match.Index - start)));
                 if (match.Groups[1].Success) paragraph.Inlines.Add(new Bold(new Run(match.Groups[1].Value)));
-                else paragraph.Inlines.Add(new Run(match.Groups[2].Value) { FontFamily = new FontFamily("Consolas") });
+                else paragraph.Inlines.Add(new Run(match.Groups[2].Value)
+                {
+                    FontFamily = Ui.Type.Mono,
+                    Background = Ui.Palette.SurfaceSubtle,
+                    FontSize = Ui.Type.Body
+                });
                 start = match.Index + match.Length;
             }
             if (start < text.Length) paragraph.Inlines.Add(new Run(text.Substring(start)));
@@ -140,18 +157,25 @@ namespace GlobalTranslator
         private static void AddRow(TableRowGroup group, string[] values, int columns, bool header, int index)
         {
             var row = new TableRow();
-            row.Background = new SolidColorBrush(header ? Color.FromRgb(227, 240, 246) :
-                index % 2 == 0 ? Colors.White : Color.FromRgb(247, 250, 252));
+            row.Background = header ? Ui.Palette.SurfaceSubtle : Brushes.Transparent;
             for (int i = 0; i < columns; i++)
             {
-                var paragraph = new Paragraph { Margin = new Thickness(0), LineHeight = 24 };
+                var paragraph = new Paragraph
+                {
+                    Margin = new Thickness(0),
+                    LineHeight = Ui.Type.Body + 10,
+                    FontSize = header ? Ui.Type.Meta : Ui.Type.Body,
+                    Foreground = header ? Ui.Palette.InkMuted : Ui.Palette.Ink,
+                    FontWeight = header ? FontWeights.SemiBold : FontWeights.Normal
+                };
+                Typography.SetNumeralAlignment(paragraph, FontNumeralAlignment.Tabular);
                 AddInline(paragraph, i == columns - 1 && values.Length > columns ?
                     string.Join(" | ", values.Skip(i)) : i < values.Length ? values[i] : "");
                 row.Cells.Add(new TableCell(paragraph)
                 {
-                    Padding = new Thickness(10, 8, 10, 8),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(213, 226, 233)), BorderThickness = new Thickness(.5),
-                    FontWeight = header ? FontWeights.SemiBold : FontWeights.Normal
+                    Padding = new Thickness(12, 9, 12, 9),
+                    BorderBrush = header ? Ui.Palette.LineStrong : Ui.Palette.Line,
+                    BorderThickness = new Thickness(0, 0, 0, header ? 1.5 : 1)
                 });
             }
             group.Rows.Add(row);

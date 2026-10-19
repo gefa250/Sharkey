@@ -69,6 +69,8 @@ namespace GlobalTranslator
             internal static readonly Brush Danger = HighContrast ? SystemColors.WindowTextBrush : Hex("#B83C3C");
             internal static readonly Brush DangerTint = HighContrast ? SystemColors.ControlBrush : Hex("#FBEDED");
             internal static readonly Brush Focus = HighContrast ? SystemColors.HighlightBrush : Hex("#7FC7DA");
+            internal static readonly Brush Thumb = HighContrast ? SystemColors.ScrollBarBrush : Hex("#C6D6DE");
+            internal static readonly Brush ThumbHover = HighContrast ? SystemColors.HighlightBrush : Hex("#AFC4CF");
 
             internal static readonly Brush Shadow = Hex("#0A2836");
 
@@ -150,6 +152,8 @@ namespace GlobalTranslator
             window.FontSize = Type.Body;
             window.UseLayoutRounding = true;
             window.Resources[typeof(Button)] = ImplicitButtonStyle();
+            window.Resources[typeof(ScrollBar)] = ImplicitScrollBarStyle();
+            window.Resources[typeof(Thumb)] = ImplicitThumbStyle();
             if (!window.Resources.Contains(typeof(ToolTip)))
                 window.Resources[typeof(ToolTip)] = ImplicitToolTipStyle();
         }
@@ -158,6 +162,28 @@ namespace GlobalTranslator
         {
             if (window == null) return;
             window.Resources[typeof(TextBox)] = ImplicitTextBoxStyle();
+        }
+
+        // Re-skin a button that already exists (its Click handlers stay attached).
+        internal static void Style(Button button, ButtonKind kind)
+        {
+            if (button == null) return;
+            button.Template = ButtonTemplate(kind);
+            button.FocusVisualStyle = null;
+        }
+
+        // Borderless text box for a composer that draws its own focus ring.
+        internal static ControlTemplate PlainTextBoxTemplate()
+        {
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            chrome.SetValue(Border.BorderThicknessProperty, new Thickness(0));
+            var host = new FrameworkElementFactory(typeof(ScrollViewer));
+            host.Name = "PART_ContentHost";
+            host.SetBinding(FrameworkElement.MarginProperty, Templated("Padding"));
+            host.SetValue(UIElement.FocusableProperty, false);
+            chrome.AppendChild(host);
+            return new ControlTemplate(typeof(TextBox)) { VisualTree = chrome };
         }
 
         // -------------------------------------------------------------- styles
@@ -198,6 +224,43 @@ namespace GlobalTranslator
             style.Setters.Add(new Setter(Control.ForegroundProperty,
                 SystemParameters.HighContrast ? SystemColors.InfoTextBrush : Brushes.White));
             style.Setters.Add(new Setter(Control.TemplateProperty, ToolTipTemplate()));
+            return style;
+        }
+
+        internal static Style ImplicitScrollBarStyle()
+        {
+            var style = new Style(typeof(ScrollBar));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(Control.FocusableProperty, false));
+            var vertical = new Trigger { Property = ScrollBar.OrientationProperty, Value = Orientation.Vertical };
+            vertical.Setters.Add(new Setter(FrameworkElement.WidthProperty, 10.0));
+            style.Triggers.Add(vertical);
+            var horizontal = new Trigger { Property = ScrollBar.OrientationProperty, Value = Orientation.Horizontal };
+            horizontal.Setters.Add(new Setter(FrameworkElement.HeightProperty, 10.0));
+            style.Triggers.Add(horizontal);
+            return style;
+        }
+
+        internal static Style ImplicitThumbStyle()
+        {
+            var style = new Style(typeof(Thumb));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, Palette.Thumb));
+            style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0)));
+            var template = new ControlTemplate(typeof(Thumb));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "ThumbChrome";
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(5));
+            chrome.SetBinding(Border.BackgroundProperty, Templated("Background"));
+            template.VisualTree = chrome;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, Palette.ThumbHover));
+            style.Triggers.Add(hover);
+            var dragging = new Trigger { Property = Thumb.IsDraggingProperty, Value = true };
+            dragging.Setters.Add(new Setter(Control.BackgroundProperty, Palette.Brand));
+            style.Triggers.Add(dragging);
             return style;
         }
 
@@ -574,6 +637,80 @@ namespace GlobalTranslator
             var render = new FrameworkElementFactory(typeof(ContentPresenter));
             border.AppendChild(render);
             return new ControlTemplate(typeof(ToolTip)) { VisualTree = border };
+        }
+
+        // Disclosure row used by the F7 details panel: one chevron, no stock
+        // Expander chrome, so it matches the rest of the surface.
+        internal static ControlTemplate ExpanderTemplate()
+        {
+            var root = new FrameworkElementFactory(typeof(StackPanel));
+
+            var toggle = new FrameworkElementFactory(typeof(ToggleButton));
+            toggle.Name = "Toggle";
+            toggle.SetValue(Control.BackgroundProperty, Brushes.Transparent);
+            toggle.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+            toggle.SetValue(Control.PaddingProperty, new Thickness(0, 6, 0, 6));
+            toggle.SetValue(Control.CursorProperty, Cursors.Hand);
+            toggle.SetValue(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch);
+            toggle.SetValue(Control.FocusVisualStyleProperty, null);
+            toggle.SetBinding(ToggleButton.IsCheckedProperty, new Binding("IsExpanded")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.TemplatedParent),
+                Mode = BindingMode.TwoWay
+            });
+
+            var toggleTemplate = new ControlTemplate(typeof(ToggleButton));
+            var surface = new FrameworkElementFactory(typeof(Border));
+            surface.Name = "Surface";
+            surface.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            surface.SetValue(Border.CornerRadiusProperty, new CornerRadius(Radius.Control - 2));
+            var row = new FrameworkElementFactory(typeof(DockPanel));
+            row.SetValue(FrameworkElement.MarginProperty, new Thickness(-6, 0, 0, 0));
+            var chevron = new FrameworkElementFactory(typeof(Path));
+            chevron.Name = "Chevron";
+            chevron.SetValue(Path.DataProperty, Icons.ChevronDown);
+            chevron.SetValue(Shape.StrokeProperty, Palette.InkMuted);
+            chevron.SetValue(Shape.StrokeThicknessProperty, 1.6);
+            chevron.SetValue(Shape.StrokeStartLineCapProperty, PenLineCap.Round);
+            chevron.SetValue(Shape.StrokeEndLineCapProperty, PenLineCap.Round);
+            chevron.SetValue(FrameworkElement.WidthProperty, 14.0);
+            chevron.SetValue(FrameworkElement.HeightProperty, 14.0);
+            chevron.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 0, 6, 0));
+            chevron.SetValue(UIElement.RenderTransformOriginProperty, new Point(0.5, 0.5));
+            chevron.SetValue(UIElement.RenderTransformProperty, new RotateTransform(-90));
+            chevron.SetValue(DockPanel.DockProperty, Dock.Left);
+            row.AppendChild(chevron);
+            var headerPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            headerPresenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            headerPresenter.SetBinding(ContentPresenter.ContentProperty,
+                Templated("Header"));
+            row.AppendChild(headerPresenter);
+            surface.AppendChild(row);
+            toggleTemplate.VisualTree = surface;
+            var expanded = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+            expanded.Setters.Add(new Setter(UIElement.RenderTransformProperty,
+                new RotateTransform(0), "Chevron"));
+            toggleTemplate.Triggers.Add(expanded);
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, Palette.SurfaceHover, "Surface"));
+            toggleTemplate.Triggers.Add(hover);
+            toggle.SetValue(Control.TemplateProperty, toggleTemplate);
+            root.AppendChild(toggle);
+
+            var body = new FrameworkElementFactory(typeof(Border));
+            body.Name = "Body";
+            body.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed);
+            body.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 4, 0, 0));
+            var bodyPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            bodyPresenter.SetBinding(ContentPresenter.ContentProperty, Templated("Content"));
+            body.AppendChild(bodyPresenter);
+            root.AppendChild(body);
+
+            var template = new ControlTemplate(typeof(Expander)) { VisualTree = root };
+            var open = new Trigger { Property = Expander.IsExpandedProperty, Value = true };
+            open.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "Body"));
+            template.Triggers.Add(open);
+            return template;
         }
 
         // -------------------------------------------------------------- helpers

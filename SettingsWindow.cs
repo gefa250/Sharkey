@@ -1914,12 +1914,12 @@ namespace GlobalTranslator
 
         private void InstallRoundedControlStyles()
         {
-            Resources.Add(typeof(ComboBox), CreateComboBoxStyle());
-            Resources.Add(typeof(TextBox), CreateTextBoxStyle());
-            Resources.Add(typeof(PasswordBox), CreatePasswordBoxStyle());
-            Resources.Add(typeof(CheckBox), CreateCheckBoxStyle());
-            Resources.Add(typeof(ScrollBar), CreateScrollBarStyle());
-            Resources.Add(typeof(Thumb), CreateScrollThumbStyle());
+            Resources[typeof(ComboBox)] = CreateComboBoxStyle();
+            Resources[typeof(TextBox)] = CreateTextBoxStyle();
+            Resources[typeof(PasswordBox)] = CreatePasswordBoxStyle();
+            Resources[typeof(CheckBox)] = CreateCheckBoxStyle();
+            Resources[typeof(ScrollBar)] = CreateScrollBarStyle();
+            Resources[typeof(Thumb)] = CreateScrollThumbStyle();
         }
 
         internal static Style CreateComboBoxStyle()

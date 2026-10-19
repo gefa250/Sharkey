@@ -200,6 +200,30 @@ internal static class ComposerPasteProbe
             handled = Drop(input, textDrop);
             Check(!handled && images.Count == 0, "text drop was stolen from the TextBox");
 
+            // The context menu exposes image paste because WPF's own Paste item
+            // stays disabled for an image-only clipboard.
+            Clipboard.Clear(); Clipboard.SetImage(Quote());
+            images.Clear(); input.Text = ""; status.Text = "";
+            ContextMenu menu = input.ContextMenu;
+            Check(menu != null, "composer has no context menu");
+            MenuItem pasteImage = null;
+            MenuItem pasteText = null;
+            foreach (MenuItem item in menu.Items.OfType<MenuItem>())
+            {
+                if ((string)item.Header == "粘贴图片") pasteImage = item;
+                if ((string)item.Header == "粘贴") pasteText = item;
+            }
+            Check(pasteImage != null && pasteText != null, "context menu lost paste entries");
+            menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            Check(pasteImage.IsEnabled && !pasteText.IsEnabled, "image clipboard did not gate the menu");
+            pasteImage.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            PumpFor(60);
+            Check(images.Count == 1, "context-menu image paste did nothing");
+            Clipboard.Clear(); Clipboard.SetText("menu-text");
+            images.Clear();
+            menu.RaiseEvent(new RoutedEventArgs(ContextMenu.OpenedEvent));
+            Check(pasteText.IsEnabled && !pasteImage.IsEnabled, "text clipboard did not gate the menu");
+
             // Real keystroke, only when the probe window owns the foreground.
             Clipboard.Clear(); Clipboard.SetImage(Quote());
             images.Clear(); input.Text = ""; status.Text = "";

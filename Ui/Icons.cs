@@ -37,6 +37,11 @@ namespace GlobalTranslator
             "M 11.9,8 A 1.1,1.1 0 1 1 14.1,8 A 1.1,1.1 0 1 1 11.9,8");
         internal static readonly Geometry Sidebar = Geometry.Parse(
             "M 1.6,2.6 L 14.4,2.6 L 14.4,13.4 L 1.6,13.4 Z M 6,2.6 L 6,13.4");
+        internal static readonly Geometry List = Geometry.Parse(
+            "M 1.9,4 A 1.1,1.1 0 1 1 4.1,4 A 1.1,1.1 0 1 1 1.9,4 " +
+            "M 1.9,8 A 1.1,1.1 0 1 1 4.1,8 A 1.1,1.1 0 1 1 1.9,8 " +
+            "M 1.9,12 A 1.1,1.1 0 1 1 4.1,12 A 1.1,1.1 0 1 1 1.9,12 " +
+            "M 6,4 L 14,4 M 6,8 L 14,8 M 6,12 L 14,12");
         internal static readonly Geometry Trash = Geometry.Parse(
             "M 2.6,4.4 L 13.4,4.4 M 6,4.4 L 6,2.4 L 10,2.4 L 10,4.4 " +
             "M 4.1,4.4 L 4.9,13.6 L 11.1,13.6 L 11.9,4.4 M 6.6,7 L 6.6,11 M 9.4,7 L 9.4,11");

@@ -32,15 +32,17 @@ namespace GlobalTranslator
         private readonly TextBlock _staleNotice = new TextBlock
         {
             Text = "材料已更改，回复尚未更新",
-            Foreground = new SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(143, 91, 29)),
+            Foreground = Ui.Palette.Warning,
+            FontSize = Ui.Type.Meta,
+            Margin = new Thickness(0, 0, 0, 6),
             Visibility = Visibility.Collapsed
         };
         private readonly TextBlock _editNotice = new TextBlock
         {
             Text = "回复已编辑；中文释义为生成时版本",
-            Foreground = new SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(87, 111, 124)),
+            Foreground = Ui.Palette.InkMuted,
+            FontSize = Ui.Type.Meta,
+            Margin = new Thickness(0, 0, 0, 6),
             Visibility = Visibility.Collapsed
         };
         private TextBlock _adjustmentLabel;
@@ -63,9 +65,8 @@ namespace GlobalTranslator
             { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 6) };
         private readonly TextBlock _modelSummary = new TextBlock
         {
-            FontSize = 11.5,
-            Foreground = new SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(101, 124, 135))
+            FontSize = Ui.Type.Meta,
+            Foreground = Ui.Palette.InkMuted
         };
         private readonly TextBlock _emptyResult = new TextBlock
         {
@@ -1173,21 +1174,49 @@ namespace GlobalTranslator
                 for (int i = 0; i < _images.Count; i++)
                 {
                     int index = i;
-                    var tile = new WrapPanel { Margin = new Thickness(0, 0, 5, 5),
-                        Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(244, 249, 251)) };
-                    var preview = new Image { Source = PreviewSource(_images[index]), Width = 64,
-                        Height = 44, Stretch = Stretch.Uniform, Margin = new Thickness(3), ToolTip = "查看图片", Cursor = Cursors.Hand };
+                    var tile = new Grid
+                    {
+                        Width = 80,
+                        Height = 62,
+                        Margin = new Thickness(0, 0, 8, 8),
+                        ToolTip = "查看图片"
+                    };
+                    var frame = new Border
+                    {
+                        Background = Ui.Palette.SurfaceSubtle,
+                        BorderBrush = Ui.Palette.Line,
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(10)
+                    };
+                    var preview = new Image
+                    {
+                        Source = PreviewSource(_images[index]),
+                        Width = 78,
+                        Height = 60,
+                        Stretch = Stretch.UniformToFill,
+                        Cursor = Cursors.Hand
+                    };
+                    preview.Clip = new RectangleGeometry(new Rect(0, 0, 78, 60), 9, 9);
+                    frame.Child = preview;
                     preview.MouseLeftButtonUp += delegate { ShowImage(index); };
-                    tile.Children.Add(preview);
-                    var remove = Action("×", delegate { _images.RemoveAt(index); OnMaterialChanged(); RefreshImages(); });
-                    remove.Width = 24; remove.MinHeight = 24; remove.Height = 24; remove.Padding = new Thickness(0);
-                    remove.ToolTip = "移除图片"; tile.Children.Add(remove);
+                    tile.Children.Add(frame);
+                    Button remove = Ui.IconButton(Icons.Close, "移除图片", 20);
+                    remove.HorizontalAlignment = HorizontalAlignment.Right;
+                    remove.VerticalAlignment = VerticalAlignment.Top;
+                    remove.Margin = new Thickness(0, 2, 2, 0);
+                    remove.Background = Ui.Palette.Surface;
+                    remove.BorderBrush = Ui.Palette.Line;
+                    remove.BorderThickness = new Thickness(1);
+                    Panel.SetZIndex(remove, 1);
+                    remove.Click += delegate { _images.RemoveAt(index); OnMaterialChanged(); RefreshImages(); };
+                    tile.Children.Add(remove);
                     var menu = new ContextMenu();
                     var up = new MenuItem { Header = "向前移动" };
                     up.Click += delegate { MoveImage(index, -1); };
                     var down = new MenuItem { Header = "向后移动" };
                     down.Click += delegate { MoveImage(index, 1); };
-                    menu.Items.Add(up); menu.Items.Add(down); tile.ContextMenu = menu;
+                    menu.Items.Add(up); menu.Items.Add(down);
+                    tile.ContextMenu = menu;
                     _imageList.Children.Add(tile);
                 }
                 return;
