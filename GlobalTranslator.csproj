@@ -59,6 +59,7 @@
   </ItemGroup>
   <ItemGroup>
     <Resource Include="assets\shark-logo.png" />
+    <Resource Include="assets\shark-logo.ico" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="VersionInfo.cs" />

@@ -830,6 +830,24 @@ namespace GlobalTranslator
 
         private static Icon LoadTrayIcon()
         {
+            // Prefer the multi-size icon so the tray gets a crisp 16/24px drawing
+            // instead of a blurred downscale of the 256px artwork.
+            try
+            {
+                var iconResource = Application.GetResourceStream(
+                    new Uri("pack://application:,,,/assets/shark-logo.ico"));
+                if (iconResource != null)
+                {
+                    using (iconResource.Stream)
+                    {
+                        int size = System.Windows.Forms.SystemInformation.SmallIconSize.Width;
+                        using (var sized = new Icon(iconResource.Stream, size, size))
+                            return (Icon)sized.Clone();
+                    }
+                }
+            }
+            catch { /* Fall back to the PNG below. */ }
+
             IntPtr handle = IntPtr.Zero;
             try
             {
