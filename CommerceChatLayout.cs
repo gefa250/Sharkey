@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace GlobalTranslator
 {
@@ -43,7 +44,31 @@ namespace GlobalTranslator
         private TextBlock _contextNotice;
         private int _editingTurnIndex = -1;
         private string _editingDraft = "";
+        private string _chatMode = "trade";
+        private ToggleButton _fetchToggle;
+        private WrapPanel _toolStrip;
+        private StackPanel _sourceList;
+        private FrameworkElement _modeSwitch;
+        private StackPanel _headerActions;
+        private WrapPanel _suggestionCards;
+        private StackPanel _meaningSection;
+        private StackPanel _adviceSection;
+        private StackPanel _sourcesSection;
+        private TextBlock _emptyTitle;
+        private TextBlock _emptySubtitle;
+        private readonly List<CommerceToolActivity> _currentActivities = new List<CommerceToolActivity>();
+        private DispatcherTimer _streamTimer;
+        private Button _scrollToEnd;
+        private string _streamedText = "";
+        private string _pendingPartial = "";
         private int TopicStart { get { return (_session.TopicBreaks ?? new int[0]).LastOrDefault(); } }
+
+        internal string CurrentMode { get { return _chatMode; } }
+
+        private bool FetchAllowed
+        {
+            get { return _fetchToggle != null && _fetchToggle.IsChecked == true; }
+        }
 
         private bool SearchAllowed
         {
@@ -296,6 +321,281 @@ namespace GlobalTranslator
 
         // -------------------------------------------------------------- header
 
+        private FrameworkElement BuildModeSwitch()
+        {
+            return Ui.Segmented(new[] { "外贸", "通用" }, _chatMode == "general" ? 1 : 0,
+                delegate(int index) { SetChatMode(index == 1 ? "general" : "trade"); });
+        }
+
+        private void SetChatMode(string mode)
+        {
+            _chatMode = string.Equals(mode, "general", StringComparison.OrdinalIgnoreCase)
+                ? "general" : "trade";
+            if (_session != null) _session.Mode = _chatMode;
+            if (_modeSwitch != null && _headerActions != null)
+            {
+                int index = _headerActions.Children.IndexOf(_modeSwitch);
+                if (index >= 0)
+                {
+                    _headerActions.Children.RemoveAt(index);
+                    _modeSwitch = BuildModeSwitch();
+                    _modeSwitch.Margin = new Thickness(0, 0, 8, 0);
+                    _headerActions.Children.Insert(index, _modeSwitch);
+                }
+            }
+            UpdateModeUi();
+            ScheduleSave();
+        }
+
+        private void UpdateModeUi()
+        {
+            bool general = _chatMode == "general";
+            if (_fetchToggle != null)
+                _fetchToggle.Visibility = general ? Visibility.Visible : Visibility.Collapsed;
+            if (_detailsExpander != null)
+                _detailsExpander.Header = DetailHeader(general
+                    ? "计算与来源" : "中文对照与核对信息");
+            if (_meaningSection != null)
+                _meaningSection.Visibility = general ? Visibility.Collapsed : Visibility.Visible;
+            if (_adviceSection != null)
+                _adviceSection.Visibility = general ? Visibility.Collapsed : Visibility.Visible;
+            if (_sourcesSection != null)
+                _sourcesSection.Visibility = general ? Visibility.Collapsed : Visibility.Visible;
+            UpdateSuggestionCards();
+            UpdateChatSubtitle();
+            UpdateChatResult();
+        }
+
+        private void UpdateSuggestionCards()
+        {
+            if (_suggestionCards == null) return;
+            bool general = _chatMode == "general";
+            _suggestionCards.Children.Clear();
+            if (general)
+            {
+                _suggestionCards.Children.Add(SuggestionCard(Icons.Clock, "现在几点",
+                    "纽约、洛杉矶、芝加哥当前时间",
+                    "现在纽约、洛杉矶、芝加哥分别是几点？", ""));
+                _suggestionCards.Children.Add(SuggestionCard(Icons.Globe, "查汇率",
+                    "美元兑人民币当前汇率",
+                    "今天美元兑人民币汇率是多少？给出数值、日期和来源。", ""));
+                _suggestionCards.Children.Add(SuggestionCard(Icons.Edit, "改一段话",
+                    "更专业、更简短",
+                    "帮我把下面这段话改得更专业、更简短：", ""));
+            }
+            else
+            {
+                _suggestionCards.Children.Add(SuggestionCard(Icons.List, "整理询盘", "列出已知需求与待确认信息",
+                    "请整理这份询盘，列出已知需求、待确认信息和简短追问；不要猜测。", "inquiry"));
+                _suggestionCards.Children.Add(SuggestionCard(Icons.Table, "对比报价", "逐项比较单价、交期与费用",
+                    "请比较这些报价的单价、币种、起订量、交期和费用包含范围；列出不能直接比较的项目。", "quote"));
+                _suggestionCards.Children.Add(SuggestionCard(Icons.Refresh, "核对变更", "找出新增、删除与改动项",
+                    "请比较前后两版客户要求，列出新增、删除和变更项目，以及需要重新确认的报价或交期。", "change"));
+            }
+            if (_emptyTitle != null)
+                _emptyTitle.Text = general ? "有什么可以帮你？" : "把客户消息和截图，变成可以直接发的回复";
+            if (_emptySubtitle != null)
+                _emptySubtitle.Text = general
+                    ? "直接问，涉及实时信息时会先检索再回答。"
+                    : "粘贴客户消息或截图，也可以从下面的常用任务开始。";
+        }
+
+        private void BeginStreaming()
+        {
+            _streamedText = "";
+            _pendingPartial = "";
+            if (_streamTimer != null) _streamTimer.Stop();
+            if (_chatLayout && _chatAnswer != null) ChatReadingView.SetText(_chatAnswer, "");
+            _renderedAnswer = _result == null ? "" : _result.Text;
+        }
+
+        private void ReportPartialReply(string text)
+        {
+            if (!_chatLayout) return;
+            if (!Dispatcher.CheckAccess())
+            {
+                Dispatcher.BeginInvoke(new Action<string>(ReportPartialReply), text);
+                return;
+            }
+            _pendingPartial = text ?? "";
+            if (_streamTimer == null)
+            {
+                _streamTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(110) };
+                _streamTimer.Tick += delegate { FlushStreaming(); };
+            }
+            if (!_streamTimer.IsEnabled) _streamTimer.Start();
+        }
+
+        private void FlushStreaming()
+        {
+            if (_chatAnswer == null || _pendingPartial == _streamedText) return;
+            _streamedText = _pendingPartial;
+            ChatReadingView.SetText(_chatAnswer, _streamedText + " ▍");
+            _chatAnswer.Visibility = Visibility.Visible;
+            if (_chatResultCard != null) _chatResultCard.Visibility = Visibility.Visible;
+            if (IsNearBottom()) ScrollChatToEnd();
+        }
+
+        private void EndStreaming()
+        {
+            if (_streamTimer != null) _streamTimer.Stop();
+            if (string.IsNullOrEmpty(_result.Text) && _chatAnswer != null && _streamedText.Length > 0)
+            {
+                ChatReadingView.SetText(_chatAnswer, "");
+                _streamedText = "";
+            }
+        }
+
+        private void ScrollChatToEnd()
+        {
+            if (_chatScroll != null) _chatScroll.ScrollToEnd();
+        }
+
+        private bool IsNearBottom()
+        {
+            return _chatScroll == null ||
+                _chatScroll.ScrollableHeight - _chatScroll.VerticalOffset < 48;
+        }
+
+        private void UpdateScrollButton()
+        {
+            if (_scrollToEnd == null || _chatScroll == null) return;
+            bool away = _chatScroll.ScrollableHeight - _chatScroll.VerticalOffset > 64;
+            _scrollToEnd.Visibility = away ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void AutoGrowComposer()
+        {
+            if (_intent == null) return;
+            double width = _intent.ActualWidth > 0 ? _intent.ActualWidth : 640;
+            _intent.Measure(new Size(width, double.PositiveInfinity));
+            double wanted = Math.Max(52, Math.Min(180, _intent.DesiredSize.Height + 6));
+            if (Math.Abs(_intent.Height - wanted) > 0.5) _intent.Height = wanted;
+        }
+
+        private void ReportToolActivity(CommerceToolActivity activity)
+        {
+            if (activity == null) return;
+            Action update = delegate
+            {
+                if (!_currentActivities.Contains(activity)) _currentActivities.Add(activity);
+                RenderToolStrip();
+            };
+            if (Dispatcher.CheckAccess()) update();
+            else Dispatcher.BeginInvoke(update);
+        }
+
+        private void RenderToolStrip()
+        {
+            if (_toolStrip == null) return;
+            _toolStrip.Children.Clear();
+            foreach (CommerceToolActivity activity in _currentActivities)
+                _toolStrip.Children.Add(ToolChip(activity));
+            _toolStrip.Visibility = _currentActivities.Count == 0
+                ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        private FrameworkElement ToolChip(CommerceToolActivity activity)
+        {
+            bool failed = string.Equals(activity.Status, "failed", StringComparison.Ordinal);
+            bool running = string.Equals(activity.Status, "running", StringComparison.Ordinal);
+            Brush foreground = failed ? Ui.Palette.Danger : running ? Ui.Palette.InkMuted : Ui.Palette.BrandText;
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            FrameworkElement glyph = Ui.Glyph(running ? Icons.Sparkle : failed ? Icons.Alert : Icons.Check,
+                foreground, 12, 1.6);
+            glyph.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(glyph);
+            string text = activity.Label;
+            if (!string.IsNullOrWhiteSpace(activity.Query))
+            {
+                string query = activity.Query.Trim();
+                query = query.Replace(",", "、").Replace("，", "、");
+                text += " · " + (query.Length > 22 ? query.Substring(0, 22) + "…" : query);
+            }
+            TextBlock label = Ui.Text(text, Ui.Type.Caption, foreground);
+            label.Margin = new Thickness(5, 0, 0, 0);
+            label.VerticalAlignment = VerticalAlignment.Center;
+            row.Children.Add(label);
+            var chip = new Border
+            {
+                Background = failed ? Ui.Palette.DangerTint : Ui.Palette.SurfaceSubtle,
+                BorderBrush = Ui.Palette.Line,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(999),
+                Padding = new Thickness(9, 3, 9, 3),
+                Margin = new Thickness(0, 0, 6, 6),
+                ToolTip = string.IsNullOrWhiteSpace(activity.Summary) ? null : activity.Summary,
+                Child = row
+            };
+            return chip;
+        }
+
+        private void RenderSources()
+        {
+            if (_sourceList == null) return;
+            _sourceList.Children.Clear();
+            SourceItem[] items = _lastResult == null || _lastResult.SourceItems == null
+                ? new SourceItem[0] : _lastResult.SourceItems;
+            bool show = _chatMode == "general" && items.Length > 0;
+            if (!show)
+            {
+                _sourceList.Visibility = Visibility.Collapsed;
+                return;
+            }
+            _sourceList.Children.Add(Ui.SectionHeader("来源"));
+            foreach (SourceItem item in items.Take(5))
+                _sourceList.Children.Add(SourceLink(item));
+            _sourceList.Visibility = Visibility.Visible;
+        }
+
+        private FrameworkElement SourceLink(SourceItem item)
+        {
+            string host = item.Url;
+            try { host = new Uri(item.Url).Host; } catch { }
+            var text = new StackPanel();
+            TextBlock domain = Ui.Text(host, Ui.Type.Caption, Ui.Palette.InkFaint);
+            text.Children.Add(domain);
+            TextBlock title = Ui.Text(string.IsNullOrWhiteSpace(item.Title) ? item.Url : item.Title,
+                Ui.Type.BodySmall, Ui.Palette.Ink);
+            title.TextTrimming = TextTrimming.CharacterEllipsis;
+            title.TextWrapping = TextWrapping.NoWrap;
+            text.Children.Add(title);
+            var card = new Border
+            {
+                Background = Brushes.Transparent,
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(8, 6, 12, 6),
+                Margin = new Thickness(0, 0, 0, 2),
+                Cursor = Cursors.Hand,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                MaxWidth = 620,
+                ToolTip = item.Url,
+                Child = text
+            };
+            card.MouseEnter += delegate { card.Background = Ui.Palette.SurfaceSubtle; };
+            card.MouseLeave += delegate { card.Background = Brushes.Transparent; };
+            card.MouseLeftButtonUp += delegate { OpenLink(item.Url); };
+            return card;
+        }
+
+        private void OpenLink(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+            Uri uri;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            {
+                _status.Text = "只支持打开 http/https 链接。";
+                return;
+            }
+            if (MessageBox.Show(this, "在浏览器中打开？\n\n" + url, "打开链接",
+                MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            { FileName = uri.AbsoluteUri, UseShellExecute = true }); }
+            catch (Exception error) { _status.Text = "无法打开链接：" + error.Message; }
+        }
+
         private FrameworkElement BuildChatHeader()
         {
             var header = new Border
@@ -323,8 +623,13 @@ namespace GlobalTranslator
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            _headerActions = actions;
             Grid.SetColumn(actions, 1);
             grid.Children.Add(actions);
+
+            _modeSwitch = BuildModeSwitch();
+            _modeSwitch.Margin = new Thickness(0, 0, 8, 0);
+            actions.Children.Add(_modeSwitch);
 
             Detach(_modelSummary);
             _modelSummary.FontSize = Ui.Type.Meta;
@@ -388,6 +693,17 @@ namespace GlobalTranslator
             };
             _chatScroll.Content = _chatFeed;
             host.Children.Add(_chatScroll);
+            _scrollToEnd = Ui.GhostButton("回到底部");
+            _scrollToEnd.HorizontalAlignment = HorizontalAlignment.Center;
+            _scrollToEnd.VerticalAlignment = VerticalAlignment.Bottom;
+            _scrollToEnd.Margin = new Thickness(0, 0, 0, 14);
+            _scrollToEnd.Padding = new Thickness(12, 4, 12, 4);
+            _scrollToEnd.MinHeight = 30;
+            _scrollToEnd.Visibility = Visibility.Collapsed;
+            _scrollToEnd.Click += delegate { ScrollChatToEnd(); };
+            Panel.SetZIndex(_scrollToEnd, 2);
+            host.Children.Add(_scrollToEnd);
+            _chatScroll.ScrollChanged += delegate { UpdateScrollButton(); };
 
             _emptyState = BuildEmptyState();
             _emptyState.HorizontalAlignment = HorizontalAlignment.Center;
@@ -419,12 +735,23 @@ namespace GlobalTranslator
             result.Children.Add(_editNotice);
             Detach(_emptyResult);
 
+            _toolStrip = new WrapPanel
+            {
+                Margin = new Thickness(0, 0, 0, 8),
+                Visibility = Visibility.Collapsed
+            };
+            result.Children.Add(_toolStrip);
+
             _chatAnswer = ChatReadingView.Create("");
+            _chatAnswer.MaxWidth = 820;
+            _chatAnswer.HorizontalAlignment = HorizontalAlignment.Left;
             result.Children.Add(_chatAnswer);
 
             Detach(_result);
             _result.Height = double.NaN;
             _result.MinHeight = 90;
+            _result.MaxWidth = 820;
+            _result.HorizontalAlignment = HorizontalAlignment.Left;
             _result.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
             _result.Style = SettingsWindow.CreateTextBoxStyle();
             result.Children.Add(_result);
@@ -471,6 +798,13 @@ namespace GlobalTranslator
             resultActions.Children.Add(_sourceBadge);
             result.Children.Add(resultActions);
 
+            _sourceList = new StackPanel
+            {
+                Margin = new Thickness(0, 10, 0, 0),
+                Visibility = Visibility.Collapsed
+            };
+            result.Children.Add(_sourceList);
+
             var separator = Ui.Divider();
             separator.Margin = new Thickness(0, 10, 0, 0);
             result.Children.Add(separator);
@@ -482,17 +816,21 @@ namespace GlobalTranslator
             };
             var detailBody = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
             _detailsExpander.Content = detailBody;
-            detailBody.Children.Add(Ui.SectionHeader("中文对照"));
+            _meaningSection = new StackPanel();
+            _meaningSection.Children.Add(Ui.SectionHeader("中文对照"));
             Detach(_meaning);
             _meaning.Height = 70;
             _meaning.Style = SettingsWindow.CreateTextBoxStyle();
             _meaning.Margin = new Thickness(0, 5, 0, 10);
-            detailBody.Children.Add(_meaning);
-            detailBody.Children.Add(Ui.SectionHeader("沟通建议 / 待确认"));
+            _meaningSection.Children.Add(_meaning);
+            detailBody.Children.Add(_meaningSection);
+            _adviceSection = new StackPanel();
+            _adviceSection.Children.Add(Ui.SectionHeader("沟通建议 / 待确认"));
             Detach(_advice);
             _advice.Style = SettingsWindow.CreateTextBoxStyle();
             _advice.Margin = new Thickness(0, 5, 0, 8);
-            detailBody.Children.Add(_advice);
+            _adviceSection.Children.Add(_advice);
+            detailBody.Children.Add(_adviceSection);
             Detach(_calculationLabel);
             _calculationLabel.FontSize = Ui.Type.Meta;
             _calculationLabel.Foreground = Ui.Palette.InkMuted;
@@ -505,17 +843,19 @@ namespace GlobalTranslator
             detailBody.Children.Add(_calculation);
             Detach(_calculationActions);
             detailBody.Children.Add(_calculationActions);
+            _sourcesSection = new StackPanel();
             Detach(_sourcesLabel);
             _sourcesLabel.FontSize = Ui.Type.Meta;
             _sourcesLabel.Foreground = Ui.Palette.InkMuted;
             _sourcesLabel.Margin = new Thickness(0, 8, 0, 4);
-            detailBody.Children.Add(_sourcesLabel);
+            _sourcesSection.Children.Add(_sourcesLabel);
             Detach(_sources);
             _sources.Background = Ui.Palette.SurfaceSubtle;
             _sources.BorderBrush = Ui.Palette.Line;
-            detailBody.Children.Add(_sources);
+            _sourcesSection.Children.Add(_sources);
             Detach(_sourceActions);
-            detailBody.Children.Add(_sourceActions);
+            _sourcesSection.Children.Add(_sourceActions);
+            detailBody.Children.Add(_sourcesSection);
             result.Children.Add(_detailsExpander);
 
             _chatFeed.Children.Add(_chatResultCard);
@@ -558,32 +898,27 @@ namespace GlobalTranslator
                 });
             }
             catch { }
-            TextBlock title = Ui.Text("把客户消息和截图，变成可以直接发的回复",
+            _emptyTitle = Ui.Text("把客户消息和截图，变成可以直接发的回复",
                 Ui.Type.Display, Ui.Palette.Ink, FontWeights.SemiBold);
-            title.TextWrapping = TextWrapping.Wrap;
-            title.TextTrimming = TextTrimming.None;
-            title.TextAlignment = TextAlignment.Center;
-            title.Margin = new Thickness(0, 16, 0, 8);
-            stack.Children.Add(title);
-            TextBlock subtitle = Ui.Text("粘贴客户消息或截图，也可以从下面的常用任务开始。",
+            _emptyTitle.TextWrapping = TextWrapping.Wrap;
+            _emptyTitle.TextTrimming = TextTrimming.None;
+            _emptyTitle.TextAlignment = TextAlignment.Center;
+            _emptyTitle.Margin = new Thickness(0, 16, 0, 8);
+            stack.Children.Add(_emptyTitle);
+            _emptySubtitle = Ui.Text("粘贴客户消息或截图，也可以从下面的常用任务开始。",
                 Ui.Type.BodySmall, Ui.Palette.InkMuted);
-            subtitle.TextWrapping = TextWrapping.Wrap;
-            subtitle.TextTrimming = TextTrimming.None;
-            subtitle.TextAlignment = TextAlignment.Center;
-            stack.Children.Add(subtitle);
+            _emptySubtitle.TextWrapping = TextWrapping.Wrap;
+            _emptySubtitle.TextTrimming = TextTrimming.None;
+            _emptySubtitle.TextAlignment = TextAlignment.Center;
+            stack.Children.Add(_emptySubtitle);
 
-            var cards = new WrapPanel
+            _suggestionCards = new WrapPanel
             {
                 Margin = new Thickness(0, 22, 0, 0),
                 HorizontalAlignment = HorizontalAlignment.Center
             };
-            cards.Children.Add(SuggestionCard(Icons.List, "整理询盘", "列出已知需求与待确认信息",
-                "请整理这份询盘，列出已知需求、待确认信息和简短追问；不要猜测。", "inquiry"));
-            cards.Children.Add(SuggestionCard(Icons.Table, "对比报价", "逐项比较单价、交期与费用",
-                "请比较这些报价的单价、币种、起订量、交期和费用包含范围；列出不能直接比较的项目。", "quote"));
-            cards.Children.Add(SuggestionCard(Icons.Refresh, "核对变更", "找出新增、删除与改动项",
-                "请比较前后两版客户要求，列出新增、删除和变更项目，以及需要重新确认的报价或交期。", "change"));
-            stack.Children.Add(cards);
+            stack.Children.Add(_suggestionCards);
+            UpdateSuggestionCards();
 
             var hints = new WrapPanel { Margin = new Thickness(0, 14, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
             hints.Children.Add(HintPair("Enter", "发送"));
@@ -719,6 +1054,7 @@ namespace GlobalTranslator
             inputHost.Children.Add(_inputHint);
             _intent.TextChanged += delegate
             { _inputHint.Visibility = _intent.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; };
+            _intent.TextChanged += delegate { AutoGrowComposer(); };
             _inputHint.Visibility = _intent.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
 
             var toolbar = new DockPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -779,6 +1115,12 @@ namespace GlobalTranslator
             _searchToggle.VerticalAlignment = VerticalAlignment.Center;
             _searchToggle.Margin = new Thickness(0, 0, 14, 0);
             languageRow.Children.Add(_searchToggle);
+            _fetchToggle = Ui.ChipToggle(Icons.Globe, "允许抓取",
+                "允许读取公开网页正文；仅在通用模式显示", false, null);
+            _fetchToggle.VerticalAlignment = VerticalAlignment.Center;
+            _fetchToggle.Margin = new Thickness(0, 0, 14, 0);
+            _fetchToggle.Visibility = _chatMode == "general" ? Visibility.Visible : Visibility.Collapsed;
+            languageRow.Children.Add(_fetchToggle);
             TextBlock languageLabel = Ui.Text("回复语言", Ui.Type.Meta, Ui.Palette.InkMuted);
             languageLabel.VerticalAlignment = VerticalAlignment.Center;
             languageLabel.Margin = new Thickness(0, 0, 8, 0);
@@ -1100,9 +1442,9 @@ namespace GlobalTranslator
             if (_chatSubtitle == null) return;
             int turns = _turns == null ? 0 : _turns.Count;
             string model = _modelSummary == null ? "" : (_modelSummary.Text ?? "").Trim();
-            _chatSubtitle.Text = string.IsNullOrEmpty(model)
-                ? (turns == 0 ? "新会话" : turns + " 轮对话")
-                : model + " · " + (turns == 0 ? "新会话" : turns + " 轮对话");
+            string state = (_chatMode == "general" ? "通用" : "外贸") + " · " +
+                (turns == 0 ? "新会话" : turns + " 轮对话");
+            _chatSubtitle.Text = string.IsNullOrEmpty(model) ? state : model + " · " + state;
         }
 
         private void UpdateEmptyState()
@@ -1198,6 +1540,7 @@ namespace GlobalTranslator
                     ? Visibility.Collapsed : Visibility.Visible;
             if (_detailsExpander != null && !string.IsNullOrWhiteSpace(_calculation.Text))
                 _detailsExpander.IsExpanded = true;
+            RenderSources();
             UpdateEmptyState();
         }
 

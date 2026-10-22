@@ -659,6 +659,8 @@ namespace GlobalTranslator
             byte[][] sentImages = _images.ToArray();
             string instruction = _intent.Text;
             SyncLastTurn();
+            _currentActivities.Clear(); RenderToolStrip();
+            BeginStreaming();
             var pending = new CancellationTokenSource();
             _request = pending;
             _generate.IsEnabled = false;
@@ -672,7 +674,8 @@ namespace GlobalTranslator
                 string taskMode = _chatTaskMode == "inquiry" || instruction.Contains("整理询盘") ? "inquiry" : "";
                 CommunicationResult answer = await ComposeAsync(
                     _turns.ToArray(), TopicStart, instruction, sentImages,
-                    taskMode, SearchAllowed, adviceOnly, pending.Token);
+                    taskMode, CurrentMode, SearchAllowed, FetchAllowed,
+                    ReportToolActivity, adviceOnly, pending.Token);
                 if (_request != pending || pending.IsCancellationRequested) return;
                 _loading = true;
                 if (!adviceOnly && !answer.ToolLimitReached)
@@ -760,6 +763,7 @@ namespace GlobalTranslator
                     _generate.IsEnabled = true;
                     _adviceOnly.IsEnabled = true;
                     _stop.Visibility = Visibility.Collapsed;
+                    EndStreaming();
                 }
             }
         }
@@ -795,7 +799,8 @@ namespace GlobalTranslator
 
         private async Task<CommunicationResult> ComposeAsync(
             CommunicationTurn[] history, int start, string instruction, byte[][] images,
-            string taskMode, bool allowSearch, bool adviceOnly, CancellationToken token)
+            string taskMode, string mode, bool allowSearch, bool allowFetch,
+            Action<CommerceToolActivity> onActivity, bool adviceOnly, CancellationToken token)
         {
             var context = ConversationContext.Create(
                 history ?? new CommunicationTurn[0], start, images);
@@ -807,12 +812,16 @@ namespace GlobalTranslator
                 Adjustment = firstTurn ? "" : (instruction ?? ""),
                 Language = SelectedLanguage(),
                 TaskMode = taskMode ?? "",
+                Mode = mode ?? "trade",
                 UnifiedInput = true,
                 AdviceOnly = adviceOnly,
                 Images = context.Images,
                 ImageContext = context.ImageContext,
                 Turns = context.Turns,
                 AllowSearch = allowSearch,
+                AllowFetch = allowFetch,
+                OnToolActivity = onActivity,
+                OnPartialReply = ReportPartialReply,
                 ApproveSensitiveSearch = ApproveSearchQuery()
             };
             return await _client.ComposeCommunicationAsync(input, _settings, token);
@@ -863,6 +872,8 @@ namespace GlobalTranslator
             _adviceOnly.IsEnabled = false;
             _stop.Visibility = Visibility.Visible;
             _status.Text = "正在重新生成…";
+            _currentActivities.Clear(); RenderToolStrip();
+            BeginStreaming();
             _loading = true;
             try
             {
@@ -870,7 +881,8 @@ namespace GlobalTranslator
                     _turns.RemoveRange(index + 1, _turns.Count - index - 1);
                 CommunicationResult answer = await ComposeAsync(
                     _turns.ToArray(), start, instruction, turn.Images,
-                    taskMode, SearchAllowed, false, pending.Token);
+                    taskMode, string.IsNullOrEmpty(turn.Mode) ? CurrentMode : turn.Mode,
+                    SearchAllowed, FetchAllowed, ReportToolActivity, false, pending.Token);
                 if (_request != pending || pending.IsCancellationRequested)
                     throw new OperationCanceledException();
                 _turns[index] = new CommunicationTurn
@@ -925,6 +937,7 @@ namespace GlobalTranslator
                 _generate.IsEnabled = true;
                 _adviceOnly.IsEnabled = true;
                 _stop.Visibility = Visibility.Collapsed;
+                EndStreaming();
                 if (_chatLayout)
                 {
                     RebuildChatHistory();
@@ -993,6 +1006,7 @@ namespace GlobalTranslator
             _session.Texts = texts; _session.Images = _images.ToArray();
             SyncLastTurn();
             _session.Turns = _turns.ToArray(); _session.Language = SelectedLanguage();
+            _session.Mode = _chatMode;
             // Retain the legacy field for backward-compatible deserialization, but never persist document attachments.
             _session.Documents = new CommerceDocument[0];
             _session.InquiryFields = _lastResult == null ? new InquiryField[0] : _lastResult.InquiryFields;
@@ -1022,6 +1036,7 @@ namespace GlobalTranslator
                 _chatTaskMode = "";
                 _session = value;
                 _session.TopicBreaks = value.TopicBreaks ?? new int[0];
+                SetChatMode(string.IsNullOrEmpty(value.Mode) ? "trade" : value.Mode);
                 TextBox[] editors = SessionEditors();
                 for (int i = 0; i < editors.Length; i++)
                     editors[i].Text = i < value.Texts.Length ? value.Texts[i] : "";
@@ -1120,6 +1135,7 @@ namespace GlobalTranslator
             if (!SaveConversation()) return;
             _editingAnswer = false;
             _session = new SavedConversation();
+            _session.Mode = _chatMode;
             CancelRequest();
             _loading = true;
             _background.Clear(); _intent.Clear(); _adjustment.Clear();
@@ -1140,6 +1156,8 @@ namespace GlobalTranslator
             _conversationHistory.Children.Clear();
             _conversationHistory.Visibility = Visibility.Collapsed;
             _lastResult = null; _successful = 0;
+            _currentActivities.Clear(); RenderToolStrip();
+            if (_sourceList != null) _sourceList.Visibility = Visibility.Collapsed;
             RefreshImages();
             _status.Text = "";
             _loading = false;

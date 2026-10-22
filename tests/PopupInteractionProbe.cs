@@ -1013,7 +1013,7 @@ internal static class PopupInteractionProbe
             "Saved custom language did not restore.");
         Type resultType = app.GetType("GlobalTranslator.CommunicationResult", true);
         object inquiry = resultType.GetMethod("Parse").Invoke(null, new object[] {
-            "{\"reply\":\"Thanks\",\"meaning_zh\":\"谢谢\",\"advice_zh\":\"核对\",\"inquiry_fields\":[{\"field\":\"数量\",\"value\":\"0012\"}],\"missing_fields\":[\"交期\"]}", false });
+            "{\"reply\":\"Thanks\",\"meaning_zh\":\"谢谢\",\"advice_zh\":\"核对\",\"inquiry_fields\":[{\"field\":\"数量\",\"value\":\"0012\"}],\"missing_fields\":[\"交期\"]}", false, false });
         Require(((Array)resultType.GetField("InquiryFields").GetValue(inquiry)).Length == 1 &&
             ((string[])resultType.GetField("MissingFields").GetValue(inquiry))[0] == "交期",
             "Inquiry structure was not parsed.");

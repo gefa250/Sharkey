@@ -351,7 +351,13 @@ namespace GlobalTranslator
             {
                 File.WriteAllBytes(temporaryPath, encrypted);
                 if (File.Exists(FilePath))
+                {
+                    // Keep the previous file so a bad write can never destroy the keys.
+                    try { File.Copy(FilePath, FilePath + ".bak", true); }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
                     File.Replace(temporaryPath, FilePath, null);
+                }
                 else
                     File.Move(temporaryPath, FilePath);
             }

@@ -22,6 +22,7 @@ namespace GlobalTranslator
         public string Title = "新沟通";
         public string[] Texts = new string[0];
         public string Language = "auto";
+        public string Mode = "trade";
         [ScriptIgnore]
         public byte[][] Images = new byte[0][];
         public string[] EncodedImages

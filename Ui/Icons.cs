@@ -68,7 +68,10 @@ namespace GlobalTranslator
             "M 4,7 L 4.9,7 M 7.5,7 L 8.4,7 M 11,7 L 11.9,7 M 5,9.4 L 11,9.4");
         internal static readonly Geometry Sparkle = Geometry.Parse(
             "M 8,1.4 L 9.7,6.3 L 14.6,8 L 9.7,9.7 L 8,14.6 L 6.3,9.7 L 1.4,8 L 6.3,6.3 Z");
-        internal static readonly Geometry Check = Geometry.Parse(
+        internal static readonly Geometry Clock = Geometry.Parse(
+            "M 2.2,8 A 5.8,5.8 0 1 1 13.8,8 A 5.8,5.8 0 1 1 2.2,8 M 8,4.6 L 8,8.3 L 10.8,9.8");
+        internal static readonly Geometry Globe = Geometry.Parse(
+            "M 2.2,8 A 5.8,5.8 0 1 1 13.8,8 A 5.8,5.8 0 1 1 2.2,8 M 2.4,8 L 13.6,8 M 8,2.2 C 10.6,4.2 10.6,11.8 8,13.8 M 8,2.2 C 5.4,4.2 5.4,11.8 8,13.8");        internal static readonly Geometry Check = Geometry.Parse(
             "M 2.6,8.6 L 6.4,12.4 L 13.4,3.6");
         internal static readonly Geometry Alert = Geometry.Parse(
             "M 8,2 L 14.5,13.4 L 1.5,13.4 Z M 8,6.2 L 8,9.6 M 8,11.4 L 8,12");

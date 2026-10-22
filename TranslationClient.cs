@@ -418,6 +418,10 @@ namespace GlobalTranslator
                 Images = input.Images,
                 Turns = input.Turns,
                 AllowSearch = input.AllowSearch,
+                AllowFetch = input.AllowFetch,
+                Mode = input.Mode,
+                OnToolActivity = input.OnToolActivity,
+                OnPartialReply = input.OnPartialReply,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
             };
             // Capture the full active configuration for the whole multi-turn round trip.
@@ -426,10 +430,13 @@ namespace GlobalTranslator
             bool allowSearch = input.AllowSearch ?? modelSnapshot.CommerceSearchEnabled;
             modelSnapshot.CommerceSearchEnabled = allowSearch;
             work.AllowSearch = allowSearch;
+            bool general = string.Equals(input.Mode, "general", StringComparison.OrdinalIgnoreCase);
+            var activities = new List<CommerceToolActivity>();
             var details = new List<string>();
             var sources = new List<string>();
             int calculations = 0;
             int searches = 0;
+            int fetches = 0;
             using (var search = new CommerceSearch())
             {
                 for (int round = 0; round < 8; round++)
@@ -442,12 +449,24 @@ namespace GlobalTranslator
                         answer.CalculationDetails = string.Join("\n\n",
                             details.Where(x => x.StartsWith("本地计算", StringComparison.Ordinal)));
                         answer.Sources = string.Join("\n", sources.Distinct());
+                        if (answer.SourceItems == null || answer.SourceItems.Length == 0)
+                            answer.SourceItems = ParseSourceItems(answer.Sources);
+                        answer.Activities = activities.ToArray();
                         return answer;
                     }
                     var results = new List<string>();
                     foreach (CommerceToolRequest request in answer.ToolRequests)
                     {
                         token.ThrowIfCancellationRequested();
+                        var activity = new CommerceToolActivity
+                        {
+                            Tool = request.Tool,
+                            Label = ToolLabel(request.Tool),
+                            Query = string.IsNullOrWhiteSpace(request.Query) ? ToolInputSummary(request) : request.Query,
+                            Status = "running"
+                        };
+                        activities.Add(activity);
+                        NotifyActivity(work, activity);
                         CommerceToolOutcome outcome;
                         try
                         {
@@ -464,6 +483,28 @@ namespace GlobalTranslator
                                     throw new InvalidOperationException(
                                         "搜索得到的报价参数、运价或汇率需要用户确认后才能计算。");
                                 outcome = CommerceCalculator.Execute(request);
+                            }
+                            else if (string.Equals(request.Tool, "time",
+                                StringComparison.OrdinalIgnoreCase))
+                            {
+                                outcome = AgentTimeTool.Execute(request);
+                            }
+                            else if (string.Equals(request.Tool, "fetch",
+                                StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (++fetches > 3)
+                                    throw new InvalidOperationException(
+                                        "本次网页抓取已达上限，请继续下一轮沟通。");
+                                if (work.AllowFetch != true)
+                                    throw new InvalidOperationException(
+                                        "网页抓取未启用，请在输入区打开“允许抓取”。");
+                                string url = request.Query;
+                                string explicitUrl;
+                                if (request.Inputs != null &&
+                                    request.Inputs.TryGetValue("url", out explicitUrl) &&
+                                    !string.IsNullOrWhiteSpace(explicitUrl))
+                                    url = explicitUrl;
+                                outcome = await AgentWebFetchTool.FetchAsync(url, token);
                             }
                             else if (string.Equals(request.Tool, "search",
                                 StringComparison.OrdinalIgnoreCase))
@@ -484,16 +525,21 @@ namespace GlobalTranslator
                             }
                             else throw new InvalidOperationException(
                                 "不支持的助手工具。");
+                            activity.Status = "done";
+                            activity.Summary = outcome.Title;
                         }
                         catch (OperationCanceledException) { throw; }
                         catch (Exception error)
                         {
+                            activity.Status = "failed";
+                            activity.Summary = error.Message;
                             outcome = new CommerceToolOutcome
                             {
                                 Title = "工具未完成",
                                 Detail = error.Message
                             };
                         }
+                        NotifyActivity(work, activity);
                         string entry = outcome.Title + "\n" + outcome.Detail;
                         results.Add(entry);
                         if (string.Equals(request.Tool, "calculate",
@@ -509,13 +555,75 @@ namespace GlobalTranslator
             return new CommunicationResult
             {
                 ToolLimitReached = true,
-                AdviceZh = "本次工具调用次数已达上限。可核对现有计算和来源，" +
-                    "再补充明确参数继续沟通。",
+                Reply = general
+                    ? "本次工具调用次数已达上限，先给出目前能确认的内容；需要继续检索时请再发一条消息。"
+                    : "",
+                AdviceZh = general
+                    ? ""
+                    : "本次工具调用次数已达上限。可核对现有计算和来源，" +
+                      "再补充明确参数继续沟通。",
                 CalculationDetails = string.Join("\n\n",
                     details.Where(x => x.StartsWith("本地计算",
                         StringComparison.Ordinal))),
-                Sources = string.Join("\n", sources.Distinct())
+                Sources = string.Join("\n", sources.Distinct()),
+                SourceItems = ParseSourceItems(string.Join("\n", sources.Distinct())),
+                Activities = activities.ToArray()
             };
+        }
+
+        private static void NotifyActivity(CommunicationRequest request, CommerceToolActivity activity)
+        {
+            if (request == null || request.OnToolActivity == null) return;
+            try { request.OnToolActivity(activity); }
+            catch { /* A UI callback must never break the request. */ }
+        }
+
+        private static string ToolLabel(string tool)
+        {
+            if (string.Equals(tool, "time", StringComparison.OrdinalIgnoreCase)) return "时区";
+            if (string.Equals(tool, "search", StringComparison.OrdinalIgnoreCase)) return "检索";
+            if (string.Equals(tool, "fetch", StringComparison.OrdinalIgnoreCase)) return "抓取";
+            if (string.Equals(tool, "calculate", StringComparison.OrdinalIgnoreCase)) return "计算";
+            return tool ?? "";
+        }
+
+        private static string ToolInputSummary(CommerceToolRequest request)
+        {
+            if (request == null || request.Inputs == null || request.Inputs.Count == 0) return "";
+            string value;
+            if (string.Equals(request.Tool, "time", StringComparison.OrdinalIgnoreCase))
+            {
+                if (request.Inputs.TryGetValue("cities", out value) && !string.IsNullOrWhiteSpace(value))
+                    return value.Trim();
+                if (request.Inputs.TryGetValue("timezone", out value) && !string.IsNullOrWhiteSpace(value))
+                    return value.Trim();
+                return "";
+            }
+            if (string.Equals(request.Tool, "fetch", StringComparison.OrdinalIgnoreCase) &&
+                request.Inputs.TryGetValue("url", out value) && !string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+            return string.Join(", ", request.Inputs.Select(pair => pair.Key + "=" + pair.Value).ToArray());
+        }
+
+        internal static SourceItem[] ParseSourceItems(string sources)
+        {
+            var items = new List<SourceItem>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string line in (sources ?? "").Split('\n'))
+            {
+                Match match = Regex.Match(line, @"https?://[^\s，。；）)】]+");
+                if (!match.Success) continue;
+                string url = match.Value.TrimEnd('.', ',', ';', ')', '）', '】');
+                if (!seen.Add(url)) continue;
+                string title = line.Substring(0, match.Index).Trim(' ', '-', '·', '：', ':', '|');
+                items.Add(new SourceItem
+                {
+                    Title = title.Length == 0 ? new Uri(url).Host : title,
+                    Url = url
+                });
+                if (items.Count >= 8) break;
+            }
+            return items.ToArray();
         }
 
         private static bool SensitiveCommerceSearch(string query)
@@ -563,11 +671,11 @@ namespace GlobalTranslator
                 .Append("\",");
             if (anthropic)
                 body.Append("\"max_tokens\":4096,\"system\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input.AllowSearch != false)))
+                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input)))
                     .Append("\",\"messages\":[{\"role\":\"user\",\"content\":");
             else
                 body.Append("\"messages\":[{\"role\":\"system\",\"content\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input.AllowSearch != false)))
+                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input)))
                     .Append("\"},{\"role\":\"user\",\"content\":");
             AppendCommunicationContent(body, prompt, input.Images, anthropic);
             body.Append("}]");
@@ -600,13 +708,20 @@ namespace GlobalTranslator
                                 "当前 AI 模型不接受图片。请改用支持图片的模型，或手动填写聊天文字。");
                         throw ApiError("沟通助手", response.StatusCode, errorBody);
                     }
+                    Action<string> partial = null;
+                    if (input.OnPartialReply != null)
+                        partial = delegate(string streamed)
+                        {
+                            string reply = PartialReply.Extract(streamed);
+                            if (reply.Length > 0) input.OnPartialReply(reply);
+                        };
                     string raw;
                     if (anthropic)
                         raw = (await ReadAnthropicModelStreamAsync(
-                            response, connection.Model, null, token)).Text;
+                            response, connection.Model, partial, token)).Text;
                     else if (deepSeek)
                         raw = (await ReadModelStreamAsync(
-                            response, connection.Model, null, token)).Text;
+                            response, connection.Model, partial, token)).Text;
                     else
                     {
                         string json = await ReadContentWithTimeoutAsync(
@@ -620,7 +735,8 @@ namespace GlobalTranslator
                         raw = data.Choices[0].Message.Content;
                     }
                     token.ThrowIfCancellationRequested();
-                    return CommunicationResult.Parse(raw, input.AdviceOnly);
+                    return CommunicationResult.Parse(raw, input.AdviceOnly,
+                        string.Equals(input.Mode, "general", StringComparison.OrdinalIgnoreCase));
                 }
             }
         }

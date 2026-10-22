@@ -367,7 +367,7 @@ internal static class FeatureProbe
             try
             {
                 resultType.GetMethod("Parse").Invoke(null, new object[]
-                    { "{\"reply\":\"missing meaning\",\"advice_zh\":\"提示\"}", false });
+                    { "{\"reply\":\"missing meaning\",\"advice_zh\":\"提示\"}", false, false });
                 throw new Exception("Malformed communication result was accepted.");
             }
             catch (TargetInvocationException error)
@@ -515,7 +515,7 @@ internal static class FeatureProbe
             {
                 "{\"tool_requests\":[{\"tool\":\"calculate\"," +
                 "\"operation\":\"quote\",\"inputs\":{\"quantity\":100}}]}",
-                false
+                false, false
             });
         Array requests = (Array)resultType.GetField("ToolRequests")
             .GetValue(parsed);

@@ -38,6 +38,16 @@ if errorlevel 1 exit /b 1
 "%OUT%\ChatWorkflowProbe.exe" "%APP%"
 if errorlevel 1 exit /b 1
 
+"%CSC%" /nologo /target:exe /out:"%OUT%\GeneralAgentProbe.exe" ^
+  /r:System.dll /r:System.Core.dll /r:System.Xaml.dll /r:System.Net.Http.dll ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" ^
+  /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" ^
+  tests\GeneralAgentProbe.cs
+if errorlevel 1 exit /b 1
+"%OUT%\GeneralAgentProbe.exe" "%APP%"
+if errorlevel 1 exit /b 1
+
 "%CSC%" /nologo /target:exe /out:"%OUT%\ComposerPasteProbe.exe" ^
   /r:System.dll /r:System.Core.dll /r:System.Xaml.dll ^
   /r:"%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" ^
