@@ -335,6 +335,77 @@ namespace GlobalTranslator
             return Glyph(geometry, stroke, Icons.Size, Icons.Stroke);
         }
 
+        // Small on/off chip used by the composer (e.g. 联网搜索).
+        internal static ToggleButton ChipToggle(Geometry glyph, string text,
+            string accessibleName, bool isChecked, Action<bool> onChanged)
+        {
+            var content = new StackPanel { Orientation = Orientation.Horizontal };
+            Path icon = Glyph(glyph, Palette.InkMuted, 14, 1.6);
+            icon.Margin = new Thickness(0, 0, 6, 0);
+            icon.SetBinding(Shape.StrokeProperty, new Binding("Foreground")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ToggleButton), 1)
+            });
+            content.Children.Add(icon);
+            TextBlock label = Text(text, Type.Meta, Palette.InkMuted);
+            label.VerticalAlignment = VerticalAlignment.Center;
+            label.SetBinding(TextBlock.ForegroundProperty, new Binding("Foreground")
+            {
+                RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(ToggleButton), 1)
+            });
+            content.Children.Add(label);
+            var toggle = new ToggleButton
+            {
+                Content = content,
+                IsChecked = isChecked,
+                Padding = new Thickness(10, 5, 10, 5),
+                MinHeight = 30,
+                Background = Brushes.Transparent,
+                BorderBrush = Palette.Line,
+                BorderThickness = new Thickness(1),
+                Foreground = Palette.InkMuted,
+                Cursor = Cursors.Hand,
+                Template = ToggleChipTemplate(),
+                FocusVisualStyle = null,
+                ToolTip = accessibleName
+            };
+            if (onChanged != null)
+            {
+                toggle.Checked += delegate { onChanged(true); };
+                toggle.Unchecked += delegate { onChanged(false); };
+            }
+            AutomationProperties.SetName(toggle, accessibleName);
+            return toggle;
+        }
+
+        private static ControlTemplate ToggleChipTemplate()
+        {
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.Name = "Chrome";
+            chrome.SetValue(Border.CornerRadiusProperty, Radius.Pill);
+            chrome.SetBinding(Border.BackgroundProperty, Templated("Background"));
+            chrome.SetBinding(Border.BorderBrushProperty, Templated("BorderBrush"));
+            chrome.SetBinding(Border.BorderThicknessProperty, Templated("BorderThickness"));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetBinding(ContentPresenter.MarginProperty, Templated("Padding"));
+            presenter.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            chrome.AppendChild(presenter);
+            var template = new ControlTemplate(typeof(ToggleButton)) { VisualTree = chrome };
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, Palette.SurfaceHover, "Chrome"));
+            template.Triggers.Add(hover);
+            var on = new Trigger { Property = ToggleButton.IsCheckedProperty, Value = true };
+            on.Setters.Add(new Setter(Border.BackgroundProperty, Palette.BrandTint, "Chrome"));
+            on.Setters.Add(new Setter(Border.BorderBrushProperty, Palette.BrandTintStrong, "Chrome"));
+            on.Setters.Add(new Setter(Control.ForegroundProperty, Palette.BrandText));
+            template.Triggers.Add(on);
+            var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
+            disabled.Setters.Add(new Setter(UIElement.OpacityProperty, .45));
+            template.Triggers.Add(disabled);
+            return template;
+        }
+
         internal static Path Glyph(Geometry geometry, Brush stroke, double size, double thickness)
         {
             return new Path

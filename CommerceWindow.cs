@@ -95,6 +95,8 @@ namespace GlobalTranslator
         private readonly System.Windows.Threading.DispatcherTimer _saveTimer =
             new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         internal bool IsCapturing { get; private set; }
+        // 探针用：跳过“会删除之后 N 轮”的确认框。
+        internal bool SuppressTruncatePrompt;
         private Window _capturePrompt;
         private static readonly string[] Codes =
             { "auto", "en", "ja", "ko", "de", "fr", "es", "ru", "ar", "pt", "zh-Hans" };
@@ -655,29 +657,8 @@ namespace GlobalTranslator
                 return;
             }
             byte[][] sentImages = _images.ToArray();
-            if (_lastResult != null && _turns.Count > TopicStart) _turns[_turns.Count - 1].Reply = _result.Text;
-            var context = ConversationContext.Create(_turns, TopicStart, sentImages);
-            var turns = context.Turns;
-            if (turns.Length > 0 && _lastResult != null)
-                turns[turns.Length - 1].Reply = _result.Text;
-            var input = new CommunicationRequest
-            {
-                Background = TopicStart == 0 ? CombinedCustomerMaterials() : "",
-                Intent = _chatLayout && turns.Length > 0 ? "" : _intent.Text,
-                Adjustment = _chatLayout ? (turns.Length > 0 ? _intent.Text : "") : _adjustment.Text,
-                Language = SelectedLanguage(),
-                TaskMode = _chatTaskMode == "inquiry" || _intent.Text.Contains("整理询盘") ? "inquiry" : "",
-                UnifiedInput = _chatLayout,
-                AdviceOnly = adviceOnly,
-                Images = context.Images,
-                ImageContext = context.ImageContext,
-                Turns = turns,
-                ApproveSensitiveSearch = query => MessageBox.Show(this,
-                    "搜索词可能包含客户或订单信息：\n\n" + query +
-                    "\n\n是否允许发送到搜索服务？",
-                    "确认联网搜索", MessageBoxButton.YesNo,
-                    MessageBoxImage.Question) == MessageBoxResult.Yes
-            };
+            string instruction = _intent.Text;
+            SyncLastTurn();
             var pending = new CancellationTokenSource();
             _request = pending;
             _generate.IsEnabled = false;
@@ -686,10 +667,12 @@ namespace GlobalTranslator
             _status.Text = "正在分析沟通内容…";
             try
             {
-                _settings.CommunicationLanguage = input.Language;
+                _settings.CommunicationLanguage = SelectedLanguage();
                 _settings.Save();
-                CommunicationResult answer = await _client.ComposeCommunicationAsync(
-                    input, _settings, pending.Token);
+                string taskMode = _chatTaskMode == "inquiry" || instruction.Contains("整理询盘") ? "inquiry" : "";
+                CommunicationResult answer = await ComposeAsync(
+                    _turns.ToArray(), TopicStart, instruction, sentImages,
+                    taskMode, SearchAllowed, adviceOnly, pending.Token);
                 if (_request != pending || pending.IsCancellationRequested) return;
                 _loading = true;
                 if (!adviceOnly && !answer.ToolLimitReached)
@@ -728,15 +711,15 @@ namespace GlobalTranslator
                 if (!answer.ToolLimitReached)
                 {
                     _turns.Add(new CommunicationTurn
-                        { Instruction = string.IsNullOrWhiteSpace(input.Adjustment) ? input.Intent : input.Adjustment,
+                        { Instruction = instruction,
                           Reply = adviceOnly ? answer.AdviceZh : answer.Reply,
                           Images = sentImages,
                           Meaning = answer.MeaningZh, Advice = answer.AdviceZh,
-                          Calculation = answer.CalculationDetails, Sources = answer.Sources });
+                          Calculation = answer.CalculationDetails, Sources = answer.Sources,
+                          TaskMode = taskMode });
                     _successful++;
                 }
                 if (_chatLayout) RebuildChatHistory();
-                else AddHistoryTurn(input, answer);
                 if (_chatLayout)
                 {
                     var scrollRequest = Dispatcher.BeginInvoke(new Action(delegate { _chatResultCard.BringIntoView(); }));
@@ -779,6 +762,186 @@ namespace GlobalTranslator
                     _stop.Visibility = Visibility.Collapsed;
                 }
             }
+        }
+
+        private void SyncLastTurn()
+        {
+            if (_lastResult != null && _turns.Count > TopicStart)
+                _turns[_turns.Count - 1].Reply = _result.Text;
+        }
+
+        private int TopicStartFor(int index)
+        {
+            int start = 0;
+            foreach (int point in _session.TopicBreaks ?? new int[0])
+                if (point <= index) start = point;
+            return start;
+        }
+
+        private void TrimTopicBreaks(int turnCount)
+        {
+            _session.TopicBreaks = (_session.TopicBreaks ?? new int[0])
+                .Where(point => point < turnCount).Distinct().OrderBy(point => point).ToArray();
+        }
+
+        private Func<string, bool> ApproveSearchQuery()
+        {
+            return query => MessageBox.Show(this,
+                "搜索词可能包含客户或订单信息：\n\n" + query +
+                "\n\n是否允许发送到搜索服务？",
+                "确认联网搜索", MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
+        }
+
+        private async Task<CommunicationResult> ComposeAsync(
+            CommunicationTurn[] history, int start, string instruction, byte[][] images,
+            string taskMode, bool allowSearch, bool adviceOnly, CancellationToken token)
+        {
+            var context = ConversationContext.Create(
+                history ?? new CommunicationTurn[0], start, images);
+            bool firstTurn = context.Turns.Length == 0;
+            var input = new CommunicationRequest
+            {
+                Background = start == 0 ? CombinedCustomerMaterials() : "",
+                Intent = firstTurn ? (instruction ?? "") : "",
+                Adjustment = firstTurn ? "" : (instruction ?? ""),
+                Language = SelectedLanguage(),
+                TaskMode = taskMode ?? "",
+                UnifiedInput = true,
+                AdviceOnly = adviceOnly,
+                Images = context.Images,
+                ImageContext = context.ImageContext,
+                Turns = context.Turns,
+                AllowSearch = allowSearch,
+                ApproveSensitiveSearch = ApproveSearchQuery()
+            };
+            return await _client.ComposeCommunicationAsync(input, _settings, token);
+        }
+
+        internal async Task<bool> RegenerateTurn(int index)
+        {
+            if (_turns.Count == 0 || index < 0 || index >= _turns.Count) return false;
+            if (_request != null) { _status.Text = "请先停止当前生成。"; return false; }
+            CommunicationTurn turn = _turns[index];
+            if (string.IsNullOrWhiteSpace(turn.Instruction))
+            { _status.Text = "这条消息没有可重新生成的内容。"; return false; }
+            if (!ConfirmTruncate(index, "重新生成回复")) return false;
+            return await RerunTurn(index, turn.Instruction);
+        }
+
+        internal async Task<bool> EditTurn(int index, string instruction)
+        {
+            if (index < 0 || index >= _turns.Count) return false;
+            if (string.IsNullOrWhiteSpace(instruction)) return false;
+            if (_request != null) { _status.Text = "请先停止当前生成。"; return false; }
+            if (!ConfirmTruncate(index, "编辑消息")) return false;
+            return await RerunTurn(index, instruction.Trim());
+        }
+
+        private bool ConfirmTruncate(int index, string action)
+        {
+            int later = _turns.Count - index - 1;
+            if (later <= 0) return true;
+            if (SuppressTruncatePrompt) return true;
+            return MessageBox.Show(this,
+                action + "会删除这条消息之后的 " + later + " 轮对话，且无法撤销。继续吗？",
+                action, MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+        }
+
+        private async Task<bool> RerunTurn(int index, string instruction)
+        {
+            var snapshot = _turns.ToArray();
+            CommunicationResult previousResult = _lastResult;
+            bool previousLoading = _loading;
+            CommunicationTurn turn = snapshot[index];
+            string taskMode = turn.TaskMode ?? "";
+            if (taskMode.Length == 0 && (instruction ?? "").Contains("整理询盘")) taskMode = "inquiry";
+            int start = TopicStartFor(index);
+            var pending = new CancellationTokenSource();
+            _request = pending;
+            _generate.IsEnabled = false;
+            _adviceOnly.IsEnabled = false;
+            _stop.Visibility = Visibility.Visible;
+            _status.Text = "正在重新生成…";
+            _loading = true;
+            try
+            {
+                if (_turns.Count > index + 1)
+                    _turns.RemoveRange(index + 1, _turns.Count - index - 1);
+                CommunicationResult answer = await ComposeAsync(
+                    _turns.ToArray(), start, instruction, turn.Images,
+                    taskMode, SearchAllowed, false, pending.Token);
+                if (_request != pending || pending.IsCancellationRequested)
+                    throw new OperationCanceledException();
+                _turns[index] = new CommunicationTurn
+                {
+                    Instruction = instruction,
+                    Reply = answer.Reply,
+                    Images = turn.Images,
+                    Meaning = answer.MeaningZh,
+                    Advice = answer.AdviceZh,
+                    Calculation = answer.CalculationDetails,
+                    Sources = answer.Sources,
+                    TaskMode = taskMode
+                };
+                TrimTopicBreaks(index + 1);
+                _successful = _turns.Count;
+                _lastResult = answer;
+                _editingAnswer = false;
+                _result.Text = answer.Reply;
+                _meaning.Text = answer.MeaningZh;
+                _advice.Text = answer.AdviceZh;
+                _calculation.Text = answer.CalculationDetails ?? "";
+                _sources.Text = answer.Sources ?? "";
+                _staleNotice.Visibility = Visibility.Collapsed;
+                _editNotice.Visibility = Visibility.Collapsed;
+                _calculationLabel.Visibility = _calculation.Visibility = _calculationActions.Visibility =
+                    string.IsNullOrWhiteSpace(_calculation.Text) ? Visibility.Collapsed : Visibility.Visible;
+                _sourcesLabel.Visibility = _sources.Visibility = _sourceActions.Visibility =
+                    string.IsNullOrWhiteSpace(_sources.Text) ? Visibility.Collapsed : Visibility.Visible;
+                if (_detailsExpander != null && !string.IsNullOrWhiteSpace(_calculation.Text))
+                    _detailsExpander.IsExpanded = true;
+                _status.Text = "";
+                ScheduleSave();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                RestoreTurns(snapshot, previousResult);
+                _status.Text = "已取消，回复保持原样。";
+                return false;
+            }
+            catch (Exception error)
+            {
+                RestoreTurns(snapshot, previousResult);
+                _status.Text = error.Message;
+                return false;
+            }
+            finally
+            {
+                if (_request == pending) _request = null;
+                pending.Dispose();
+                _loading = previousLoading;
+                _generate.IsEnabled = true;
+                _adviceOnly.IsEnabled = true;
+                _stop.Visibility = Visibility.Collapsed;
+                if (_chatLayout)
+                {
+                    RebuildChatHistory();
+                    RefreshInquiry();
+                    UpdateChatResult();
+                    UpdateContextNotice();
+                    Dispatcher.BeginInvoke(new Action(delegate { _chatResultCard.BringIntoView(); }));
+                }
+            }
+        }
+
+        private void RestoreTurns(CommunicationTurn[] snapshot, CommunicationResult previousResult)
+        {
+            _turns.Clear();
+            _turns.AddRange(snapshot);
+            _lastResult = previousResult;
+            _successful = _turns.Count;
         }
 
         private void CancelRequest()
@@ -828,7 +991,7 @@ namespace GlobalTranslator
             if (texts.All(string.IsNullOrWhiteSpace) && _images.Count == 0 && _turns.Count == 0 &&
                 _session.Texts.Length == 0) return true;
             _session.Texts = texts; _session.Images = _images.ToArray();
-            if (_lastResult != null && _turns.Count > TopicStart) _turns[_turns.Count - 1].Reply = _result.Text;
+            SyncLastTurn();
             _session.Turns = _turns.ToArray(); _session.Language = SelectedLanguage();
             // Retain the legacy field for backward-compatible deserialization, but never persist document attachments.
             _session.Documents = new CommerceDocument[0];

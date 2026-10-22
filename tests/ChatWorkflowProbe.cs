@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -32,6 +33,14 @@ internal static class ChatWorkflowProbe
         while (!task.IsCompleted && DateTime.UtcNow < deadline) { Pump(); System.Threading.Thread.Sleep(5); }
         Check(task.IsCompleted, "Mock translation timed out."); task.GetAwaiter().GetResult();
         Check(((TextBlock)Get(window, "_status")).Text == "", "Translation failed: " + ((TextBlock)Get(window, "_status")).Text);
+    }
+    static bool RunTask(Window window, string method, params object[] extra)
+    {
+        var task = (Task<bool>)Call(window, method, extra);
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline) { Pump(); System.Threading.Thread.Sleep(5); }
+        Check(task.IsCompleted, method + " timed out.");
+        return task.Result;
     }
     static void Render(Window window, string name, double scale)
     {
@@ -136,8 +145,56 @@ internal static class ChatWorkflowProbe
             window.GetType().GetField("_composing", Hidden).SetValue(window, true);
             input.RaiseEvent(new TextCompositionEventArgs(InputManager.Current.PrimaryKeyboardDevice, new TextComposition(InputManager.Current, input, "确认")) { RoutedEvent = TextCompositionManager.PreviewTextInputEvent, Handled = true });
             Check(!(bool)Get(window, "_composing"), "Handled IME completion left composing state stuck.");
+            // --- message editing, regeneration and the search toggle ---
+            Call(window, "NewConversation");
+            window.GetType().GetField("SuppressTruncatePrompt", Hidden).SetValue(window, true);
+            input.Text = "first-draft-8001"; Send(window);
+            input.Text = "second-draft-8002"; Send(window);
+            Check(((IList)Get(window, "_turns")).Count == 2, "Editing setup did not create two turns.");
+            int beforeRegenerate = Requests.Count;
+            Check(RunTask(window, "RegenerateTurn", 1), "Regenerate returned false.");
+            Check(Requests.Count == beforeRegenerate + 1, "Regenerate did not issue exactly one request.");
+            Check(Requests[Requests.Count - 1].Contains("second-draft-8002"),
+                "Regenerate lost the original instruction.");
+            Check(((IList)Get(window, "_turns")).Count == 2, "Regenerate duplicated the turn.");
+            Check(RunTask(window, "EditTurn", 0, "rewritten-8003"), "Edit returned false.");
+            Check(((IList)Get(window, "_turns")).Count == 1, "Editing an older message did not truncate later turns.");
+            Check(Requests[Requests.Count - 1].Contains("rewritten-8003"),
+                "Edited instruction missing from the request.");
+            object session = Get(window, "_session");
+            int[] breaks = (int[])session.GetType().GetField("TopicBreaks").GetValue(session);
+            Check(breaks == null || breaks.All(point => point < 1), "Topic breaks were not trimmed after truncation.");
+            Render(window, "edited-conversation", 1);
+            Call(window, "BeginEditTurn", 0, "rewritten-8003");
+            Render(window, "edit-mode", 1);
+            Call(window, "CancelEditTurn");
+
+            var searchToggle = (ToggleButton)Get(window, "_searchToggle");
+            searchToggle.IsChecked = true; Pump();
+            input.Text = "search-draft-8004"; Send(window);
+            Check(Requests[Requests.Count - 1].Contains("Web search is enabled for this request"),
+                "Search instruction missing while the toggle is on.");
+            searchToggle.IsChecked = false; Pump();
+            input.Text = "plain-draft-8005"; Send(window);
+            Check(!Requests[Requests.Count - 1].Contains("Web search is enabled for this request"),
+                "Search instruction leaked while the toggle is off.");
+            ((TextBox)Get(window, "_sources")).Text = "https://example.test/source";
+            Call(window, "UpdateChatResult");
+            Check(((Button)Get(window, "_sourceBadge")).Visibility == Visibility.Visible,
+                "Source badge stayed hidden with sources present.");
+            searchToggle.IsChecked = true; Pump();
+            Call(window, "UpdateChatResult");
+            Render(window, "search-on", 1);
+
+            int turnsBeforeFailure = ((IList)Get(window, "_turns")).Count;
+            listener.Stop();
+            Check(!RunTask(window, "RegenerateTurn", turnsBeforeFailure - 1),
+                "Offline regenerate should have failed.");
+            Check(((IList)Get(window, "_turns")).Count == turnsBeforeFailure,
+                "Failed regenerate did not roll back the turn list.");
+
             Call(window, "NewConversation"); Render(window, "empty-after-conversation", 1);
-            Console.WriteLine("CHAT_WORKFLOW mock-send/followup-images/topic-isolation/encrypted-restore/limit-notice/handled-IME=True");
+            Console.WriteLine("CHAT_WORKFLOW mock-send/followup-images/topic-isolation/encrypted-restore/limit-notice/handled-IME/edit-regenerate/search=True");
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

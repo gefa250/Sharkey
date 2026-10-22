@@ -417,10 +417,15 @@ namespace GlobalTranslator
                 ImageContext = input.ImageContext,
                 Images = input.Images,
                 Turns = input.Turns,
+                AllowSearch = input.AllowSearch,
                 ApproveSensitiveSearch = input.ApproveSensitiveSearch
             };
             // Capture the full active configuration for the whole multi-turn round trip.
             AppSettings modelSnapshot = settings.SnapshotForAiRequest();
+            // The composer toggle wins over the saved default for this request only.
+            bool allowSearch = input.AllowSearch ?? modelSnapshot.CommerceSearchEnabled;
+            modelSnapshot.CommerceSearchEnabled = allowSearch;
+            work.AllowSearch = allowSearch;
             var details = new List<string>();
             var sources = new List<string>();
             int calculations = 0;
@@ -558,13 +563,11 @@ namespace GlobalTranslator
                 .Append("\",");
             if (anthropic)
                 body.Append("\"max_tokens\":4096,\"system\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.System +
-                        CommunicationPrompt.Tools))
+                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input.AllowSearch != false)))
                     .Append("\",\"messages\":[{\"role\":\"user\",\"content\":");
             else
                 body.Append("\"messages\":[{\"role\":\"system\",\"content\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.System +
-                        CommunicationPrompt.Tools))
+                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input.AllowSearch != false)))
                     .Append("\"},{\"role\":\"user\",\"content\":");
             AppendCommunicationContent(body, prompt, input.Images, anthropic);
             body.Append("}]");

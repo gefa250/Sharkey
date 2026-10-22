@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -34,10 +35,24 @@ namespace GlobalTranslator
         private bool _dragHighlight;
         private RichTextBox _chatAnswer;
         private Button _editAnswer;
+        private Button _regenerate;
+        private Button _sourceBadge;
+        private ToggleButton _searchToggle;
         private bool _editingAnswer;
         private string _renderedAnswer;
         private TextBlock _contextNotice;
+        private int _editingTurnIndex = -1;
+        private string _editingDraft = "";
         private int TopicStart { get { return (_session.TopicBreaks ?? new int[0]).LastOrDefault(); } }
+
+        private bool SearchAllowed
+        {
+            get
+            {
+                if (_searchToggle != null) return _searchToggle.IsChecked == true;
+                return _settings.CommerceSearchEnabled;
+            }
+        }
 
         private static readonly Brush ChatInk = Ui.Palette.Ink;
         private static readonly Brush ChatLine = Ui.Palette.Line;
@@ -430,6 +445,30 @@ namespace GlobalTranslator
                 if (_editingAnswer) _result.Focus();
             });
             resultActions.Children.Add(_editAnswer);
+            _regenerate = Ui.IconButton(Icons.Refresh, "重新生成回复");
+            _regenerate.Margin = new Thickness(2, 0, 2, 0);
+            _regenerate.Click += delegate
+            {
+                if (_turns.Count > 0)
+                {
+                    var ignored = RegenerateTurn(_turns.Count - 1);
+                }
+            };
+            resultActions.Children.Add(_regenerate);
+            _sourceBadge = Ui.GhostButton("已联网检索");
+            _sourceBadge.Foreground = Ui.Palette.BrandText;
+            _sourceBadge.ToolTip = "查看检索到的来源";
+            _sourceBadge.Margin = new Thickness(6, 0, 0, 0);
+            _sourceBadge.Visibility = Visibility.Collapsed;
+            _sourceBadge.Click += delegate
+            {
+                if (_detailsExpander != null)
+                {
+                    _detailsExpander.IsExpanded = true;
+                    _detailsExpander.BringIntoView();
+                }
+            };
+            resultActions.Children.Add(_sourceBadge);
             result.Children.Add(resultActions);
 
             var separator = Ui.Divider();
@@ -724,6 +763,22 @@ namespace GlobalTranslator
 
             var languageRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             toolbar.Children.Add(languageRow);
+            _searchToggle = Ui.ChipToggle(Icons.Search, "联网搜索",
+                "联网搜索：开启后，涉及当前价格、运费、时效等外部事实时先检索",
+                _settings.CommerceSearchEnabled,
+                delegate(bool on)
+                {
+                    _settings.CommerceSearchEnabled = on;
+                    _settings.Save();
+                    _status.Text = on
+                        ? SearchProviderReady()
+                            ? "联网搜索已开启：涉及外部事实时会先检索并在回复中列出链接。"
+                            : "联网搜索已开启，但还没有可用的搜索服务：请使用 DeepSeek 模型，或在设置中填写 Tavily Key。"
+                        : "";
+                });
+            _searchToggle.VerticalAlignment = VerticalAlignment.Center;
+            _searchToggle.Margin = new Thickness(0, 0, 14, 0);
+            languageRow.Children.Add(_searchToggle);
             TextBlock languageLabel = Ui.Text("回复语言", Ui.Type.Meta, Ui.Palette.InkMuted);
             languageLabel.VerticalAlignment = VerticalAlignment.Center;
             languageLabel.Margin = new Thickness(0, 0, 8, 0);
@@ -860,8 +915,10 @@ namespace GlobalTranslator
 
         // ------------------------------------------------------------ messages
 
-        private Border ChatBubble(string text, bool user, byte[][] images)
+        private FrameworkElement ChatBubble(int index, string text, bool user, byte[][] images)
         {
+            if (user && index >= 0 && _editingTurnIndex == index)
+                return EditChatBubble(index, text);
             var body = new StackPanel();
             TextBlock label = Ui.Text(text ?? "", Ui.Type.Body, Ui.Palette.Ink);
             label.TextWrapping = TextWrapping.Wrap;
@@ -895,7 +952,7 @@ namespace GlobalTranslator
                 }
                 body.Children.Add(strip);
             }
-            return new Border
+            var bubble = new Border
             {
                 Background = user ? Ui.Palette.BrandTint : Brushes.Transparent,
                 CornerRadius = new CornerRadius(14, 14, 4, 14),
@@ -905,9 +962,104 @@ namespace GlobalTranslator
                 MaxWidth = 540,
                 Child = body
             };
+            if (!user || index < 0) return bubble;
+            var host = new Grid();
+            host.Children.Add(bubble);
+            Button edit = Ui.IconButton(Icons.Edit, "编辑这条消息", 24);
+            edit.HorizontalAlignment = HorizontalAlignment.Right;
+            edit.VerticalAlignment = VerticalAlignment.Top;
+            edit.Margin = new Thickness(0, -10, -10, 0);
+            edit.Opacity = 0;
+            edit.Click += delegate { BeginEditTurn(index, text); };
+            host.Children.Add(edit);
+            host.MouseEnter += delegate { edit.Opacity = 1; };
+            host.MouseLeave += delegate { edit.Opacity = 0; };
+            return host;
         }
 
-        private FrameworkElement AssistantBubble(string reply, string advice)
+        private void BeginEditTurn(int index, string text)
+        {
+            _editingTurnIndex = index;
+            _editingDraft = text ?? "";
+            RebuildChatHistory();
+        }
+
+        private void CancelEditTurn()
+        {
+            _editingTurnIndex = -1;
+            _editingDraft = "";
+            RebuildChatHistory();
+        }
+
+        private void SaveEditTurn(int index, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                _status.Text = "消息不能为空。";
+                return;
+            }
+            _editingTurnIndex = -1;
+            _editingDraft = "";
+            RebuildChatHistory();
+            var ignored = EditTurn(index, text);
+        }
+
+        private FrameworkElement EditChatBubble(int index, string original)
+        {
+            var outer = new Border
+            {
+                Background = Ui.Palette.Surface,
+                BorderBrush = Ui.Palette.Brand,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14, 14, 4, 14),
+                Padding = new Thickness(12, 10, 12, 10),
+                Margin = new Thickness(96, 0, 0, 14),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                MaxWidth = 540
+            };
+            var panel = new StackPanel();
+            outer.Child = panel;
+            var box = new TextBox
+            {
+                Text = string.IsNullOrEmpty(_editingDraft) ? (original ?? "") : _editingDraft,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                MinHeight = 58,
+                MaxHeight = 220,
+                FontSize = Ui.Type.Body,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            };
+            box.TextChanged += delegate { _editingDraft = box.Text; };
+            box.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key == Key.Escape) { CancelEditTurn(); e.Handled = true; return; }
+                if (e.Key == Key.Enter && Keyboard.Modifiers == ModifierKeys.None)
+                { SaveEditTurn(index, box.Text); e.Handled = true; }
+            };
+            panel.Children.Add(box);
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 8, 0, 0)
+            };
+            Button save = Ui.PrimaryButton("保存并重新生成");
+            save.MinHeight = 32;
+            save.Padding = new Thickness(12, 5, 12, 5);
+            save.Click += delegate { SaveEditTurn(index, box.Text); };
+            Button cancel = Ui.SecondaryButton("取消");
+            cancel.MinHeight = 32;
+            cancel.Padding = new Thickness(12, 5, 12, 5);
+            cancel.Margin = new Thickness(8, 0, 0, 0);
+            cancel.Click += delegate { CancelEditTurn(); };
+            actions.Children.Add(save);
+            actions.Children.Add(cancel);
+            panel.Children.Add(actions);
+            box.Loaded += delegate { box.Focus(); box.CaretIndex = box.Text.Length; };
+            return outer;
+        }
+
+        private FrameworkElement AssistantBubble(int index, string reply, string advice)
         {
             var grid = new Grid { Margin = new Thickness(0, 0, 0, 18) };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -923,8 +1075,23 @@ namespace GlobalTranslator
                 note.Margin = new Thickness(0, 6, 0, 0);
                 body.Children.Add(note);
             }
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(-6, 6, 0, 0),
+                Opacity = 0
+            };
+            Button copy = Ui.IconButton(Icons.Copy, "复制这条回复", 26);
+            copy.Click += delegate { try { Clipboard.SetText(reply ?? ""); } catch { } };
+            Button regenerate = Ui.IconButton(Icons.Refresh, "重新生成回复", 26);
+            regenerate.Click += delegate { var ignored = RegenerateTurn(index); };
+            actions.Children.Add(copy);
+            actions.Children.Add(regenerate);
+            body.Children.Add(actions);
             Grid.SetColumn(body, 1);
             grid.Children.Add(body);
+            grid.MouseEnter += delegate { actions.Opacity = 1; };
+            grid.MouseLeave += delegate { actions.Opacity = 0; };
             return grid;
         }
 
@@ -1025,6 +1192,10 @@ namespace GlobalTranslator
             }
             _chatResultCard.Visibility = !string.IsNullOrWhiteSpace(_result.Text) ||
                 !string.IsNullOrWhiteSpace(_advice.Text) ? Visibility.Visible : Visibility.Collapsed;
+            if (_regenerate != null) _regenerate.IsEnabled = _turns.Count > 0;
+            if (_sourceBadge != null)
+                _sourceBadge.Visibility = string.IsNullOrWhiteSpace(_sources.Text)
+                    ? Visibility.Collapsed : Visibility.Visible;
             if (_detailsExpander != null && !string.IsNullOrWhiteSpace(_calculation.Text))
                 _detailsExpander.IsExpanded = true;
             UpdateEmptyState();
@@ -1035,14 +1206,14 @@ namespace GlobalTranslator
             if (!_chatLayout) return;
             _conversationHistory.Children.Clear();
             if (!string.IsNullOrWhiteSpace(_background.Text))
-                _conversationHistory.Children.Add(ChatBubble(_background.Text, true, null));
+                _conversationHistory.Children.Add(ChatBubble(-1, _background.Text, true, null));
             for (int i = 0; i < _turns.Count; i++)
             {
                 if ((_session.TopicBreaks ?? new int[0]).Contains(i)) AddTopicDivider();
                 CommunicationTurn turn = _turns[i];
-                _conversationHistory.Children.Add(ChatBubble(turn.Instruction ?? "", true, turn.Images));
+                _conversationHistory.Children.Add(ChatBubble(i, turn.Instruction ?? "", true, turn.Images));
                 if (i < _turns.Count - 1 || _lastResult == null)
-                    _conversationHistory.Children.Add(AssistantBubble(turn.Reply ?? "", turn.Advice));
+                    _conversationHistory.Children.Add(AssistantBubble(i, turn.Reply ?? "", turn.Advice));
             }
             if ((_session.TopicBreaks ?? new int[0]).Contains(_turns.Count)) AddTopicDivider();
             _conversationHistory.Visibility = _turns.Count > 0 || !string.IsNullOrWhiteSpace(_background.Text)
@@ -1241,6 +1412,13 @@ namespace GlobalTranslator
                 RefreshSessionList();
             }
             catch { _status.Text = "删除失败，会话仍保留。"; }
+        }
+
+        private bool SearchProviderReady()
+        {
+            if (string.Equals(_settings.ModelVendor, "DeepSeek", StringComparison.OrdinalIgnoreCase))
+                return true;
+            return !string.IsNullOrWhiteSpace(_settings.CommerceSearchApiKey);
         }
 
         private string CombinedCustomerMaterials()
