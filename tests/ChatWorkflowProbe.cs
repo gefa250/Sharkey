@@ -172,11 +172,11 @@ internal static class ChatWorkflowProbe
             var searchToggle = (ToggleButton)Get(window, "_searchToggle");
             searchToggle.IsChecked = true; Pump();
             input.Text = "search-draft-8004"; Send(window);
-            Check(Requests[Requests.Count - 1].Contains("Web search is enabled for this request"),
+            Check(Requests[Requests.Count - 1].Contains("Web search is ENABLED for this request"),
                 "Search instruction missing while the toggle is on.");
             searchToggle.IsChecked = false; Pump();
             input.Text = "plain-draft-8005"; Send(window);
-            Check(!Requests[Requests.Count - 1].Contains("Web search is enabled for this request"),
+            Check(!Requests[Requests.Count - 1].Contains("Web search is ENABLED for this request"),
                 "Search instruction leaked while the toggle is off.");
             ((TextBox)Get(window, "_sources")).Text = "https://example.test/source";
             Call(window, "UpdateChatResult");
