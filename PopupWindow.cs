@@ -485,10 +485,30 @@ namespace GlobalTranslator
                 true);
         }
 
+        public void ShowOcrTextAtBounds(
+            OcrRecognitionResult result,
+            NativeMethods.RECT screenBounds,
+            AppSettings settings,
+            TranslationClient client)
+        {
+            BeginTranslation(
+                result.Text,
+                screenBounds.Left,
+                screenBounds.Bottom,
+                screenBounds,
+                settings,
+                client,
+                true,
+                "  ·  纯 OCR",
+                true,
+                false);
+        }
+
         private async void BeginTranslation(
             string text, int x, int y, NativeMethods.RECT screenBounds,
             AppSettings settings, TranslationClient client,
-            bool ocrMode, string ocrMetaSuffix, bool reposition)
+            bool ocrMode, string ocrMetaSuffix, bool reposition,
+            bool translateOcr = true)
         {
             if (_cancellation != null) _cancellation.Cancel();
             if (reposition) _beforeLineCleanup = null;
@@ -523,7 +543,8 @@ namespace GlobalTranslator
             _sourcePanel.Visibility = ocrMode
                 ? Visibility.Visible
                 : Visibility.Collapsed;
-            _translationPanel.Visibility = Visibility.Visible;
+            _translationPanel.Visibility = translateOcr
+                ? Visibility.Visible : Visibility.Collapsed;
             _copyTranslation.Visibility = Visibility.Visible;
             SetOcrLayoutVisible(ocrMode);
             if (!ocrMode && WindowState == WindowState.Maximized)
@@ -599,6 +620,23 @@ namespace GlobalTranslator
             }
             UpdateContentLayout();
             _loadingTimer.Start();
+
+            if (!translateOcr)
+            {
+                _loadingTimer.Stop();
+                _translation.Text = "";
+                _translation.Visibility = Visibility.Collapsed;
+                _copyTranslation.Visibility = Visibility.Collapsed;
+                _meta.Text = "已识别文字 · 可编辑并复制";
+                _meta.ToolTip = _ocrMetaSuffix;
+                _translationPanel.Visibility = Visibility.Collapsed;
+                _copySource.Visibility = Visibility.Visible;
+                _retranslate.Visibility = Visibility.Collapsed;
+                _recapture.Visibility = Visibility.Visible;
+                _recapture.Content = "重新框选";
+                UpdateContentLayout();
+                return;
+            }
 
             try
             {
@@ -1394,7 +1432,7 @@ namespace GlobalTranslator
             return true;
         }
 
-        public void ShowTransientNotice(string message, int x, int y)
+        public void ShowTransientNotice(string message, int x, int y, bool processing = false)
         {
             if (_cancellation != null) _cancellation.Cancel();
             _noticeTimer.Stop();
@@ -1412,20 +1450,21 @@ namespace GlobalTranslator
             _translationPanel.Visibility = Visibility.Visible;
             _sourceState.Visibility = Visibility.Collapsed;
             _translation.Visibility = Visibility.Visible;
-            _translation.Foreground = Ui.Palette.Warning;
+            _translation.Foreground = processing ? Ui.Palette.Ink : Ui.Palette.Warning;
             _translation.Text = message ?? "操作未完成。";
+            _translation.TextWrapping = TextWrapping.Wrap;
             _errorPanel.Visibility = Visibility.Collapsed;
             _progress.Visibility = Visibility.Collapsed;
             _loadingText.Visibility = Visibility.Collapsed;
-            _meta.Text = "提示";
+            _meta.Text = processing ? "正在识别" : "提示";
             SetOcrActionsVisible(false);
             _copyTranslation.Visibility = Visibility.Collapsed;
             if (WindowState == WindowState.Maximized)
                 WindowState = WindowState.Normal;
             MinWidth = 300;
-            MinHeight = 120;
-            Width = 360;
-            Height = 150;
+            MinHeight = processing ? 108 : 120;
+            Width = 300;
+            Height = processing ? 108 : 120;
             UpdateContentLayout();
             if (!IsVisible)
             {
@@ -1440,7 +1479,7 @@ namespace GlobalTranslator
                 PositionNear(x, y, new NativeMethods.RECT());
                 Opacity = 1;
             }
-            _noticeTimer.Start();
+            if (!processing) _noticeTimer.Start();
         }
 
         private void FinishDismiss()

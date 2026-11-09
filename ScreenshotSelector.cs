@@ -17,8 +17,20 @@ namespace GlobalTranslator
 
         public Bitmap SelectedBitmap { get; private set; }
 
-        public ScreenshotSelector()
+        public bool ExtractText { get; private set; }
+        public Rectangle SelectionBounds { get { return _selection; } }
+        private readonly bool _extractOnly;
+
+        private bool IsExtractMode
         {
+            get { return _extractOnly; }
+        }
+
+        public ScreenshotSelector() : this(false) { }
+
+        public ScreenshotSelector(bool extractOnly)
+        {
+            _extractOnly = extractOnly;
             Rectangle bounds = SystemInformation.VirtualScreen;
             _screen = new Bitmap(bounds.Width, bounds.Height, PixelFormat.Format32bppArgb);
             using (Graphics graphics = Graphics.FromImage(_screen))
@@ -51,7 +63,7 @@ namespace GlobalTranslator
             if (!_selection.IsEmpty)
             {
                 e.Graphics.DrawImage(_screen, _selection, _selection, GraphicsUnit.Pixel);
-                using (var pen = new Pen(Color.FromArgb(39, 195, 214), 2))
+                using (var pen = new Pen(IsExtractMode ? Color.FromArgb(107, 230, 149) : Color.FromArgb(39, 195, 214), 2))
                 {
                     pen.DashStyle = DashStyle.Dash;
                     e.Graphics.DrawRectangle(pen, _selection);
@@ -64,18 +76,8 @@ namespace GlobalTranslator
             }
             if (_dragging) DrawMagnifier(e.Graphics);
 
-            using (var font = new Font("Microsoft YaHei UI", 14, FontStyle.Bold))
-            using (var background = new SolidBrush(Color.FromArgb(220, 8, 42, 67)))
-            using (var brush = new SolidBrush(Color.White))
-            {
-                const string hint = "鲨译 OCR  ·  拖动框选文字  ·  右键 / Esc 取消";
-                SizeF size = e.Graphics.MeasureString(hint, font);
-                var box = new RectangleF(
-                    (ClientSize.Width - size.Width) / 2 - 18, 22,
-                    size.Width + 36, size.Height + 16);
-                e.Graphics.FillRectangle(background, box);
-                e.Graphics.DrawString(hint, font, brush, box.Left + 18, box.Top + 8);
-            }
+            // Keep the capture surface clear. Mode and cancellation stay
+            // available through keyboard and mouse behavior without a banner.
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -129,8 +131,9 @@ namespace GlobalTranslator
                 Invalidate();
                 return;
             }
+            ExtractText = IsExtractMode;
             Rectangle captureArea = _selection;
-            captureArea.Inflate(6, 6);
+            if (!ExtractText) captureArea.Inflate(6, 6);
             captureArea = Rectangle.Intersect(captureArea, ClientRectangle);
             SelectedBitmap = _screen.Clone(captureArea, PixelFormat.Format32bppArgb);
             DialogResult = DialogResult.OK;
@@ -147,6 +150,11 @@ namespace GlobalTranslator
                 return;
             }
             base.OnKeyDown(e);
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
         }
 
         private void CancelSelection()

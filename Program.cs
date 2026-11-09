@@ -1,6 +1,6 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +18,7 @@ namespace GlobalTranslator
         private SelectionMonitor _monitor;
         private PopupWindow _popup;
         private Bitmap _lastOcrImage;
+        private Window _ocrPreview;
         private ImageTableWindow _tableWindow;
 
         private void ShowImageTable(bool useLastScreenshot)
@@ -59,26 +60,6 @@ namespace GlobalTranslator
         private bool _exiting;
         private bool _updateCheckInProgress;
         private bool _screenshotSelecting;
-        private WritingWindow _writingWindow;
-        private ToolStripMenuItem _writingMenuItem;
-
-        private void ShowWriting()
-        {
-            if (_screenshotSelecting) return;
-            if (_writingWindow != null && _writingWindow.IsCapturing) return;
-            if (_writingWindow == null)
-            {
-                _writingWindow = new WritingWindow(_settings, _client,
-                    ShowModelSettings);
-                _writingWindow.Closed += delegate { _writingWindow = null; };
-            }
-            _writingWindow.RefreshModelSummary();
-            if (_writingWindow.WindowState == WindowState.Minimized)
-                _writingWindow.WindowState = WindowState.Normal;
-            _writingWindow.Show();
-            _writingWindow.Activate();
-        }
-
         [STAThread]
         public static void Main()
         {
@@ -176,8 +157,6 @@ namespace GlobalTranslator
                 RefreshDismissHotkey();
                 UpdateTrayLabels();
                 RefreshStartupMenu();
-                if (_writingWindow != null)
-                    _writingWindow.RefreshModelSummary();
                 if (_updateService != null)
                     _updateService.AutomaticCheckHours = _settings.UpdateCheckHours;
             };
@@ -404,14 +383,6 @@ namespace GlobalTranslator
         {
             if (_messageWindow == null) return;
             IntPtr handle = _messageWindow.Handle;
-            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE);
-            HotkeyGesture assistantCapture = ParsedHotkey(_settings.AssistantCaptureHotkey, "Ctrl+Alt+A");
-            bool assistantCaptureRegistered = NativeHotKey.Register(handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE,
-                assistantCapture.Modifiers | NativeMethods.MOD_NOREPEAT, assistantCapture.VirtualKey);
-            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_WRITING);
-            HotkeyGesture writing = ParsedHotkey(_settings.WritingHotkey, "F7");
-            bool writingRegistered = NativeHotKey.Register(handle, NativeMethods.HOTKEY_WRITING,
-                writing.Modifiers | NativeMethods.MOD_NOREPEAT, writing.VirtualKey);
             NativeHotKey.Unregister(
                 handle, NativeMethods.HOTKEY_TRANSLATE);
             NativeHotKey.Unregister(
@@ -442,18 +413,23 @@ namespace GlobalTranslator
                 NativeMethods.HOTKEY_SETTINGS,
                 settings.Modifiers | NativeMethods.MOD_NOREPEAT,
                 settings.VirtualKey);
+            NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_EXTRACT_TEXT);
+            HotkeyGesture extract;
+            string error;
+            bool extractRegistered = string.IsNullOrWhiteSpace(_settings.ExtractTextHotkey) ||
+                (HotkeyGesture.TryParse(_settings.ExtractTextHotkey, out extract, out error) &&
+                    NativeHotKey.Register(handle, NativeMethods.HOTKEY_EXTRACT_TEXT,
+                        extract.Modifiers | NativeMethods.MOD_NOREPEAT, extract.VirtualKey));
             DiagnosticLog.Write(
                 "Hotkeys registered; translate=" +
                 translateRegistered +
                 "; ocr=" + screenshotRegistered +
                 "; settings=" + settingsRegistered);
-            if (!assistantCaptureRegistered || !writingRegistered || !translateRegistered ||
+            if (!extractRegistered || !translateRegistered ||
                 !screenshotRegistered ||
                 !settingsRegistered)
             {
                 string message = "";
-                if (!assistantCaptureRegistered) message += assistantCapture.Display + " 截图到助手不可用，请在设置中更换快捷键。\n";
-                if (!writingRegistered) message += writing.Display + " 外贸沟通助手不可用。请在设置中更换快捷键。\n";
                 if (!translateRegistered)
                     message += translate.Display + " 选中翻译不可用。";
                 if (!screenshotRegistered)
@@ -464,6 +440,9 @@ namespace GlobalTranslator
                     message +=
                         (message.Length == 0 ? "" : "\n") +
                         settings.Display + " 打开设置不可用。";
+                if (!extractRegistered)
+                    message += (message.Length == 0 ? "" : "\n") +
+                        _settings.ExtractTextHotkey + " 提取文字不可用。";
                 _tray.ShowBalloonTip(
                     4500,
                     "Sharkey 快捷键被占用",
@@ -487,19 +466,6 @@ namespace GlobalTranslator
 
         private IntPtr WindowProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (message == NativeMethods.WM_HOTKEY && wParam.ToInt32() == NativeMethods.HOTKEY_ASSISTANT_CAPTURE)
-            {
-                handled = true;
-                if (_screenshotSelecting) return IntPtr.Zero;
-                if (_writingWindow == null)
-                {
-                    _writingWindow = new WritingWindow(_settings, _client, ShowModelSettings);
-                    _writingWindow.Closed += delegate { _writingWindow = null; };
-                }
-                if (_popup != null) _popup.DismissImmediately();
-                _writingWindow.CaptureFromDesktop();
-                return IntPtr.Zero;
-            }
             if (message == NativeMethods.WM_HOTKEY &&
                 wParam.ToInt32() == NativeMethods.HOTKEY_TRANSLATE)
             {
@@ -507,16 +473,17 @@ namespace GlobalTranslator
                 CaptureCurrentSelection();
                 handled = true;
             }
-            else if (message == NativeMethods.WM_HOTKEY && wParam.ToInt32() == NativeMethods.HOTKEY_WRITING)
-            {
-                ShowWriting();
-                handled = true;
-            }
             else if (message == NativeMethods.WM_HOTKEY &&
                      wParam.ToInt32() == NativeMethods.HOTKEY_SCREENSHOT)
             {
                 DiagnosticLog.Write("Screenshot hotkey received");
                 CaptureScreenshotAndTranslate();
+                handled = true;
+            }
+            else if (message == NativeMethods.WM_HOTKEY &&
+                     wParam.ToInt32() == NativeMethods.HOTKEY_EXTRACT_TEXT)
+            {
+                CaptureScreenshotAndTranslate(true);
                 handled = true;
             }
             else if (message == NativeMethods.WM_HOTKEY &&
@@ -567,9 +534,8 @@ namespace GlobalTranslator
             menu.Items.Add(_settingsMenuItem);
             menu.Items.Add(_translateMenuItem);
             menu.Items.Add(_ocrMenuItem);
+            menu.Items.Add("截图提取文字", null, delegate { CaptureScreenshotAndTranslate(true); });
             menu.Items.Add("识图转表格…", null, delegate { ShowImageTable(false); });
-            _writingMenuItem = new ToolStripMenuItem("外贸沟通助手", null, delegate { ShowWriting(); });
-            menu.Items.Add(_writingMenuItem);
             menu.Items.Add("最近翻译…", null, delegate { new HistoryWindow(_settings, _client).Show(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(_startupMenuItem);
@@ -582,7 +548,6 @@ namespace GlobalTranslator
 
         private void UpdateTrayLabels()
         {
-            if (_writingMenuItem != null) _writingMenuItem.Text = "外贸沟通助手  ·  " + ParsedHotkey(_settings.WritingHotkey, "F7").Display;
             if (_settingsMenuItem == null) return;
             _settingsMenuItem.Text =
                 "设置  ·  " +
@@ -637,6 +602,7 @@ namespace GlobalTranslator
 
         private async void CaptureCurrentSelection()
         {
+            if (_ocrPreview != null) _ocrPreview.Close();
             // Invalidate any OCR result that is still being prepared so an
             // older F9 request cannot replace a newer F8 card.
             _ocrRequestId++;
@@ -646,30 +612,33 @@ namespace GlobalTranslator
             await _monitor.CaptureAtCursorAsync();
         }
 
-        private async void CaptureScreenshotAndTranslate()
+        private async void CaptureScreenshotAndTranslate(bool extractOnly = false)
         {
             if (_screenshotSelecting) return;
-            if (_writingWindow != null && _writingWindow.IsCapturing) return;
             if (_ocrCancellation != null) _ocrCancellation.Cancel();
             var activeCancellation = new CancellationTokenSource();
             _ocrCancellation = activeCancellation;
             int requestId = ++_ocrRequestId;
             Bitmap image = null;
+            bool extractText = extractOnly;
+            var captureTimer = Stopwatch.StartNew();
             NativeMethods.RECT screenshotBounds = new NativeMethods.RECT();
             try
             {
-                await Task.Delay(60, activeCancellation.Token);
                 _popup.DismissImmediately();
+                if (_ocrPreview != null) _ocrPreview.Close();
+                await Task.Delay(60, activeCancellation.Token);
                 _screenshotSelecting = true;
                 try
                 {
-                    using (var selector = new ScreenshotSelector())
+                    using (var selector = new ScreenshotSelector(extractOnly))
                     {
                         if (selector.ShowDialog() != DialogResult.OK) return;
-                        activeCancellation.Token.ThrowIfCancellationRequested();
                         image = selector.SelectedBitmap;
+                        activeCancellation.Token.ThrowIfCancellationRequested();
+                        extractText = selector.ExtractText;
                         System.Drawing.Rectangle selectedBounds =
-                            ReadSelectionBounds(selector);
+                            selector.SelectionBounds;
                         System.Drawing.Rectangle virtualScreen =
                             SystemInformation.VirtualScreen;
                         screenshotBounds = new NativeMethods.RECT
@@ -690,8 +659,14 @@ namespace GlobalTranslator
                     throw new InvalidOperationException(
                         "请在 OCR 设置中启用 AI 视觉识别。");
 
+                long captureMs = captureTimer.ElapsedMilliseconds;
                 EnsureOcrConsent();
+                activeCancellation.Token.ThrowIfCancellationRequested();
 
+                _popup.ShowTransientNotice(
+                    "识别中…",
+                    screenshotBounds.Left, screenshotBounds.Bottom, true);
+                var recognitionTimer = Stopwatch.StartNew();
                 string aiText = await _client.RecognizeImageAsync(
                     image, _settings, activeCancellation.Token);
                 var result = new OcrRecognitionResult
@@ -705,6 +680,9 @@ namespace GlobalTranslator
 
                 DiagnosticLog.Write(
                     "OCR completed; engine=" + result.Engine +
+                    "; mode=" + (extractText ? "extract" : "translate") +
+                    "; capture_ms=" + captureMs +
+                    "; recognition_ms=" + recognitionTimer.ElapsedMilliseconds +
                     "; characters=" + result.Text.Length);
                 if (string.IsNullOrWhiteSpace(result.Text))
                 {
@@ -719,7 +697,15 @@ namespace GlobalTranslator
                 NativeMethods.POINT point;
                 NativeMethods.GetCursorPos(out point);
                 if (_lastOcrImage != null) _lastOcrImage.Dispose();
-                _lastOcrImage = new Bitmap(image);
+                _lastOcrImage = image;
+                image = null;
+                if (extractText)
+                {
+                    _popup.DismissImmediately();
+                    _popup.ShowOcrTextAtBounds(
+                        result, screenshotBounds, _settings, _client);
+                    return;
+                }
                 _popup.TranslateOcrAtBounds(
                     result,
                     screenshotBounds.Right > screenshotBounds.Left
@@ -762,30 +748,6 @@ namespace GlobalTranslator
         {
             string value = message ?? "未知错误。";
             return value.Length > 120 ? value.Substring(0, 120) + "…" : value;
-        }
-
-        private static System.Drawing.Rectangle ReadSelectionBounds(
-            ScreenshotSelector selector)
-        {
-            if (selector == null) return System.Drawing.Rectangle.Empty;
-            FieldInfo field = typeof(ScreenshotSelector).GetField(
-                "_selection",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            if (field == null) return System.Drawing.Rectangle.Empty;
-            try
-            {
-                object value = field.GetValue(selector);
-                return value is System.Drawing.Rectangle
-                    ? (System.Drawing.Rectangle)value
-                    : System.Drawing.Rectangle.Empty;
-            }
-            catch (Exception ex)
-            {
-                DiagnosticLog.Write(
-                    "Screenshot selection bounds unavailable; type=" +
-                    ex.GetType().Name);
-                return System.Drawing.Rectangle.Empty;
-            }
         }
 
         private void ShowSettings()
@@ -876,8 +838,6 @@ namespace GlobalTranslator
 
         internal void ExitApplication()
         {
-            if (_writingWindow != null)
-                _writingWindow.CloseForExit();
             Shutdown();
         }
 
@@ -885,6 +845,7 @@ namespace GlobalTranslator
         {
             _exiting = true;
             if (_tableWindow != null) _tableWindow.Close();
+            if (_ocrPreview != null) _ocrPreview.Close();
             if (_lastOcrImage != null) { _lastOcrImage.Dispose(); _lastOcrImage = null; }
             if (_updateTimer != null) _updateTimer.Stop();
             if (_networkDebounce != null) _networkDebounce.Stop();
@@ -895,9 +856,8 @@ namespace GlobalTranslator
             if (_messageWindow != null)
             {
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_TRANSLATE);
-                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_WRITING);
-                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_ASSISTANT_CAPTURE);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SCREENSHOT);
+                NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_EXTRACT_TEXT);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_SETTINGS);
                 NativeHotKey.Unregister(_messageWindow.Handle, NativeMethods.HOTKEY_DISMISS);
                 _messageWindow.Dispose();

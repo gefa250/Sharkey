@@ -22,10 +22,6 @@ internal static class FeatureProbe
             TestHotkeysAndStartup(app);
             TestSmartTargetResolver(app);
             TestTextToolsAndWriting(app);
-            TestCommunicationApi(app);
-            TestCommerceTools(app);
-            TestCommerceToolRoundTrip(app);
-            TestCommerceSearch(app);
             TestAiBalance(app);
             TestImageTables(app);
             TestModelApi(app);
@@ -232,455 +228,6 @@ internal static class FeatureProbe
         finally { listener.Close(); ((IDisposable)client).Dispose(); history.GetMethod("Clear").Invoke(null, null); }
     }
 
-    private static void TestCommunicationApi(Assembly app)
-    {
-        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
-        Type inputType = app.GetType("GlobalTranslator.CommunicationRequest", true);
-        Type turnType = app.GetType("GlobalTranslator.CommunicationTurn", true);
-        Type resultType = app.GetType("GlobalTranslator.CommunicationResult", true);
-        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
-        object settings = Activator.CreateInstance(settingsType, true);
-        settingsType.GetField("Provider").SetValue(settings, "GoogleFree");
-        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
-        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
-            "http://127.0.0.1:18944/v1");
-        settingsType.GetField("CustomModelApiKey").SetValue(settings, "probe-secret");
-        settingsType.GetField("CustomModelName").SetValue(settings, "probe-chat");
-        var listener = new HttpListener();
-        listener.Prefixes.Add("http://127.0.0.1:18944/");
-        listener.Start();
-        Exception serverError = null;
-        var serializer = new JavaScriptSerializer();
-        var server = Task.Run(delegate
-        {
-            try
-            {
-                for (int i = 0; i < 4; i++)
-                {
-                    HttpListenerContext context = listener.GetContext();
-                    string body;
-                    using (var reader = new StreamReader(context.Request.InputStream))
-                        body = reader.ReadToEnd();
-                    if (!body.Contains("Customer conversation") ||
-                        !body.Contains("reply, meaning_zh, advice_zh") ||
-                        !body.Contains("probe-chat"))
-                        throw new Exception("Communication prompt or model missing.");
-                    if (i == 0 && (!body.Contains("data:image/png;base64,AQID") ||
-                        !body.Contains("data:image/png;base64,BAUG") ||
-                        !body.Contains("Match the customer's language")))
-                        throw new Exception("Ordered screenshots or auto language missing.");
-                    if (i == 1 && (!body.Contains("shorter") ||
-                        !body.Contains("Previous reply") ||
-                        !body.Contains("Give advice only")))
-                        throw new Exception("Adjustment history or advice-only mode missing.");
-                    if (i == 2)
-                    {
-                        context.Response.StatusCode = 400;
-                        byte[] error = Encoding.UTF8.GetBytes(
-                            "{\"error\":{\"message\":\"image input unsupported\"}}");
-                        context.Response.OutputStream.Write(error, 0, error.Length);
-                        context.Response.Close();
-                        continue;
-                    }
-                    string answer = i == 0 || i == 3
-                        ? "{\"reply\":\"Please confirm the quantity.\",\"meaning_zh\":\"请确认数量。\",\"advice_zh\":\"价格待核实。\"}"
-                        : "{\"reply\":\"\",\"meaning_zh\":\"\",\"advice_zh\":\"先核实交期。\"}";
-                    string response = serializer.Serialize(new
-                    {
-                        choices = new[] { new { message = new { content = answer },
-                            finish_reason = "stop" } }
-                    });
-                    byte[] bytes = Encoding.UTF8.GetBytes(response);
-                    context.Response.OutputStream.Write(bytes, 0, bytes.Length);
-                    context.Response.Close();
-                }
-            }
-            catch (Exception error) { serverError = error; }
-        });
-        object client = Activator.CreateInstance(clientType, true);
-        try
-        {
-            object input = Activator.CreateInstance(inputType, true);
-            inputType.GetField("Background").SetValue(input, "客户说交期太久");
-            inputType.GetField("Intent").SetValue(input, "想请客户确认数量，价格未核实");
-            inputType.GetField("Images").SetValue(input, new[]
-                { new byte[] { 1, 2, 3 }, new byte[] { 4, 5, 6 } });
-            object first = CommunicationResultFor(clientType, client, input,
-                settings);
-            if ((string)resultType.GetField("Reply").GetValue(first) !=
-                    "Please confirm the quantity." ||
-                (string)resultType.GetField("MeaningZh").GetValue(first) !=
-                    "请确认数量。")
-                throw new Exception("Communication result was not parsed.");
-            object turn = Activator.CreateInstance(turnType, true);
-            turnType.GetField("Instruction").SetValue(turn, "initial");
-            turnType.GetField("Reply").SetValue(turn,
-                "Please confirm the quantity.");
-            Array turns = Array.CreateInstance(turnType, 1);
-            turns.SetValue(turn, 0);
-            inputType.GetField("Turns").SetValue(input, turns);
-            inputType.GetField("Adjustment").SetValue(input, "shorter");
-            inputType.GetField("AdviceOnly").SetValue(input, true);
-            object second = CommunicationResultFor(clientType, client, input,
-                settings);
-            if ((string)resultType.GetField("Reply").GetValue(second) != "" ||
-                (string)resultType.GetField("AdviceZh").GetValue(second) !=
-                    "先核实交期。")
-                throw new Exception("Advice-only result was not parsed.");
-            inputType.GetField("AdviceOnly").SetValue(input, false);
-            inputType.GetField("Background").SetValue(input, "");
-            inputType.GetField("Intent").SetValue(input, "");
-            try
-            {
-                CommunicationResultFor(clientType, client, input, settings);
-                throw new Exception("Unsupported image was accepted.");
-            }
-            catch (Exception error)
-            {
-                if (Unwrap(error).GetType().Name !=
-                    "UnsupportedCommunicationImageException") throw;
-            }
-            settingsType.GetField("CustomModelApiKey").SetValue(settings, "");
-            settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
-                "https://api.openai.com/v1");
-            settingsType.GetField("DeepSeekModelBaseUrl").SetValue(settings,
-                "http://127.0.0.1:18944/v1");
-            settingsType.GetField("DeepSeekModelApiKey").SetValue(settings,
-                "probe-secret");
-            settingsType.GetField("DeepSeekModelName").SetValue(settings,
-                "probe-chat");
-            inputType.GetField("Intent").SetValue(input, "请确认数量");
-            inputType.GetField("Images").SetValue(input, new byte[0][]);
-            inputType.GetField("Adjustment").SetValue(input, "");
-            inputType.GetField("Turns").SetValue(input,
-                Array.CreateInstance(turnType, 0));
-            try
-            {
-                CommunicationResultFor(clientType, client, input, settings);
-                throw new Exception("An invalid current AI model was silently replaced.");
-            }
-            catch (InvalidOperationException) { }
-            settingsType.GetField("ModelVendor").SetValue(settings, "DeepSeek");
-            CommunicationResultFor(clientType, client, input, settings);
-            if (!server.Wait(10000) || serverError != null)
-                throw serverError ?? new Exception("Communication server timed out.");
-            try
-            {
-                resultType.GetMethod("Parse").Invoke(null, new object[]
-                    { "{\"reply\":\"missing meaning\",\"advice_zh\":\"提示\"}", false, false });
-                throw new Exception("Malformed communication result was accepted.");
-            }
-            catch (TargetInvocationException error)
-            {
-                if (!(error.InnerException is InvalidOperationException)) throw;
-            }
-        }
-        finally { listener.Close(); ((IDisposable)client).Dispose(); }
-
-        var anthropic = new HttpListener();
-        anthropic.Prefixes.Add("http://127.0.0.1:18945/");
-        anthropic.Start();
-        Exception anthropicError = null;
-        var anthropicServer = Task.Run(delegate
-        {
-            try
-            {
-                var context = anthropic.GetContext();
-                string body;
-                using (var reader = new StreamReader(context.Request.InputStream))
-                    body = reader.ReadToEnd();
-                if (!body.Contains("\"type\":\"image\"") ||
-                    !body.Contains("\"source\":{\"type\":\"base64\"") ||
-                    context.Request.Headers["x-api-key"] != "probe-secret")
-                    throw new Exception("Anthropic image body or auth missing.");
-                context.Response.ContentType = "text/event-stream";
-                string answer = "{\"reply\":\"Hello.\",\"meaning_zh\":\"你好。\",\"advice_zh\":\"确认条款。\"}";
-                string stream = "data: " + serializer.Serialize(new
-                {
-                    type = "content_block_delta",
-                    delta = new { type = "text_delta", text = answer }
-                }) + "\n\n" +
-                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n" +
-                    "data: {\"type\":\"message_stop\"}\n\n";
-                byte[] bytes = Encoding.UTF8.GetBytes(stream);
-                context.Response.OutputStream.Write(bytes, 0, bytes.Length);
-                context.Response.Close();
-            }
-            catch (Exception error) { anthropicError = error; }
-        });
-        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
-            "http://127.0.0.1:18945/anthropic");
-        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
-        settingsType.GetField("CustomModelApiKey").SetValue(settings,
-            "probe-secret");
-        settingsType.GetField("CustomModelProtocol").SetValue(settings,
-            "Anthropic");
-        client = Activator.CreateInstance(clientType, true);
-        try
-        {
-            object input = Activator.CreateInstance(inputType, true);
-            inputType.GetField("Intent").SetValue(input, "礼貌回复");
-            inputType.GetField("Images").SetValue(input,
-                new[] { new byte[] { 1, 2, 3 } });
-            object answer = CommunicationResultFor(clientType, client, input,
-                settings);
-            if ((string)resultType.GetField("Reply").GetValue(answer) !=
-                "Hello.") throw new Exception("Anthropic reply missing.");
-            if (!anthropicServer.Wait(10000) || anthropicError != null)
-                throw anthropicError ?? new Exception("Anthropic server timed out.");
-            Console.WriteLine("COMMUNICATION openai/anthropic/images/advice/adjustment=True");
-        }
-        finally { anthropic.Close(); ((IDisposable)client).Dispose(); }
-    }
-
-    private static void TestCommerceTools(Assembly app)
-    {
-        Type requestType = app.GetType(
-            "GlobalTranslator.CommerceToolRequest", true);
-        Type calculator = app.GetType(
-            "GlobalTranslator.CommerceCalculator", true);
-        object request = Activator.CreateInstance(requestType, true);
-        requestType.GetField("Operation").SetValue(request, "quote");
-        requestType.GetField("Inputs").SetValue(request,
-            new Dictionary<string, string>
-            {
-                { "quantity", "100" }, { "unit_price", "12.5" },
-                { "discount_percent", "10" }, { "fee", "25" }
-            });
-        MethodInfo execute = calculator.GetMethod("Execute",
-            BindingFlags.Static | BindingFlags.NonPublic);
-        object quote = execute.Invoke(null, new[] { request });
-        string detail = (string)quote.GetType().GetField("Detail")
-            .GetValue(quote);
-        if (!detail.Contains("1,150.00"))
-            throw new Exception("Quote calculation lost its exact amount.");
-        requestType.GetField("Operation").SetValue(request, "margin");
-        requestType.GetField("Inputs").SetValue(request,
-            new Dictionary<string, string>
-            {
-                { "revenue", "125" }, { "cost", "100" }
-            });
-        object margin = execute.Invoke(null, new[] { request });
-        detail = (string)margin.GetType().GetField("Detail")
-            .GetValue(margin);
-        if (!detail.Contains("20.00%"))
-            throw new Exception("Margin calculation is incorrect.");
-        requestType.GetField("Operation").SetValue(request, "boxes");
-        requestType.GetField("Inputs").SetValue(request,
-            new Dictionary<string, string>
-            {
-                { "quantity", "101" }, { "units_per_box", "20" }
-            });
-        object boxes = execute.Invoke(null, new[] { request });
-        detail = (string)boxes.GetType().GetField("Detail")
-            .GetValue(boxes);
-        if (!detail.Contains("6 箱") || !detail.Contains("尾箱 1 件"))
-            throw new Exception("Box count or remainder is incorrect.");
-        requestType.GetField("Operation").SetValue(request, "convert");
-        requestType.GetField("Inputs").SetValue(request,
-            new Dictionary<string, string>
-            {
-                { "value", "100" }, { "from_unit", "cm" },
-                { "to_unit", "m" }
-            });
-        object converted = execute.Invoke(null, new[] { request });
-        detail = (string)converted.GetType().GetField("Detail")
-            .GetValue(converted);
-        if (!detail.Contains("1.0000 m"))
-            throw new Exception("Unit conversion is incorrect.");
-        requestType.GetField("Operation").SetValue(request, "freight");
-        requestType.GetField("Inputs").SetValue(request,
-            new Dictionary<string, string>
-            {
-                { "actual_kg", "5" }, { "length_cm", "30" },
-                { "width_cm", "40" }, { "height_cm", "50" },
-                { "box_count", "2" }, { "divisor", "6000" },
-                { "rate_per_kg", "2" },
-                { "rounding_increment_kg", "0.5" }, { "fee", "3" }
-            });
-        object freight = execute.Invoke(null, new[] { request });
-        detail = (string)freight.GetType().GetField("Detail")
-            .GetValue(freight);
-        if (!detail.Contains("20.00 kg") ||
-            !detail.Contains("43.00"))
-            throw new Exception("Freight weight or fee is incorrect.");
-        requestType.GetField("Operation").SetValue(request, "fx");
-        AssertInvocationFailure(delegate { execute.Invoke(null,
-            new[] { request }); }, typeof(InvalidOperationException),
-            "缺少有效参数");
-        Type resultType = app.GetType(
-            "GlobalTranslator.CommunicationResult", true);
-        object parsed = resultType.GetMethod("Parse").Invoke(null,
-            new object[]
-            {
-                "{\"tool_requests\":[{\"tool\":\"calculate\"," +
-                "\"operation\":\"quote\",\"inputs\":{\"quantity\":100}}]}",
-                false, false
-            });
-        Array requests = (Array)resultType.GetField("ToolRequests")
-            .GetValue(parsed);
-        if (requests.Length != 1)
-            throw new Exception("Assistant tool request was not parsed.");
-        Console.WriteLine("COMMERCE_TOOLS decimal/validation/structured=True");
-    }
-
-    private static void TestCommerceToolRoundTrip(Assembly app)
-    {
-        var listener = new HttpListener();
-        listener.Prefixes.Add("http://127.0.0.1:18948/");
-        listener.Start();
-        Exception serverError = null;
-        var serializer = new JavaScriptSerializer();
-        var server = Task.Run(delegate
-        {
-            try
-            {
-                for (int i = 0; i < 3; i++)
-                {
-                    HttpListenerContext context = listener.GetContext();
-                    string body;
-                    using (var reader = new StreamReader(
-                        context.Request.InputStream))
-                        body = reader.ReadToEnd();
-                    if (i == 1 && !body.Contains("1,150.00"))
-                        throw new Exception("Verified local calculation was not supplied to the model.");
-                    if (i == 2 && !body.Contains("联网搜索未启用"))
-                        throw new Exception("Disabled search did not stay offline.");
-                    string answer = i == 0
-                        ? "{\"tool_requests\":[{\"tool\":\"calculate\"," +
-                          "\"operation\":\"quote\",\"inputs\":{\"quantity\":100," +
-                          "\"unit_price\":12.5,\"discount_percent\":10,\"fee\":25}}]}"
-                        : i == 1
-                        ? "{\"tool_requests\":[{\"tool\":\"search\"," +
-                          "\"query\":\"current tariff\"}]}"
-                        : "{\"reply\":\"Total is 1150.\",\"meaning_zh\":\"合计1150。\"," +
-                          "\"advice_zh\":\"请核对币种和报价条款。\"}";
-                    byte[] response = Encoding.UTF8.GetBytes(
-                        serializer.Serialize(new
-                        {
-                            choices = new[] { new
-                            {
-                                message = new { content = answer },
-                                finish_reason = "stop"
-                            } }
-                        }));
-                    context.Response.ContentType = "application/json";
-                    context.Response.OutputStream.Write(response, 0,
-                        response.Length);
-                    context.Response.Close();
-                }
-            }
-            catch (Exception error) { serverError = error; }
-        });
-        Type settingsType = app.GetType("GlobalTranslator.AppSettings", true);
-        Type inputType = app.GetType("GlobalTranslator.CommunicationRequest", true);
-        Type clientType = app.GetType("GlobalTranslator.TranslationClient", true);
-        object settings = Activator.CreateInstance(settingsType, true);
-        object input = Activator.CreateInstance(inputType, true);
-        settingsType.GetField("ModelVendor").SetValue(settings, "Custom");
-        settingsType.GetField("CustomModelBaseUrl").SetValue(settings,
-            "http://127.0.0.1:18948/v1");
-        settingsType.GetField("CustomModelApiKey").SetValue(settings,
-            "probe-secret");
-        settingsType.GetField("CustomModelName").SetValue(settings,
-            "probe-chat");
-        inputType.GetField("Intent").SetValue(input, "计算报价");
-        object client = Activator.CreateInstance(clientType, true);
-        try
-        {
-            object answer = CommunicationResultFor(clientType, client,
-                input, settings);
-            string calculations = (string)answer.GetType()
-                .GetField("CalculationDetails").GetValue(answer);
-            if (!calculations.Contains("1,150.00"))
-                throw new Exception("Local calculation was not returned to the workbench.");
-            if (!server.Wait(10000) || serverError != null)
-                throw serverError ?? new Exception("Tool round trip timed out.");
-        }
-        finally { listener.Close(); ((IDisposable)client).Dispose(); }
-        Console.WriteLine("COMMERCE_ROUNDTRIP calculate/offline/model=True");
-    }
-
-    private sealed class SearchProbeHandler : HttpMessageHandler
-    {
-        internal string Body;
-        internal string Authorization;
-        internal string Endpoint;
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Body = request.Content.ReadAsStringAsync().GetAwaiter()
-                .GetResult();
-            Endpoint = request.RequestUri.AbsoluteUri;
-            if (request.Headers.Contains("x-api-key"))
-            {
-                Authorization = string.Join("", request.Headers.GetValues("x-api-key"));
-                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                { Content = new StringContent("{\"content\":[{\"type\":\"web_search_tool_result\",\"content\":[{\"title\":\"Source\",\"url\":\"https://example.test/native\"}]},{\"type\":\"text\",\"text\":\"Evidence\"}]}" ) });
-            }
-            Authorization = request.Headers.Authorization.ToString();
-            return Task.FromResult(new HttpResponseMessage(
-                System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    "{\"results\":[{\"title\":\"Reference\"," +
-                    "\"url\":\"https://example.test/source\"," +
-                    "\"content\":\"Published tariff data\"}]}"
-                )
-            });
-        }
-    }
-
-    private static void TestCommerceSearch(Assembly app)
-    {
-        Type searchType = app.GetType("GlobalTranslator.CommerceSearch", true);
-        var handler = new SearchProbeHandler();
-        object search = Activator.CreateInstance(searchType,
-            BindingFlags.Instance | BindingFlags.NonPublic |
-            BindingFlags.Public, null, new object[] { handler }, null);
-        try
-        {
-            MethodInfo method = searchType.GetMethod("SearchAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            var task = (Task)method.Invoke(search,
-                new object[] { "current tariff", "probe-search-key",
-                    CancellationToken.None });
-            task.GetAwaiter().GetResult();
-            object outcome = task.GetType().GetProperty("Result")
-                .GetValue(task);
-            string sources = (string)outcome.GetType().GetField("Sources")
-                .GetValue(outcome);
-            if (handler.Authorization != "Bearer probe-search-key" ||
-                !handler.Body.Contains("\"search_depth\":\"basic\"") ||
-                !handler.Body.Contains("\"max_results\":5") ||
-                !sources.Contains("https://example.test/source"))
-                throw new Exception("Search request or source display is incorrect.");
-            Type connectionType = app.GetType("GlobalTranslator.ModelConnectionSettings", true);
-            object connection = Activator.CreateInstance(connectionType, true);
-            connectionType.GetField("BaseUrl").SetValue(connection, "https://api.deepseek.com");
-            connectionType.GetField("ApiKey").SetValue(connection, "probe-model-key");
-            connectionType.GetField("Model").SetValue(connection, "configured-model");
-            var nativeTask = (Task)searchType.GetMethod("SearchNativeAsync", BindingFlags.Instance | BindingFlags.NonPublic)
-                .Invoke(search, new object[] { "public product information", connection, CancellationToken.None });
-            nativeTask.GetAwaiter().GetResult();
-            if (handler.Endpoint != "https://api.deepseek.com/anthropic/v1/messages" ||
-                handler.Authorization != "probe-model-key" || !handler.Body.Contains("web_search_20250305") ||
-                !handler.Body.Contains("configured-model")) throw new Exception("Native search request is incorrect.");
-        }
-        finally { ((IDisposable)search).Dispose(); }
-        Console.WriteLine("COMMERCE_SEARCH bearer/basic/sources=True");
-    }
-
-    private static object CommunicationResultFor(Type clientType, object client,
-        object input, object settings)
-    {
-        object task = clientType.GetMethod("ComposeCommunicationAsync")
-            .Invoke(client, new[] { input, settings, (object)CancellationToken.None });
-        ((Task)task).GetAwaiter().GetResult();
-        return task.GetType().GetProperty("Result").GetValue(task, null);
-    }
-
     private static void TestSmartTargetResolver(Assembly app)
     {
         Type resolver = app.GetType(
@@ -828,7 +375,7 @@ internal static class FeatureProbe
             throw new InvalidOperationException(
                 "Startup command does not target Sharkey.exe.");
         Console.WriteLine(
-            "HOTKEY defaults=F7/F8/F9/F10 combo={0} startupCommandReady=True",
+            "HOTKEY defaults=F8/F9/F10 combo={0} startupCommandReady=True",
             display);
     }
 
@@ -1664,9 +1211,20 @@ internal static class FeatureProbe
                     "Escape no longer cancels screenshot selection.");
         }
 
+        foreach (bool? extractOnly in new bool?[] { false, true, null })
         using (var selector = (System.Windows.Forms.Form)
-            Activator.CreateInstance(selectorType, true))
+            Activator.CreateInstance(selectorType, new object[] { extractOnly }))
         {
+            if (!extractOnly.HasValue)
+            {
+                MethodInfo down = selectorType.GetMethod("OnKeyDown", BindingFlags.Instance | BindingFlags.NonPublic);
+                MethodInfo up = selectorType.GetMethod("OnKeyUp", BindingFlags.Instance | BindingFlags.NonPublic);
+                var tab = new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.Tab);
+                down.Invoke(selector, new object[] { tab });
+                down.Invoke(selector, new object[] { tab });
+                up.Invoke(selector, new object[] { tab });
+                // Repeated key-down must toggle only once, and release must retain OCR mode.
+            }
             MethodInfo mouseDown = selectorType.GetMethod(
                 "OnMouseDown",
                 BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1702,7 +1260,12 @@ internal static class FeatureProbe
                 selected == null)
                 throw new InvalidOperationException(
                     "Normal left-button screenshot selection no longer submits.");
-            selected.Dispose();
+            using (selected)
+            {
+                bool extracted = (bool)selectorType.GetProperty("ExtractText").GetValue(selector, null);
+                if (extracted != (extractOnly != false) || (extractOnly != false && (selected.Width != 100 || selected.Height != 70)))
+                    throw new InvalidOperationException("Screenshot did not submit the expected mode or exact OCR region.");
+            }
         }
     }
 
@@ -1955,7 +1518,12 @@ internal static class FeatureProbe
                         throw new InvalidOperationException(
                             "Vision response Markdown emphasis was not cleaned.");
                     if (serverError != null) throw serverError;
-                    Console.WriteLine("VISION_API text=" + text);
+                    listener.Stop();
+                    var repeated = (Task<string>)recognize.Invoke(
+                        client, new object[] { bitmap, settings, CancellationToken.None });
+                    if (!repeated.Wait(3000) || repeated.Result != text)
+                        throw new InvalidOperationException("Identical OCR image did not reuse the result.");
+                    Console.WriteLine("VISION_API text=" + text + "; repeat_cache=True");
                 }
             }
             finally { ((IDisposable)client).Dispose(); }

@@ -23,7 +23,7 @@ internal static class DesignProbe
     static readonly string[] Migrated =
     {
         "Ui/DesignSystem.cs", "Ui/Icons.cs", "Ui/Motion.cs",
-        "ChatReadingView.cs", "CommerceChatLayout.cs", "PopupWindow.cs",
+        "PopupWindow.cs",
         "SettingsWindow.cs", "ImageTableWindow.cs", "UpdateWindow.cs"
     };
 

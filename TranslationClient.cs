@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,6 +35,9 @@ namespace GlobalTranslator
         private readonly LinkedList<string> _translationCacheOrder =
             new LinkedList<string>();
         private const int TranslationCacheCapacity = 20;
+        private string _lastVisionKey;
+        private string _lastVisionText;
+        private DateTime _lastVisionExpiresUtc;
         private static readonly TimeSpan TranslationCacheLifetime =
             TimeSpan.FromMinutes(15);
         private static readonly TimeSpan ModelStreamIdleTimeout =
@@ -313,12 +317,39 @@ namespace GlobalTranslator
                 throw new InvalidOperationException(
                     "模型 API 地址必须是有效的 HTTP 或 HTTPS 地址。");
 
-            string base64;
-            using (var stream = new MemoryStream())
+            var encodeTimer = Stopwatch.StartNew();
+            string apiKey = (visionConnection.ApiKey ?? "").Trim();
+            byte[] png = await Task.Factory.StartNew(delegate
             {
-                image.Save(stream, ImageFormat.Png);
-                base64 = Convert.ToBase64String(stream.ToArray());
+                using (var stream = new MemoryStream())
+                {
+                    image.Save(stream, ImageFormat.Png);
+                    return stream.ToArray();
+                }
+            }, token, TaskCreationOptions.None, TaskScheduler.Default);
+            token.ThrowIfCancellationRequested();
+            string visionKey = null;
+            if (customPrompt == null)
+            {
+                using (var hash = SHA256.Create())
+                {
+                    byte[] profile = Encoding.UTF8.GetBytes(
+                        endpoint.AbsoluteUri + "\n" + protocol + "\n" +
+                        settings.ModelVendor + "\n" + model + "\n" + apiKey);
+                    hash.TransformBlock(profile, 0, profile.Length, profile, 0);
+                    hash.TransformFinalBlock(png, 0, png.Length);
+                    visionKey = Convert.ToBase64String(hash.Hash);
+                }
+                lock (_cacheGate)
+                {
+                    if (_lastVisionKey == visionKey && DateTime.UtcNow < _lastVisionExpiresUtc)
+                    {
+                        DiagnosticLog.Write("OCR cache hit; encode_ms=" + encodeTimer.ElapsedMilliseconds);
+                        return _lastVisionText;
+                    }
+                }
             }
+            string base64 = Convert.ToBase64String(png);
             string prompt =
                 "Transcribe every visible character in the image exactly. " +
                 "Preserve line breaks, punctuation, numbers, URLs, and original language. " +
@@ -359,31 +390,34 @@ namespace GlobalTranslator
 
             using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
             {
-                string apiKey = (visionConnection.ApiKey ?? "").Trim();
                 ApplyModelAuthentication(
                     request, apiKey, endpoint, protocol);
                 request.Content = new StringContent(
                     body, Encoding.UTF8, "application/json");
+                long encodeMs = encodeTimer.ElapsedMilliseconds;
+                var serviceTimer = Stopwatch.StartNew();
                 using (HttpResponseMessage response =
                     await _http.SendAsync(request, token))
                 {
                     string json = await response.Content.ReadAsStringAsync();
+                    if (visionKey != null)
+                        DiagnosticLog.Write("OCR response; encode_ms=" + encodeMs +
+                            "; service_ms=" + serviceTimer.ElapsedMilliseconds + "; png_bytes=" + png.Length);
                     if (!response.IsSuccessStatusCode)
                         throw ApiError("AI 视觉 OCR", response.StatusCode, json);
                     if (isAnthropic)
                     {
-                        if (customPrompt != null)
+                        var visionResponse = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
+                        object reason;
+                        if (visionResponse != null && visionResponse.TryGetValue("stop_reason", out reason))
                         {
-                            var tableResponse = new JavaScriptSerializer().DeserializeObject(json) as Dictionary<string, object>;
-                            object reason;
-                            if (tableResponse != null && tableResponse.TryGetValue("stop_reason", out reason))
-                                ValidateAnthropicStopReason(reason as string, false);
+                            ValidateAnthropicStopReason(reason as string, false);
                         }
                         string anthropicText = ExtractAnthropicText(json);
                         if (string.IsNullOrWhiteSpace(anthropicText))
                             throw new InvalidOperationException(
                                 "视觉模型返回格式不兼容，未找到 content[].text。");
-                        return customPrompt == null ? CleanVisionText(anthropicText) : anthropicText;
+                        return visionKey == null ? anthropicText : RememberVisionText(visionKey, anthropicText, token);
                     }
                     var data = Deserialize<ModelApiResponse>(json);
                     if (data == null || data.Choices == null ||
@@ -393,377 +427,25 @@ namespace GlobalTranslator
                             data.Choices[0].Message.Content))
                         throw new InvalidOperationException(
                             "视觉模型返回格式不兼容，未找到识别文字。");
-                    if (customPrompt != null) ValidateOpenAiFinishReason(data.Choices[0].FinishReason);
-                    return customPrompt == null ? CleanVisionText(data.Choices[0].Message.Content) :
-                        data.Choices[0].Message.Content;
+                    ValidateOpenAiFinishReason(data.Choices[0].FinishReason);
+                    string content = data.Choices[0].Message.Content;
+                    return visionKey == null ? content : RememberVisionText(visionKey, content, token);
                 }
             }
         }
 
-        public async Task<CommunicationResult> ComposeCommunicationAsync(
-            CommunicationRequest input, AppSettings settings,
-            CancellationToken token)
+        private string RememberVisionText(string key, string content, CancellationToken token)
         {
-            if (input == null) throw new ArgumentNullException("input");
-            var work = new CommunicationRequest
-            {
-                Background = input.Background,
-                Intent = input.Intent,
-                Adjustment = input.Adjustment,
-                Language = input.Language,
-                AdviceOnly = input.AdviceOnly,
-                TaskMode = input.TaskMode,
-                UnifiedInput = input.UnifiedInput,
-                ImageContext = input.ImageContext,
-                Images = input.Images,
-                Turns = input.Turns,
-                AllowSearch = input.AllowSearch,
-                AllowFetch = input.AllowFetch,
-                Mode = input.Mode,
-                OnToolActivity = input.OnToolActivity,
-                OnPartialReply = input.OnPartialReply,
-                ApproveSensitiveSearch = input.ApproveSensitiveSearch
-            };
-            // Capture the full active configuration for the whole multi-turn round trip.
-            AppSettings modelSnapshot = settings.SnapshotForAiRequest();
-            // The composer toggle wins over the saved default for this request only.
-            bool allowSearch = input.AllowSearch ?? modelSnapshot.CommerceSearchEnabled;
-            modelSnapshot.CommerceSearchEnabled = allowSearch;
-            work.AllowSearch = allowSearch;
-            bool general = string.Equals(input.Mode, "general", StringComparison.OrdinalIgnoreCase);
-            var activities = new List<CommerceToolActivity>();
-            var details = new List<string>();
-            var sources = new List<string>();
-            int calculations = 0;
-            int searches = 0;
-            int fetches = 0;
-            using (var search = new CommerceSearch())
-            {
-                for (int round = 0; round < 8; round++)
-                {
-                    token.ThrowIfCancellationRequested();
-                    CommunicationResult answer = await
-                    ComposeCommunicationOnceAsync(work, modelSnapshot, token);
-                    if (answer.ToolRequests.Length == 0)
-                    {
-                        answer.CalculationDetails = string.Join("\n\n",
-                            details.Where(x => x.StartsWith("本地计算", StringComparison.Ordinal)));
-                        answer.Sources = string.Join("\n", sources.Distinct());
-                        if (answer.SourceItems == null || answer.SourceItems.Length == 0)
-                            answer.SourceItems = ParseSourceItems(answer.Sources);
-                        answer.Activities = activities.ToArray();
-                        return answer;
-                    }
-                    var results = new List<string>();
-                    foreach (CommerceToolRequest request in answer.ToolRequests)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        var activity = new CommerceToolActivity
-                        {
-                            Tool = request.Tool,
-                            Label = ToolLabel(request.Tool),
-                            Query = string.IsNullOrWhiteSpace(request.Query) ? ToolInputSummary(request) : request.Query,
-                            Status = "running"
-                        };
-                        activities.Add(activity);
-                        NotifyActivity(work, activity);
-                        CommerceToolOutcome outcome;
-                        try
-                        {
-                            if (string.Equals(request.Tool, "calculate",
-                                StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (++calculations > 10)
-                                    throw new InvalidOperationException(
-                                        "本次计算已达上限，请继续下一轮沟通。");
-                                if (searches > 0 &&
-                                    !string.Equals(request.Operation,
-                                        "arithmetic",
-                                        StringComparison.OrdinalIgnoreCase))
-                                    throw new InvalidOperationException(
-                                        "搜索得到的报价参数、运价或汇率需要用户确认后才能计算。");
-                                outcome = CommerceCalculator.Execute(request);
-                            }
-                            else if (string.Equals(request.Tool, "time",
-                                StringComparison.OrdinalIgnoreCase))
-                            {
-                                outcome = AgentTimeTool.Execute(request);
-                            }
-                            else if (string.Equals(request.Tool, "fetch",
-                                StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (++fetches > 3)
-                                    throw new InvalidOperationException(
-                                        "本次网页抓取已达上限，请继续下一轮沟通。");
-                                if (work.AllowFetch != true)
-                                    throw new InvalidOperationException(
-                                        "网页抓取未启用，请在输入区打开“允许抓取”。");
-                                string url = request.Query;
-                                string explicitUrl;
-                                if (request.Inputs != null &&
-                                    request.Inputs.TryGetValue("url", out explicitUrl) &&
-                                    !string.IsNullOrWhiteSpace(explicitUrl))
-                                    url = explicitUrl;
-                                outcome = await AgentWebFetchTool.FetchAsync(url, token);
-                            }
-                            else if (string.Equals(request.Tool, "search",
-                                StringComparison.OrdinalIgnoreCase))
-                            {
-                                if (++searches > 3)
-                                    throw new InvalidOperationException(
-                                        "本次搜索已达上限，请继续下一轮沟通。");
-                                if (!modelSnapshot.CommerceSearchEnabled)
-                                    throw new InvalidOperationException(
-                                        "联网搜索未启用，请提供数据或在设置中启用。");
-                                if (SensitiveCommerceSearch(request.Query) &&
-                                    (work.ApproveSensitiveSearch == null ||
-                                     !work.ApproveSensitiveSearch(request.Query)))
-                                    throw new InvalidOperationException(
-                                        "搜索词包含可能敏感的信息，未获得确认。");
-                                outcome = await search.SearchConfiguredAsync(request.Query,
-                                    modelSnapshot, token);
-                            }
-                            else throw new InvalidOperationException(
-                                "不支持的助手工具。");
-                            activity.Status = "done";
-                            activity.Summary = outcome.Title;
-                        }
-                        catch (OperationCanceledException) { throw; }
-                        catch (Exception error)
-                        {
-                            activity.Status = "failed";
-                            activity.Summary = error.Message;
-                            outcome = new CommerceToolOutcome
-                            {
-                                Title = "工具未完成",
-                                Detail = error.Message
-                            };
-                        }
-                        NotifyActivity(work, activity);
-                        string entry = outcome.Title + "\n" + outcome.Detail;
-                        results.Add(entry);
-                        if (string.Equals(request.Tool, "calculate",
-                            StringComparison.OrdinalIgnoreCase))
-                            details.Add(entry);
-                        if (!string.IsNullOrWhiteSpace(outcome.Sources))
-                            sources.Add(outcome.Sources);
-                    }
-                    work.ToolResults = (work.ToolResults + "\n" +
-                        string.Join("\n\n", results)).Trim();
-                }
-            }
-            return new CommunicationResult
-            {
-                ToolLimitReached = true,
-                Reply = general
-                    ? "本次工具调用次数已达上限，先给出目前能确认的内容；需要继续检索时请再发一条消息。"
-                    : "",
-                AdviceZh = general
-                    ? ""
-                    : "本次工具调用次数已达上限。可核对现有计算和来源，" +
-                      "再补充明确参数继续沟通。",
-                CalculationDetails = string.Join("\n\n",
-                    details.Where(x => x.StartsWith("本地计算",
-                        StringComparison.Ordinal))),
-                Sources = string.Join("\n", sources.Distinct()),
-                SourceItems = ParseSourceItems(string.Join("\n", sources.Distinct())),
-                Activities = activities.ToArray()
-            };
-        }
-
-        private static void NotifyActivity(CommunicationRequest request, CommerceToolActivity activity)
-        {
-            if (request == null || request.OnToolActivity == null) return;
-            try { request.OnToolActivity(activity); }
-            catch { /* A UI callback must never break the request. */ }
-        }
-
-        private static string ToolLabel(string tool)
-        {
-            if (string.Equals(tool, "time", StringComparison.OrdinalIgnoreCase)) return "时区";
-            if (string.Equals(tool, "search", StringComparison.OrdinalIgnoreCase)) return "检索";
-            if (string.Equals(tool, "fetch", StringComparison.OrdinalIgnoreCase)) return "抓取";
-            if (string.Equals(tool, "calculate", StringComparison.OrdinalIgnoreCase)) return "计算";
-            return tool ?? "";
-        }
-
-        private static string ToolInputSummary(CommerceToolRequest request)
-        {
-            if (request == null || request.Inputs == null || request.Inputs.Count == 0) return "";
-            string value;
-            if (string.Equals(request.Tool, "time", StringComparison.OrdinalIgnoreCase))
-            {
-                if (request.Inputs.TryGetValue("cities", out value) && !string.IsNullOrWhiteSpace(value))
-                    return value.Trim();
-                if (request.Inputs.TryGetValue("timezone", out value) && !string.IsNullOrWhiteSpace(value))
-                    return value.Trim();
-                return "";
-            }
-            if (string.Equals(request.Tool, "fetch", StringComparison.OrdinalIgnoreCase) &&
-                request.Inputs.TryGetValue("url", out value) && !string.IsNullOrWhiteSpace(value))
-                return value.Trim();
-            return string.Join(", ", request.Inputs.Select(pair => pair.Key + "=" + pair.Value).ToArray());
-        }
-
-        internal static SourceItem[] ParseSourceItems(string sources)
-        {
-            var items = new List<SourceItem>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string line in (sources ?? "").Split('\n'))
-            {
-                Match match = Regex.Match(line, @"https?://[^\s，。；）)】]+");
-                if (!match.Success) continue;
-                string url = match.Value.TrimEnd('.', ',', ';', ')', '）', '】');
-                if (!seen.Add(url)) continue;
-                string title = line.Substring(0, match.Index).Trim(' ', '-', '·', '：', ':', '|');
-                items.Add(new SourceItem
-                {
-                    Title = title.Length == 0 ? new Uri(url).Host : title,
-                    Url = url
-                });
-                if (items.Count >= 8) break;
-            }
-            return items.ToArray();
-        }
-
-        private static bool SensitiveCommerceSearch(string query)
-        {
-            if (string.IsNullOrWhiteSpace(query)) return false;
-            return Regex.IsMatch(query,
-                @"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b(?:\+?\d[\d\s-]{8,}\d)\b|订单号|客户姓名|\b(?:PO|order)[-\s#:]*\d{4,}",
-                RegexOptions.IgnoreCase);
-        }
-
-        private async Task<CommunicationResult> ComposeCommunicationOnceAsync(
-            CommunicationRequest input, AppSettings settings,
-            CancellationToken token)
-        {
-            if (input == null) throw new ArgumentNullException("input");
-            if (settings == null) throw new ArgumentNullException("settings");
             token.ThrowIfCancellationRequested();
-            if (string.IsNullOrWhiteSpace(input.Background) &&
-                string.IsNullOrWhiteSpace(input.Intent) &&
-                string.IsNullOrWhiteSpace(input.Adjustment) &&
-                (input.Images == null || input.Images.Length == 0))
-                throw new InvalidOperationException("请填写想法、客户消息或添加截图。");
-            if (input.Images != null && input.Images.Length > 5)
-                throw new InvalidOperationException("每次沟通最多添加 5 张图片。");
-            ModelConnectionSettings connection =
-                settings.GetActiveAiConnection();
-            string protocol = ModelApiProtocols.Normalize(connection.Protocol);
-            bool anthropic = ModelApiProtocols.IsAnthropic(protocol);
-            string fullUrl = ModelApiProtocols.BuildEndpoint(
-                connection.BaseUrl.Trim(), protocol);
-            Uri endpoint;
-            if (!Uri.TryCreate(fullUrl, UriKind.Absolute, out endpoint) ||
-                (endpoint.Scheme != Uri.UriSchemeHttp &&
-                 endpoint.Scheme != Uri.UriSchemeHttps))
-                throw new InvalidOperationException("模型 API 地址无效。");
-            bool deepSeek = !anthropic &&
-                (connection.Model.StartsWith("deepseek-",
-                     StringComparison.OrdinalIgnoreCase) ||
-                 endpoint.Host.EndsWith("deepseek.com",
-                     StringComparison.OrdinalIgnoreCase));
-            bool stream = anthropic || deepSeek;
-            string prompt = CommunicationPrompt.Build(input);
-            var body = new StringBuilder();
-            body.Append("{\"model\":\"").Append(EscapeJson(connection.Model))
-                .Append("\",");
-            if (anthropic)
-                body.Append("\"max_tokens\":4096,\"system\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input)))
-                    .Append("\",\"messages\":[{\"role\":\"user\",\"content\":");
-            else
-                body.Append("\"messages\":[{\"role\":\"system\",\"content\":\"")
-                    .Append(EscapeJson(CommunicationPrompt.SystemFor(input)))
-                    .Append("\"},{\"role\":\"user\",\"content\":");
-            AppendCommunicationContent(body, prompt, input.Images, anthropic);
-            body.Append("}]");
-            if (deepSeek)
-                body.Append(",\"thinking\":{\"type\":\"disabled\"}");
-            body.Append(",\"stream\":")
-                .Append(stream ? "true" : "false").Append('}');
-
-            using (var request = new HttpRequestMessage(HttpMethod.Post, endpoint))
+            string text = CleanVisionText(content);
+            if (string.IsNullOrWhiteSpace(text)) return text;
+            lock (_cacheGate)
             {
-                ApplyModelAuthentication(request, (connection.ApiKey ?? "").Trim(),
-                    endpoint, protocol);
-                request.Content = new StringContent(body.ToString(),
-                    Encoding.UTF8, "application/json");
-                using (HttpResponseMessage response = await _http.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, token))
-                {
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        string errorBody = await ReadContentWithTimeoutAsync(
-                            response.Content, token, ModelStreamIdleTimeout);
-                        if (input.Images != null && input.Images.Length > 0 &&
-                            (response.StatusCode == HttpStatusCode.UnsupportedMediaType ||
-                             (((int)response.StatusCode == 400 ||
-                               (int)response.StatusCode == 422) &&
-                              Regex.IsMatch(errorBody ?? "",
-                                  "image|vision|multimodal|图片|视觉|图像",
-                                  RegexOptions.IgnoreCase))))
-                            throw new UnsupportedCommunicationImageException(
-                                "当前 AI 模型不接受图片。请改用支持图片的模型，或手动填写聊天文字。");
-                        throw ApiError("沟通助手", response.StatusCode, errorBody);
-                    }
-                    Action<string> partial = null;
-                    if (input.OnPartialReply != null)
-                        partial = delegate(string streamed)
-                        {
-                            string reply = PartialReply.Extract(streamed);
-                            if (reply.Length > 0) input.OnPartialReply(reply);
-                        };
-                    string raw;
-                    if (anthropic)
-                        raw = (await ReadAnthropicModelStreamAsync(
-                            response, connection.Model, partial, token)).Text;
-                    else if (deepSeek)
-                        raw = (await ReadModelStreamAsync(
-                            response, connection.Model, partial, token)).Text;
-                    else
-                    {
-                        string json = await ReadContentWithTimeoutAsync(
-                            response.Content, token, ModelStreamIdleTimeout);
-                        var data = Deserialize<ModelApiResponse>(json);
-                        if (data == null || data.Choices == null ||
-                            data.Choices.Length == 0 || data.Choices[0].Message == null)
-                            throw new InvalidOperationException(
-                                "沟通助手未收到可用结果。");
-                        ValidateOpenAiFinishReason(data.Choices[0].FinishReason);
-                        raw = data.Choices[0].Message.Content;
-                    }
-                    token.ThrowIfCancellationRequested();
-                    return CommunicationResult.Parse(raw, input.AdviceOnly,
-                        string.Equals(input.Mode, "general", StringComparison.OrdinalIgnoreCase));
-                }
+                _lastVisionKey = key;
+                _lastVisionText = text;
+                _lastVisionExpiresUtc = DateTime.UtcNow.AddMinutes(2);
             }
-        }
-
-        private static void AppendCommunicationContent(StringBuilder body,
-            string prompt, byte[][] images, bool anthropic)
-        {
-            if (images == null || images.Length == 0)
-            {
-                body.Append("\"").Append(EscapeJson(prompt)).Append("\"");
-                return;
-            }
-            body.Append("[{\"type\":\"text\",\"text\":\"")
-                .Append(EscapeJson(prompt)).Append("\"}");
-            foreach (byte[] image in images)
-            {
-                if (image == null || image.Length == 0)
-                    throw new InvalidOperationException("截图内容为空。");
-                string base64 = Convert.ToBase64String(image);
-                if (anthropic)
-                    body.Append(", {\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"")
-                        .Append(base64).Append("\"}}");
-                else
-                    body.Append(", {\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,")
-                        .Append(base64).Append("\"}}");
-            }
-            body.Append(']');
+            return text;
         }
 
         private async Task<TranslationResult> TranslateModelApiAsync(
@@ -1538,6 +1220,8 @@ namespace GlobalTranslator
             {
                 _translationCache.Clear();
                 _translationCacheOrder.Clear();
+                _lastVisionKey = null;
+                _lastVisionText = null;
             }
             _http.Dispose();
         }
