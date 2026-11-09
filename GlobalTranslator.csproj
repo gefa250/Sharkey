@@ -75,7 +75,6 @@
     <Compile Include="SmartTargetResolver.cs" />
     <Compile Include="DiagnosticLog.cs" />
     <Compile Include="VisionRecognition.cs" />
-    <Compile Include="OcrPreviewWindow.cs" />
     <Compile Include="HistoryWindow.cs" />
     <Compile Include="ScreenshotSelector.cs" />
     <Compile Include="NativeMethods.cs" />

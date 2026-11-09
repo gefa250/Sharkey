@@ -1211,20 +1211,10 @@ internal static class FeatureProbe
                     "Escape no longer cancels screenshot selection.");
         }
 
-        foreach (bool? extractOnly in new bool?[] { false, true, null })
+        foreach (bool extractOnly in new[] { false, true })
         using (var selector = (System.Windows.Forms.Form)
             Activator.CreateInstance(selectorType, new object[] { extractOnly }))
         {
-            if (!extractOnly.HasValue)
-            {
-                MethodInfo down = selectorType.GetMethod("OnKeyDown", BindingFlags.Instance | BindingFlags.NonPublic);
-                MethodInfo up = selectorType.GetMethod("OnKeyUp", BindingFlags.Instance | BindingFlags.NonPublic);
-                var tab = new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.Tab);
-                down.Invoke(selector, new object[] { tab });
-                down.Invoke(selector, new object[] { tab });
-                up.Invoke(selector, new object[] { tab });
-                // Repeated key-down must toggle only once, and release must retain OCR mode.
-            }
             MethodInfo mouseDown = selectorType.GetMethod(
                 "OnMouseDown",
                 BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1263,7 +1253,7 @@ internal static class FeatureProbe
             using (selected)
             {
                 bool extracted = (bool)selectorType.GetProperty("ExtractText").GetValue(selector, null);
-                if (extracted != (extractOnly != false) || (extractOnly != false && (selected.Width != 100 || selected.Height != 70)))
+                if (extracted != extractOnly || (extractOnly && (selected.Width != 100 || selected.Height != 70)))
                     throw new InvalidOperationException("Screenshot did not submit the expected mode or exact OCR region.");
             }
         }

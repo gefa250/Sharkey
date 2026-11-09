@@ -627,7 +627,17 @@ namespace GlobalTranslator
                 _translation.Text = "";
                 _translation.Visibility = Visibility.Collapsed;
                 _copyTranslation.Visibility = Visibility.Collapsed;
-                _meta.Text = "已识别文字 · 可编辑并复制";
+                try
+                {
+                    var data = new System.Windows.Forms.DataObject(
+                        System.Windows.Forms.DataFormats.UnicodeText, _source.Text);
+                    System.Windows.Forms.Clipboard.SetDataObject(data, true, 4, 30);
+                    _meta.Text = "已复制到剪贴板";
+                }
+                catch (System.Runtime.InteropServices.ExternalException)
+                {
+                    _meta.Text = "剪贴板正忙，请点击复制原文";
+                }
                 _meta.ToolTip = _ocrMetaSuffix;
                 _translationPanel.Visibility = Visibility.Collapsed;
                 _copySource.Visibility = Visibility.Visible;

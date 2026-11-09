@@ -575,7 +575,7 @@ internal static class PopupInteractionProbe
             PumpDispatcher();
             window.UpdateLayout();
             TextBox extract = (TextBox)Field(window, "_extractTextHotkey");
-            Require(extract.Text == "", "OCR shortcut should be unbound by default.");
+            Require(extract.Text == "F7", "OCR shortcut should default to F7.");
             extract.ApplyTemplate();
             ScrollViewer hotkeyContent = extract.Template.FindName(
                 "PART_ContentHost", extract) as ScrollViewer;
@@ -591,7 +591,7 @@ internal static class PopupInteractionProbe
                 "Custom OCR shortcut failed validation.");
             cancel.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Require(!window.IsVisible && modelName.Text == savedModelName &&
-                apiKey.Password == savedModelKey && extract.Text == "" &&
+                apiKey.Password == savedModelKey && extract.Text == "F7" &&
                 (string)Field(window, "_pendingModelVendor") == "DeepSeek",
                 "Cancel did not discard model/profile and shortcut drafts.");
             object fresh = Activator.CreateInstance(
@@ -836,7 +836,7 @@ internal static class PopupInteractionProbe
                 settings.GetType().GetField("DeepSeekModelBaseUrl").SetValue(settings, "not-a-valid-endpoint");
                 object bounds = Activator.CreateInstance(app.GetType("GlobalTranslator.NativeMethods+RECT"), true);
                 Invoke(window, "SetOcrDirty", true);
-                Invoke(window, "BeginTranslation", "edited words", 100, 100, bounds, settings, client, true, "", false);
+                Invoke(window, "BeginTranslation", "edited words", 100, 100, bounds, settings, client, true, "", false, true);
                 var errorFrame = new System.Windows.Threading.DispatcherFrame();
                 var errorTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(80) };
                 errorTimer.Tick += delegate { errorTimer.Stop(); errorFrame.Continue = false; };
@@ -857,7 +857,7 @@ internal static class PopupInteractionProbe
                     text.Visibility == Visibility.Collapsed &&
                     ((Button)Field(window, "_copyTranslation")).Visibility == Visibility.Collapsed,
                     "Failed stream retained a visible or copyable partial translation.");
-                Invoke(window, "BeginTranslation", "123", 100, 100, bounds, settings, client, true, "", false);
+                Invoke(window, "BeginTranslation", "123", 100, 100, bounds, settings, client, true, "", false, true);
                 Require(text.Text == "123" && !(bool)Field(window, "_editProtected"), "Successful retranslation did not release edit protection.");
                 Invoke(window, "SetOcrDirty", true);
                 Invoke(window, "Translate", "456", 100, 100, settings, client);

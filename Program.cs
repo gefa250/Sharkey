@@ -18,7 +18,6 @@ namespace GlobalTranslator
         private SelectionMonitor _monitor;
         private PopupWindow _popup;
         private Bitmap _lastOcrImage;
-        private Window _ocrPreview;
         private ImageTableWindow _tableWindow;
 
         private void ShowImageTable(bool useLastScreenshot)
@@ -602,7 +601,6 @@ namespace GlobalTranslator
 
         private async void CaptureCurrentSelection()
         {
-            if (_ocrPreview != null) _ocrPreview.Close();
             // Invalidate any OCR result that is still being prepared so an
             // older F9 request cannot replace a newer F8 card.
             _ocrRequestId++;
@@ -626,7 +624,6 @@ namespace GlobalTranslator
             try
             {
                 _popup.DismissImmediately();
-                if (_ocrPreview != null) _ocrPreview.Close();
                 await Task.Delay(60, activeCancellation.Token);
                 _screenshotSelecting = true;
                 try
@@ -845,7 +842,6 @@ namespace GlobalTranslator
         {
             _exiting = true;
             if (_tableWindow != null) _tableWindow.Close();
-            if (_ocrPreview != null) _ocrPreview.Close();
             if (_lastOcrImage != null) { _lastOcrImage.Dispose(); _lastOcrImage = null; }
             if (_updateTimer != null) _updateTimer.Stop();
             if (_networkDebounce != null) _networkDebounce.Stop();
