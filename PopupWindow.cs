@@ -128,6 +128,14 @@ namespace GlobalTranslator
         private TranslationClient _activeClient;
         private bool _ocrMode;
         private string _ocrMetaSuffix = "";
+        private bool _inputMode;
+        private string _inputDraft = "";
+        private ComboBox _inputLanguage;
+        private AppSettings _inputSettings;
+        private static readonly string[] InputLanguageCodes =
+            { "en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "de", "es" };
+        private static readonly string[] InputLanguageNames =
+            { "英语", "简体中文", "繁体中文", "日语", "韩语", "法语", "德语", "西班牙语" };
 
         public event EventHandler OcrRecaptureRequested;
         public event EventHandler TableRequested;
@@ -195,7 +203,9 @@ namespace GlobalTranslator
             {
                 if (!IsVisible || _isPinned || _modelPopup == null ||
                     _modelPopup.IsOpen || (_textMenu != null && _textMenu.IsOpen) ||
-                    (_layoutPopup != null && _layoutPopup.IsOpen) || IsPointInsideWindow(args.X, args.Y))
+                    (_layoutPopup != null && _layoutPopup.IsOpen) ||
+                    (_inputLanguage != null && _inputLanguage.IsDropDownOpen) ||
+                    IsPointInsideWindow(args.X, args.Y))
                     return;
                 Dismiss();
             };
@@ -329,6 +339,7 @@ namespace GlobalTranslator
             _source.Visibility = Visibility.Collapsed;
             _source.TextChanged += delegate
             {
+                if (_inputMode && !_suppressSourceChanges) _inputDraft = _source.Text;
                 _sourceSummary.Text = CompactSourceText(_source.Text);
                 if (_ocrMode && !_suppressSourceChanges && _source.IsFocused)
                     SetOcrDirty(true);
@@ -437,6 +448,7 @@ namespace GlobalTranslator
         public void Translate(
             string text, int x, int y, AppSettings settings, TranslationClient client)
         {
+            _inputMode = false;
             BeginTranslation(
                 text,
                 x,
@@ -472,6 +484,7 @@ namespace GlobalTranslator
             AppSettings settings,
             TranslationClient client)
         {
+            _inputMode = false;
             string suffix = "  ·  " + result.Engine;
             BeginTranslation(
                 result.Text,
@@ -491,6 +504,7 @@ namespace GlobalTranslator
             AppSettings settings,
             TranslationClient client)
         {
+            _inputMode = false;
             BeginTranslation(
                 result.Text,
                 screenBounds.Left,
@@ -502,6 +516,67 @@ namespace GlobalTranslator
                 "  ·  纯 OCR",
                 true,
                 false);
+        }
+
+        public void ShowInputTranslation(int x, int y, AppSettings settings, TranslationClient client)
+        {
+            _inputMode = true;
+            _inputSettings = settings;
+            if (_inputLanguage == null)
+            {
+                _inputLanguage = new ComboBox
+                {
+                    ItemsSource = InputLanguageNames,
+                    IsEditable = true,
+                    IsTextSearchEnabled = false,
+                    Style = SettingsWindow.CreateComboBoxStyle(),
+                    Width = 118,
+                    MinHeight = 32,
+                    Height = 32,
+                    Padding = new Thickness(11, 4, 32, 4),
+                    FontSize = Ui.Type.Meta,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(8, 0, 0, 0),
+                    ToolTip = "选择或输入译文语言"
+                };
+                _inputLanguage.SelectionChanged += delegate
+                {
+                    if (_inputSettings == null || _inputLanguage.SelectedIndex < 0) return;
+                    _inputSettings.InputTargetLanguage = InputLanguageCodes[_inputLanguage.SelectedIndex];
+                    _inputSettings.Save();
+                };
+                _actions.Children.Add(_inputLanguage);
+            }
+            int index = Array.IndexOf(InputLanguageCodes, settings.InputTargetLanguage);
+            _inputLanguage.SelectedIndex = index;
+            if (index < 0) _inputLanguage.Text = settings.InputTargetLanguage ?? "";
+            AppSettings snapshot = settings.Copy();
+            snapshot.TargetLanguageMode = "FixedCustom";
+            snapshot.TargetLanguage = InputTargetLanguage();
+            BeginTranslation(_inputDraft, x, y, new NativeMethods.RECT(), snapshot, client,
+                true, "", true, false);
+            _meta.Text = "输入原文 · Ctrl+Enter 翻译";
+            _translationPanel.Visibility = Visibility.Visible;
+            _translation.Visibility = Visibility.Visible;
+            _translation.Text = "";
+            UpdateContentLayout();
+            _retranslate.Content = "翻译 · Ctrl+Enter";
+            _retranslate.Visibility = Visibility.Visible;
+            _copySource.Visibility = Visibility.Collapsed;
+            _recapture.Visibility = Visibility.Collapsed;
+            _textTools.Visibility = Visibility.Collapsed;
+            _tableButton.Visibility = Visibility.Collapsed;
+            _inputLanguage.Visibility = Visibility.Visible;
+            Activate();
+            _source.Focus();
+            _source.CaretIndex = _source.Text.Length;
+        }
+
+        private string InputTargetLanguage()
+        {
+            string language = (_inputLanguage.Text ?? "").Trim();
+            int index = Array.IndexOf(InputLanguageNames, language);
+            return index < 0 ? language : InputLanguageCodes[index];
         }
 
         private async void BeginTranslation(
@@ -520,6 +595,10 @@ namespace GlobalTranslator
             Opacity = 1;
             _activeSettings = settings;
             _activeClient = client;
+            if (!_inputMode && _retranslate != null)
+                _retranslate.Content = "重新翻译";
+            if (_inputLanguage != null)
+                _inputLanguage.Visibility = _inputMode ? Visibility.Visible : Visibility.Collapsed;
             _ocrMode = ocrMode;
             _ocrLayoutMode = ocrMode
                 ? OcrLayoutModes.Normalize(settings.OcrLayoutMode)
@@ -546,6 +625,7 @@ namespace GlobalTranslator
             _translationPanel.Visibility = translateOcr
                 ? Visibility.Visible : Visibility.Collapsed;
             _copyTranslation.Visibility = Visibility.Visible;
+            if (_inputMode) _copyTranslation.Visibility = Visibility.Collapsed;
             SetOcrLayoutVisible(ocrMode);
             if (!ocrMode && WindowState == WindowState.Maximized)
                 WindowState = WindowState.Normal;
@@ -629,10 +709,13 @@ namespace GlobalTranslator
                 _copyTranslation.Visibility = Visibility.Collapsed;
                 try
                 {
-                    var data = new System.Windows.Forms.DataObject(
-                        System.Windows.Forms.DataFormats.UnicodeText, _source.Text);
-                    System.Windows.Forms.Clipboard.SetDataObject(data, true, 4, 30);
-                    _meta.Text = "已复制到剪贴板";
+                    if (!_inputMode && !string.IsNullOrWhiteSpace(_source.Text))
+                    {
+                        var data = new System.Windows.Forms.DataObject(
+                            System.Windows.Forms.DataFormats.UnicodeText, _source.Text);
+                        System.Windows.Forms.Clipboard.SetDataObject(data, true, 4, 30);
+                        _meta.Text = "已复制到剪贴板";
+                    }
                 }
                 catch (System.Runtime.InteropServices.ExternalException)
                 {
@@ -648,6 +731,7 @@ namespace GlobalTranslator
                 return;
             }
 
+            var translationTimer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 TranslationResult result = await client.TranslateAsync(
@@ -671,9 +755,11 @@ namespace GlobalTranslator
                     return;
                 DiagnosticLog.Write(
                     "Translation succeeded; provider=" + result.Provider +
+                    "; elapsed_ms=" + translationTimer.ElapsedMilliseconds +
                     "; characters=" + result.Text.Length);
                 _translatedText = result.Text;
                 _translation.Text = result.Text;
+                _copyTranslation.Visibility = Visibility.Visible;
                 // Edits made while a request is running still need protection.
                 if (ocrMode && string.Equals(_source.Text, text, StringComparison.Ordinal))
                     SetOcrDirty(false);
@@ -1117,6 +1203,21 @@ namespace GlobalTranslator
             _sourcePanel.Visibility = showSource
                 ? Visibility.Visible
                 : Visibility.Collapsed;
+            if (showSource && _translationPanel.Visibility == Visibility.Collapsed)
+            {
+                _divider.Visibility = Visibility.Collapsed;
+                _contentGrid.RowDefinitions.Clear();
+                _contentGrid.ColumnDefinitions.Clear();
+                _contentGrid.RowDefinitions.Add(new RowDefinition
+                    { Height = new GridLength(1, GridUnitType.Star) });
+                _contentGrid.ColumnDefinitions.Add(new ColumnDefinition
+                    { Width = new GridLength(1, GridUnitType.Star) });
+                _sourcePanel.Margin = new Thickness(0);
+                Grid.SetRow(_sourcePanel, 0);
+                Grid.SetColumn(_sourcePanel, 0);
+                UpdateLayoutButton();
+                return;
+            }
             bool split = showSource && ShouldUseHorizontalOcrLayout();
             if (showSource && _dividerIsVertical.HasValue &&
                 _dividerIsVertical.Value != split)
@@ -1431,6 +1532,7 @@ namespace GlobalTranslator
 
         public bool HandleEscape()
         {
+            if (_inputLanguage != null && _inputLanguage.IsDropDownOpen) { _inputLanguage.IsDropDownOpen = false; return true; }
             if (_textMenu != null && _textMenu.IsOpen) { _textMenu.IsOpen = false; return true; }
             if (_layoutPopup != null && _layoutPopup.IsOpen) { _layoutPopup.IsOpen = false; return true; }
             if (_modelPopup != null && _modelPopup.IsOpen)
@@ -2387,6 +2489,27 @@ namespace GlobalTranslator
             {
                 string edited = (_source.Text ?? "").Trim();
                 if (edited.Length == 0) return;
+                if (_inputMode && _inputSettings != null)
+                {
+                    string language = InputTargetLanguage();
+                    if (string.IsNullOrWhiteSpace(language))
+                    {
+                        _meta.Text = "请先选择或输入目标语言";
+                        _inputLanguage.Focus();
+                        return;
+                    }
+                    if (language.Length > 80 || language.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+                    {
+                        _meta.Text = "语言名称不能超过 80 个字符，也不能包含换行";
+                        _inputLanguage.Focus();
+                        return;
+                    }
+                    _inputSettings.InputTargetLanguage = language;
+                    _inputSettings.Save();
+                    _activeSettings = _inputSettings.Copy();
+                    _activeSettings.TargetLanguageMode = "FixedCustom";
+                    _activeSettings.TargetLanguage = language;
+                }
                 BeginTranslation(
                     edited,
                     _anchorX,
@@ -2397,6 +2520,12 @@ namespace GlobalTranslator
                     true,
                     _ocrMetaSuffix,
                     false);
+                if (_inputMode)
+                {
+                    _retranslate.Content = "翻译 · Ctrl+Enter";
+                    _tableButton.Visibility = Visibility.Collapsed;
+                    _textTools.Visibility = Visibility.Collapsed;
+                }
             };
             _recapture = MakeSecondaryButton("重新框选");
             _textTools = MakeSecondaryButton("更多");
@@ -2876,14 +3005,14 @@ namespace GlobalTranslator
                 case "zh-HK": return "繁體中文";
                 case "en":
                 case "en-US":
-                case "en-GB": return "English";
+                case "en-GB": return "英语";
                 case "ja":
-                case "ja-JP": return "日本語";
+                case "ja-JP": return "日语";
                 case "ko":
-                case "ko-KR": return "한국어";
-                case "fr": return "Français";
-                case "de": return "Deutsch";
-                case "es": return "Español";
+                case "ko-KR": return "韩语";
+                case "fr": return "法语";
+                case "de": return "德语";
+                case "es": return "西班牙语";
                 default: return code;
             }
         }

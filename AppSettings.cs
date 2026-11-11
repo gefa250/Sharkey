@@ -135,7 +135,8 @@ namespace GlobalTranslator
         public string OcrConsentTarget = "";
         public bool AutoTranslate = false;
         public string TranslateHotkey = "F8";
-        public string ExtractTextHotkey = "F7";
+        public string InputTranslationHotkey = "F7";
+        public string InputTargetLanguage = "en";
         public string OcrHotkey = "F9";
         public string SettingsHotkey = "F10";
         public bool StartWithWindows = StartupManager.IsEnabled();
@@ -220,7 +221,9 @@ namespace GlobalTranslator
                         case "OcrConsentTarget": settings.OcrConsentTarget = value; break;
                         case "AutoTranslate": settings.AutoTranslate = value == "true"; break;
                         case "TranslateHotkey": settings.TranslateHotkey = value; break;
-                        case "ExtractTextHotkey": settings.ExtractTextHotkey = value; break;
+                        case "ExtractTextHotkey": settings.InputTranslationHotkey = value; break;
+                        case "InputTranslationHotkey": settings.InputTranslationHotkey = value; break;
+                        case "InputTargetLanguage": settings.InputTargetLanguage = value; break;
                         case "OcrHotkey": settings.OcrHotkey = value; break;
                         case "SettingsHotkey": settings.SettingsHotkey = value; break;
                         case "StartWithWindows": settings.StartWithWindows = value == "true"; break;
@@ -326,7 +329,8 @@ namespace GlobalTranslator
                 "OcrConsentTarget=" + Encode(OcrConsentTarget) + "\n" +
                 "AutoTranslate=" + Encode(AutoTranslate ? "true" : "false") + "\n" +
                 "TranslateHotkey=" + Encode(TranslateHotkey) + "\n" +
-                "ExtractTextHotkey=" + Encode(ExtractTextHotkey) + "\n" +
+                "InputTranslationHotkey=" + Encode(InputTranslationHotkey) + "\n" +
+                "InputTargetLanguage=" + Encode(InputTargetLanguage) + "\n" +
                 "OcrHotkey=" + Encode(OcrHotkey) + "\n" +
                 "SettingsHotkey=" + Encode(SettingsHotkey) + "\n" +
                 "PopupFontSize=" + Encode(PopupFontSize) + "\n" +

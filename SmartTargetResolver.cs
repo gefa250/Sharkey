@@ -30,6 +30,11 @@ namespace GlobalTranslator
             string mode,
             string fixedTarget)
         {
+            if (string.Equals(mode, "FixedCustom", StringComparison.OrdinalIgnoreCase))
+            {
+                string target = (fixedTarget ?? "").Trim();
+                return target.Length == 0 ? "en" : target;
+            }
             if (string.Equals(
                 mode,
                 "Fixed",
@@ -73,7 +78,8 @@ namespace GlobalTranslator
             string text,
             string mode)
         {
-            if (string.Equals(
+            if (string.Equals(mode, "FixedCustom", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
                 mode,
                 "Fixed",
                 StringComparison.OrdinalIgnoreCase))

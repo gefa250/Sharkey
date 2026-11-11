@@ -415,8 +415,9 @@ namespace GlobalTranslator
             NativeHotKey.Unregister(handle, NativeMethods.HOTKEY_EXTRACT_TEXT);
             HotkeyGesture extract;
             string error;
-            bool extractRegistered = string.IsNullOrWhiteSpace(_settings.ExtractTextHotkey) ||
-                (HotkeyGesture.TryParse(_settings.ExtractTextHotkey, out extract, out error) &&
+            string inputHotkey = string.IsNullOrWhiteSpace(_settings.InputTranslationHotkey) ? "F7" : _settings.InputTranslationHotkey;
+            bool extractRegistered =
+                (HotkeyGesture.TryParse(inputHotkey, out extract, out error) &&
                     NativeHotKey.Register(handle, NativeMethods.HOTKEY_EXTRACT_TEXT,
                         extract.Modifiers | NativeMethods.MOD_NOREPEAT, extract.VirtualKey));
             DiagnosticLog.Write(
@@ -441,7 +442,7 @@ namespace GlobalTranslator
                         settings.Display + " 打开设置不可用。";
                 if (!extractRegistered)
                     message += (message.Length == 0 ? "" : "\n") +
-                        _settings.ExtractTextHotkey + " 提取文字不可用。";
+                        inputHotkey + " 输入翻译不可用。";
                 _tray.ShowBalloonTip(
                     4500,
                     "Sharkey 快捷键被占用",
@@ -482,7 +483,11 @@ namespace GlobalTranslator
             else if (message == NativeMethods.WM_HOTKEY &&
                      wParam.ToInt32() == NativeMethods.HOTKEY_EXTRACT_TEXT)
             {
-                CaptureScreenshotAndTranslate(true);
+                if (_ocrCancellation != null) _ocrCancellation.Cancel();
+                _ocrRequestId++;
+                NativeMethods.POINT inputPoint;
+                NativeMethods.GetCursorPos(out inputPoint);
+                _popup.ShowInputTranslation(inputPoint.X, inputPoint.Y, _settings, _client);
                 handled = true;
             }
             else if (message == NativeMethods.WM_HOTKEY &&
@@ -531,6 +536,14 @@ namespace GlobalTranslator
                 CheckOnClick = false
             };
             menu.Items.Add(_settingsMenuItem);
+            menu.Items.Add("输入翻译", null, delegate
+            {
+                if (_ocrCancellation != null) _ocrCancellation.Cancel();
+                _ocrRequestId++;
+                NativeMethods.POINT point;
+                NativeMethods.GetCursorPos(out point);
+                _popup.ShowInputTranslation(point.X, point.Y, _settings, _client);
+            });
             menu.Items.Add(_translateMenuItem);
             menu.Items.Add(_ocrMenuItem);
             menu.Items.Add("截图提取文字", null, delegate { CaptureScreenshotAndTranslate(true); });
@@ -557,7 +570,7 @@ namespace GlobalTranslator
                 ParsedHotkey(
                     _settings.TranslateHotkey, "F8").Display;
             _ocrMenuItem.Text =
-                "截图识别并翻译  ·  " +
+                "截图识别  ·  " +
                 ParsedHotkey(
                     _settings.OcrHotkey, "F9").Display;
             RefreshStartupMenu();
@@ -633,7 +646,7 @@ namespace GlobalTranslator
                         if (selector.ShowDialog() != DialogResult.OK) return;
                         image = selector.SelectedBitmap;
                         activeCancellation.Token.ThrowIfCancellationRequested();
-                        extractText = selector.ExtractText;
+                        extractText = extractOnly || !selector.TranslateAfterOcr;
                         System.Drawing.Rectangle selectedBounds =
                             selector.SelectionBounds;
                         System.Drawing.Rectangle virtualScreen =

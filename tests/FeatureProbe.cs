@@ -235,6 +235,7 @@ internal static class FeatureProbe
         MethodInfo resolve = resolver.GetMethod(
             "Resolve",
             BindingFlags.Static | BindingFlags.Public);
+        AssertTarget(resolve, "你好", "FixedCustom", "葡萄牙语（巴西）", "葡萄牙语（巴西）");
         AssertTarget(resolve, "这是简体中文。", "Smart", "ja", "en");
         AssertTarget(resolve, "這是繁體中文。", "Smart", "ja", "en");
         AssertTarget(resolve, "This is English.", "Smart", "en", "zh-Hans");
@@ -1232,6 +1233,14 @@ internal static class FeatureProbe
                         20,
                         0)
                 });
+            if (!extractOnly)
+            {
+                var shift = new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.ShiftKey);
+                selectorType.GetMethod("OnKeyDown", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(selector, new object[] { shift });
+                selectorType.GetMethod("OnKeyUp", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(selector, new object[] { shift });
+            }
             mouseUp.Invoke(
                 selector,
                 new object[]
@@ -1253,8 +1262,41 @@ internal static class FeatureProbe
             using (selected)
             {
                 bool extracted = (bool)selectorType.GetProperty("ExtractText").GetValue(selector, null);
+                bool translate = (bool)selectorType.GetProperty("TranslateAfterOcr").GetValue(selector, null);
+                if (translate != !extractOnly)
+                    throw new InvalidOperationException("Shift release did not preserve the chosen screenshot mode.");
                 if (extracted != extractOnly || (extractOnly && (selected.Width != 100 || selected.Height != 70)))
                     throw new InvalidOperationException("Screenshot did not submit the expected mode or exact OCR region.");
+            }
+        }
+
+        foreach (int presses in new[] { 0, 1, 2, 3 })
+        using (var selector = (System.Windows.Forms.Form)
+            Activator.CreateInstance(selectorType, new object[] { false }))
+        {
+            var flags = BindingFlags.Instance | BindingFlags.NonPublic;
+            var down = selectorType.GetMethod("OnKeyDown", flags);
+            var up = selectorType.GetMethod("OnKeyUp", flags);
+            var shift = new System.Windows.Forms.KeyEventArgs(System.Windows.Forms.Keys.ShiftKey);
+            for (int i = 0; i < presses; i++)
+            {
+                down.Invoke(selector, new object[] { shift });
+                down.Invoke(selector, new object[] { shift });
+                up.Invoke(selector, new object[] { shift });
+            }
+            selectorType.GetMethod("OnMouseDown", flags).Invoke(selector, new object[]
+            {
+                new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 20, 20, 0)
+            });
+            selectorType.GetMethod("OnMouseUp", flags).Invoke(selector, new object[]
+            {
+                new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 120, 90, 0)
+            });
+            bool translate = (bool)selectorType.GetProperty("TranslateAfterOcr").GetValue(selector, null);
+            using (var image = (Bitmap)selectorType.GetProperty("SelectedBitmap").GetValue(selector, null))
+            {
+                if (image == null || translate != (presses % 2 == 1))
+                    throw new InvalidOperationException("Shift toggle or held-key repeat handling failed.");
             }
         }
     }

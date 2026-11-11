@@ -653,9 +653,9 @@ namespace GlobalTranslator
             card.Padding = new Thickness(20);
             var list = new StackPanel();
             card.Child = list;
-            _extractTextHotkey = AddHotkeyRecorder(list, "纯 OCR", "F7 框选后提取文字并自动复制");
+            _extractTextHotkey = AddHotkeyRecorder(list, "输入翻译", "输入原文，按 Ctrl+Enter 翻译");
             _translateHotkey = AddHotkeyRecorder(list, "选中翻译", "读取当前选中文字并显示译文");
-            _ocrHotkey = AddHotkeyRecorder(list, "截图翻译", "默认 F9，框选后识别并翻译");
+            _ocrHotkey = AddHotkeyRecorder(list, "截图识别", "框选时按 Shift 切换识别或识别并翻译");
             _settingsHotkey = AddHotkeyRecorder(list, "打开设置", "唤起此设置窗口");
             root.Children.Add(card);
             var defaults = SecondaryButton("恢复默认快捷键");
@@ -1195,7 +1195,7 @@ namespace GlobalTranslator
                     _settings.PopupFontSize == "Large" ? 2 : 1;
                 _ocrAiFallback.IsChecked = _settings.OcrAiFallback;
                 RefreshConsentPreview();
-                _extractTextHotkey.Text = NormalizeHotkey(_settings.ExtractTextHotkey, "F7");
+                _extractTextHotkey.Text = NormalizeHotkey(_settings.InputTranslationHotkey, "F7");
                 _translateHotkey.Text = NormalizeHotkey(_settings.TranslateHotkey, "F8");
                 _ocrHotkey.Text = NormalizeHotkey(_settings.OcrHotkey, "F9");
                 _settingsHotkey.Text = NormalizeHotkey(_settings.SettingsHotkey, "F10");
@@ -1247,7 +1247,7 @@ namespace GlobalTranslator
             candidate.TranslateHotkey = translate.Display;
             candidate.OcrHotkey = ocr.Display;
             candidate.SettingsHotkey = settingsHotkey.Display;
-            candidate.ExtractTextHotkey = extractText == null ? "" : extractText.Display;
+            candidate.InputTranslationHotkey = extractText == null ? "" : extractText.Display;
             candidate.StartWithWindows = _startWithWindows.IsChecked == true;
             candidate.PopupFontSize = _popupFontSize.SelectedIndex == 0 ? "Small" :
                 _popupFontSize.SelectedIndex == 2 ? "Large" : "Standard";
@@ -1305,10 +1305,10 @@ namespace GlobalTranslator
             if (!ParseHotkey(_ocrHotkey, "截图翻译", out ocr)) return false;
             if (!ParseHotkey(_settingsHotkey, "打开设置", out settings)) return false;
             if (!string.IsNullOrWhiteSpace(_extractTextHotkey.Text) &&
-                !ParseHotkey(_extractTextHotkey, "提取文字", out extractText)) return false;
+                !ParseHotkey(_extractTextHotkey, "输入翻译", out extractText)) return false;
             var all = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             HotkeyGesture[] gestures = { translate, ocr, settings, extractText };
-            string[] labels = { "选中翻译", "截图翻译", "打开设置", "提取文字" };
+            string[] labels = { "选中翻译", "截图识别", "打开设置", "输入翻译" };
             for (int i = 0; i < gestures.Length; i++)
             {
                 if (gestures[i] == null) continue;

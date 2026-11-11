@@ -14,10 +14,13 @@ namespace GlobalTranslator
         private Rectangle _selection;
         private bool _dragging;
         private bool _rightCancelPending;
+        private bool _translateRequested;
+        private bool _shiftDown;
 
         public Bitmap SelectedBitmap { get; private set; }
 
         public bool ExtractText { get; private set; }
+        public bool TranslateAfterOcr { get; private set; }
         public Rectangle SelectionBounds { get { return _selection; } }
         private readonly bool _extractOnly;
 
@@ -76,8 +79,18 @@ namespace GlobalTranslator
             }
             if (_dragging) DrawMagnifier(e.Graphics);
 
-            // Keep the capture surface clear. Mode and cancellation stay
-            // available through keyboard and mouse behavior without a banner.
+            using (var font = new Font("Microsoft YaHei UI", 13, FontStyle.Bold))
+            using (var background = new SolidBrush(Color.FromArgb(220, 8, 42, 67)))
+            using (var brush = new SolidBrush(Color.White))
+            {
+                string hint = _translateRequested
+                    ? "识别并翻译 · 再按 Shift 切换为仅识别"
+                    : "仅识别文字 · 按 Shift 切换为识别并翻译";
+                SizeF size = e.Graphics.MeasureString(hint, font);
+                float left = Math.Max(0, (ClientSize.Width - size.Width) / 2);
+                e.Graphics.FillRectangle(background, left - 10, 14, size.Width + 20, size.Height + 12);
+                e.Graphics.DrawString(hint, font, brush, left, 20);
+            }
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -132,6 +145,7 @@ namespace GlobalTranslator
                 return;
             }
             ExtractText = IsExtractMode;
+            TranslateAfterOcr = _translateRequested;
             Rectangle captureArea = _selection;
             if (!ExtractText) captureArea.Inflate(6, 6);
             captureArea = Rectangle.Intersect(captureArea, ClientRectangle);
@@ -142,6 +156,12 @@ namespace GlobalTranslator
 
         protected override void OnKeyDown(KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.ShiftKey && !_rightCancelPending)
+            {
+                if (!_shiftDown) _translateRequested = !_translateRequested;
+                _shiftDown = true;
+                Invalidate();
+            }
             if (e.KeyCode == Keys.Escape)
             {
                 if (!_rightCancelPending) CancelSelection();
@@ -154,6 +174,7 @@ namespace GlobalTranslator
 
         protected override void OnKeyUp(KeyEventArgs e)
         {
+            if (e.KeyCode == Keys.ShiftKey) _shiftDown = false;
             base.OnKeyUp(e);
         }
 
